@@ -26,23 +26,20 @@ Repo: https://github.com/Davie521/claude-ghostty-notify
 
 ## Codex 也可以用
 
-Ghostty 中的 Codex CLI 可以复用同一套通知、**Go to tab** 跳转和返回标签页后自动清除机制。通知标题显示 **Codex ✅**，状态保存在 `~/.codex/notifications/`。
-
-在本仓库运行（安装器需要 Python 3.11+；回调兼容 macOS 自带 Python 3.9）：
+Ghostty 里跑的 Codex CLI 也能得到同样的通知、**Go to tab** 跳转和回到标签页后自动清除，标题显示 **Codex ✅**。Codex CLI 0.153 起自带 lifecycle hooks，传入的 JSON 与 Claude Code 一致，所以经一个小适配脚本直接复用同一套脚本。在本仓库运行（仅安装器需要 Python 3.11+）：
 
 ```bash
 python3 scripts/install-codex.py
 ```
 
-安装器复制脚本到 `~/.codex/ghostty-notify/`，备份并更新 `~/.codex/config.toml` 顶层的 `notify` 数组。支持 `CODEX_HOME`。依赖沿用 Claude 的 **jq + alerter**；未安装 alerter 时降级到 terminal-notifier。已有的其他自定义通知命令需要先显式合并。
+然后在 Ghostty 里启动 `codex`，运行一次 **`/hooks`**，信任三条 `ghostty-notify` 条目——Codex 对新增或改动过的 hook 都要先审核才会执行。已经开着的会话重启后生效。
 
-**重新启动已打开的 Codex CLI 会话后生效。** 新启动的会话自动加载，包括 `cx` 别名启动的会话。无需修改启动命令或新增 lifecycle hooks。
+安装器把脚本复制到 `~/.codex/ghostty-notify/`（挪动仓库不影响），在 `~/.codex/hooks.json` 里追加 `PreToolUse`、`UserPromptSubmit`、`Stop` 三条，不动你已有的 hook；改动的每个文件都先备份到 `~/.codex/backups/`。支持 `CODEX_HOME`。状态与 Claude 分开，存在 `~/.codex/notifications/`。
 
-首次安装时，从 Claude 的 `settings.json` 复制提醒阈值；没有配置则使用本项目默认的 180 / 600 / 1200 秒。之后编辑 `~/.codex/ghostty-notify/config.json` 即可调整，环境变量优先。设 `GHOSTTY_NOTIFY_MIN_ELAPSED` 为 `"0"` 可让每轮完成都弹窗。Codex 自带的完成通知由本回调接替，原有审批提醒设置保留，避免重复弹窗。
-
-接入使用 [Codex 官方 `notify` 完成回调](https://developers.openai.com/codex/config-advanced/#notifications)。回调只把 `agent-turn-complete` 转成共享通知脚本的输入；只读查询本地会话索引和 rollout，按 **turn-id** 取本轮耗时及会话名称，不把启动时间、旧轮次或被中断的任务算进去。恢复到另一个进程时会重新定位标签页，同目录的多个会话各自绑定。
-
-临时会话、关闭记录或记录格式变化导致耗时不可用时，仍显示无声的「Task complete」，不编造耗时。回调仅服务有终端的 Codex 主会话；桌面端、无终端的后台服务及能识别的子代理不会冒出 Ghostty 完成提醒。Codex 使用 alerter/terminal-notifier 投递；可选的 Claude 原生 agent 不由此接入启动。
+- **阈值**：首次安装从 Claude 的 `settings.json` 复制（没有则 180 / 600 / 1200 秒）到 `~/.codex/ghostty-notify/config.json`；改这个文件即可，环境变量优先。
+- **会话标题**：优先用 Codex 自己存的线程名，否则用会话第一句提问。
+- **只有终端会话会弹。** 同一个 `hooks.json` 也会被 Codex 桌面端的线程、以及其他 agent 拉起的 `codex mcp-server` 触发；它们没有可跳回的 tab，一律跳过。
+- **从旧版 `notify` 回调升级**：安装器会删掉旧版写入的 `notify`——包括被 Codex 桌面端 Computer Use 用 `--previous-notify` 包过一层的情况（那层包装让每条通知晚两分钟），并保留包装器自己的部分。Codex 自带的 TUI 完成提醒收窄为只提醒审批，避免重复弹窗。
 
 ---
 
@@ -278,6 +275,8 @@ rm -f ~/.claude/notifications/state/ghostty-notify-*
 ```
 
 然后把 `~/.claude/settings.json` 里相关的 `env` 和 `hooks` 条目删掉。
+
+**Codex CLI:** 从 `~/.codex/hooks.json` 删掉命令里含 `ghostty-notify/codex-hook.sh` 的三条,再 `rm -rf ~/.codex/ghostty-notify ~/.codex/notifications`。
 
 ## 局限
 

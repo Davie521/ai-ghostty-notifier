@@ -66,21 +66,6 @@ START=0
 [[ "$START" =~ ^[0-9]+$ ]] || START=0
 ELAPSED=$((NOW - START))
 
-# Codex's completion callback supplies per-turn timing from its rollout. It
-# has no start callback, so never time the whole CLI process or an old turn.
-# Ephemeral/unavailable rollouts still deserve a completion alert, but must
-# not invent a duration or a long-task sound.
-ELAPSED_UNKNOWN=false
-if [[ "${GHOSTTY_NOTIFY_PROCESS_NAME:-claude}" == "codex" ]]; then
-    REPORTED_ELAPSED=$(printf '%s' "$HOOK_DATA" | jq -r '.elapsed_seconds // empty' 2>/dev/null)
-    if [[ "$REPORTED_ELAPSED" =~ ^[0-9]{1,9}$ ]]; then
-        ELAPSED=$((10#$REPORTED_ELAPSED))
-        START=1
-    else
-        ELAPSED_UNKNOWN=true
-    fi
-fi
-
 # On Stop, always clear the start marker so the next round re-arms.
 clear_start_on_stop() {
     case "$HOOK_EVENT" in
@@ -94,13 +79,12 @@ clear_start_on_stop() {
 # will fire while Claude is blocked on it.
 case "$HOOK_EVENT" in
     Stop|stop)
-        if [[ "$ELAPSED_UNKNOWN" != true ]] && { [[ "$START" -le 0 ]] || (( ELAPSED < MIN_ELAPSED )); }; then
+        if [[ "$START" -le 0 ]] || (( ELAPSED < MIN_ELAPSED )); then
             clear_start_on_stop
             exit 0
         fi
         SILENT=false
         (( ELAPSED < SOUND_ELAPSED )) && SILENT=true
-        [[ "$ELAPSED_UNKNOWN" == true ]] && SILENT=true
         ;;
     Notification|notification)
         [[ "${GHOSTTY_NOTIFY_ON_PROMPT:-0}" = "1" ]] || exit 0
@@ -190,7 +174,6 @@ case "$HOOK_EVENT" in
         TITLE="${GHOSTTY_NOTIFY_APP_NAME:-Claude} ✅"
         SUBTITLE="${SESSION_TITLE:-Task Complete} — $PROJECT_NAME"
         MESSAGE=$(printf 'Finished after %dm %ds' $((ELAPSED / 60)) $((ELAPSED % 60)))
-        [[ "$ELAPSED_UNKNOWN" == true ]] && MESSAGE="Task complete"
         SOUND="Glass"
         ;;
     Notification|notification)

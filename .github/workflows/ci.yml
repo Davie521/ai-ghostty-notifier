@@ -53,8 +53,8 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Codex notification and installer tests
-        run: python3 -m unittest discover -s tests -p 'test_codex_notify.py' -v
+      - name: Codex hook adapter and installer tests
+        run: python3 -m unittest discover -s tests -p 'test_codex_hooks.py' -v
 
       # The resident agent is optional at runtime — every step above pins the
       # shell path, so a Swift failure here can never mask a shell regression.

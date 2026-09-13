@@ -1,34 +1,5 @@
 # claude-ghostty-notify
 
-**Codex CLI support:** run `python3 scripts/install-codex.py` in this checkout
-(Python 3.11+ for installation; the callback supports macOS Python 3.9).
-Restart existing Codex CLI sessions to load the new configuration.
-
-The installer backs up `~/.codex/config.toml`, sets its top-level `notify`
-command, and copies the shared hooks into `~/.codex/ghostty-notify/`, so moving
-the checkout does not break notifications. `CODEX_HOME` is supported. It uses
-the same **jq + alerter** dependencies, exact-tab jump and focus dismissal as
-Claude, with a **Codex ✅** title and separate state under
-`~/.codex/notifications/`. terminal-notifier remains the fallback; the optional
-Claude-branded resident agent is not started by this integration.
-
-Initial timing preferences are copied from Claude's `settings.json`, falling
-back to 180 / 600 / 1200 seconds. Edit `~/.codex/ghostty-notify/config.json` to
-change them (environment variables take precedence). Set
-`GHOSTTY_NOTIFY_MIN_ELAPSED` to `"0"` for every completed turn. The installer
-removes the built-in TUI completion alert to avoid duplicates while preserving
-approval notifications and an existing TUI notification opt-out.
-
-The [official Codex completion callback](https://developers.openai.com/codex/config-advanced/#notifications)
-is the completion signal. The local database/rollout is read only for a session
-name and duration matching the current **turn-id**, including after resume or
-interruption. If timing is unavailable (for example, an ephemeral session or a
-changed rollout format), completion still produces a silent “Task complete”
-alert without a fabricated duration. A new CLI process rebinds the session to
-its current tab; sessions sharing a directory are never matched by cwd.
-Headless processes and identifiable subagent completions are excluded. No
-lifecycle hooks or shell alias changes are required.
-
 [![CI](https://github.com/Davie521/claude-ghostty-notify/actions/workflows/ci.yml/badge.svg)](https://github.com/Davie521/claude-ghostty-notify/actions/workflows/ci.yml)
 
 **语言 / Language** → [English](README.md) · [中文](README.zh-CN.md)
@@ -50,6 +21,44 @@ A long run finishes, macOS shows a notification, you click **Go to tab**, and Gh
 ```
 
 Repo: https://github.com/Davie521/claude-ghostty-notify
+
+---
+
+## Codex CLI too
+
+Codex CLI running in Ghostty gets the same notification, **Go to tab** jump and
+clear-on-return, titled **Codex ✅**. Codex CLI 0.153+ has native lifecycle
+hooks whose payload matches Claude Code's, so it runs the very same scripts
+through a small adapter. From this checkout (Python 3.11+ for the installer
+only):
+
+```bash
+python3 scripts/install-codex.py
+```
+
+Then start `codex` in Ghostty and run **`/hooks`** once to trust the three
+`ghostty-notify` entries — Codex reviews every new or changed hook before it
+runs. Sessions that were already open pick the hooks up after a restart.
+
+The installer copies the scripts to `~/.codex/ghostty-notify/` (moving the
+checkout breaks nothing), adds `PreToolUse`, `UserPromptSubmit` and `Stop`
+entries to `~/.codex/hooks.json` next to any hooks you already have, and backs
+up every file it changes under `~/.codex/backups/`. `CODEX_HOME` is honoured.
+State lives apart from Claude's, in `~/.codex/notifications/`.
+
+- **Thresholds** are copied once from Claude's `settings.json` (else 180 / 600
+  / 1200 s) into `~/.codex/ghostty-notify/config.json`; edit that file, or set
+  the variables in your environment, which wins.
+- **Session title:** the thread name Codex stores, otherwise the first prompt
+  of the session.
+- **Only terminal sessions notify.** The same `hooks.json` also fires for Codex
+  Desktop threads and for `codex mcp-server` processes other agents spawn;
+  none of those has a tab to return to, so they are skipped.
+- **Upgrading from the `notify` callback** of earlier versions: the installer
+  removes that `notify` entry — including when Codex Desktop's Computer Use has
+  wrapped it with `--previous-notify`, which delayed every alert by two minutes
+  — and keeps the wrapper's own part. Codex's built-in TUI completion alert is
+  narrowed to approval prompts so it does not double ours.
 
 ---
 
@@ -301,6 +310,10 @@ rm -f ~/.claude/notifications/state/ghostty-notify-*
 ```
 
 Then remove the `env` and `hooks` entries from `~/.claude/settings.json`.
+
+**Codex CLI:** delete the three entries whose command contains
+`ghostty-notify/codex-hook.sh` from `~/.codex/hooks.json`, then
+`rm -rf ~/.codex/ghostty-notify ~/.codex/notifications`.
 
 ## Limitations
 
