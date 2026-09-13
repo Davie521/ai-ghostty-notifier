@@ -1,5 +1,34 @@
 # claude-ghostty-notify
 
+**Codex CLI support:** run `python3 scripts/install-codex.py` in this checkout
+(Python 3.11+ for installation; the callback supports macOS Python 3.9).
+Restart existing Codex CLI sessions to load the new configuration.
+
+The installer backs up `~/.codex/config.toml`, sets its top-level `notify`
+command, and copies the shared hooks into `~/.codex/ghostty-notify/`, so moving
+the checkout does not break notifications. `CODEX_HOME` is supported. It uses
+the same **jq + alerter** dependencies, exact-tab jump and focus dismissal as
+Claude, with a **Codex ✅** title and separate state under
+`~/.codex/notifications/`. terminal-notifier remains the fallback; the optional
+Claude-branded resident agent is not started by this integration.
+
+Initial timing preferences are copied from Claude's `settings.json`, falling
+back to 180 / 600 / 1200 seconds. Edit `~/.codex/ghostty-notify/config.json` to
+change them (environment variables take precedence). Set
+`GHOSTTY_NOTIFY_MIN_ELAPSED` to `"0"` for every completed turn. The installer
+removes the built-in TUI completion alert to avoid duplicates while preserving
+approval notifications and an existing TUI notification opt-out.
+
+The [official Codex completion callback](https://developers.openai.com/codex/config-advanced/#notifications)
+is the completion signal. The local database/rollout is read only for a session
+name and duration matching the current **turn-id**, including after resume or
+interruption. If timing is unavailable (for example, an ephemeral session or a
+changed rollout format), completion still produces a silent “Task complete”
+alert without a fabricated duration. A new CLI process rebinds the session to
+its current tab; sessions sharing a directory are never matched by cwd.
+Headless processes and identifiable subagent completions are excluded. No
+lifecycle hooks or shell alias changes are required.
+
 [![CI](https://github.com/Davie521/claude-ghostty-notify/actions/workflows/ci.yml/badge.svg)](https://github.com/Davie521/claude-ghostty-notify/actions/workflows/ci.yml)
 
 **语言 / Language** → [English](README.md) · [中文](README.zh-CN.md)

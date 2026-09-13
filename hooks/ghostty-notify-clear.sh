@@ -47,13 +47,13 @@ SESSION_ID="${1:-}"
 # filesystem paths, so anything outside Claude Code's UUID alphabet is out.
 [[ "$SESSION_ID" =~ ^[a-fA-F0-9-]+$ ]] || exit 0
 
-SAVE_DIR="$HOME/.claude/notifications/ghostty-sessions"
+SAVE_DIR="${GHOSTTY_NOTIFY_SESSION_DIR:-$HOME/.claude/notifications/ghostty-sessions}"
 SAVE_FILE="$SAVE_DIR/${SESSION_ID}.json"
 ALERTER_PID_FILE="$SAVE_DIR/${SESSION_ID}.alerter-pid"
 WATCH_PID_FILE="$SAVE_DIR/${SESSION_ID}.watch-pid"
 AS_SENTINEL="$SAVE_DIR/applescript-unavailable"
 # Must stay in sync with GROUP_ID in ghostty-notify.sh.
-GROUP_ID="ghostty-notify-${SESSION_ID}"
+GROUP_ID="${GHOSTTY_NOTIFY_GROUP_PREFIX:-ghostty-notify}-${SESSION_ID}"
 
 NOTIFY_TIMEOUT="${GHOSTTY_NOTIFY_TIMEOUT:-1200}"
 [[ "$NOTIFY_TIMEOUT" =~ ^[0-9]+$ ]] || NOTIFY_TIMEOUT=1200

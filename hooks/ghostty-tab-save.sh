@@ -21,8 +21,9 @@ command -v jq >/dev/null 2>&1 || exit 0
 SESSION_ID=$(printf '%s' "$HOOK_DATA" | jq -r '.session_id // empty' 2>/dev/null)
 CWD=$(printf '%s' "$HOOK_DATA" | jq -r '.cwd // empty' 2>/dev/null)
 [[ -z "$SESSION_ID" ]] && exit 0
+[[ "$SESSION_ID" =~ ^[a-fA-F0-9-]+$ ]] || exit 0
 
-SAVE_DIR="$HOME/.claude/notifications/ghostty-sessions"
+SAVE_DIR="${GHOSTTY_NOTIFY_SESSION_DIR:-$HOME/.claude/notifications/ghostty-sessions}"
 SAVE_FILE="$SAVE_DIR/${SESSION_ID}.json"
 START_FILE="$SAVE_DIR/${SESSION_ID}.start"
 ATTEMPTS_FILE="$SAVE_DIR/${SESSION_ID}.attempts"
@@ -62,12 +63,14 @@ ATTEMPTS=$(cat "$ATTEMPTS_FILE" 2>/dev/null || echo 0)
 # pidfiles are the same story — watchers deliberately leave theirs behind
 # rather than race a successor for the filename.
 find "$SAVE_DIR" -type f \( -name '*.json' -o -name '*.start' -o -name '*.attempts' \
-    -o -name '*.alerter-pid' -o -name '*.watch-pid' \) -mtime +7 -delete 2>/dev/null
+    -o -name '*.alerter-pid' -o -name '*.watch-pid' -o -name '*.callback-lock' \) -mtime +7 -delete 2>/dev/null
 
 # ── Locate Claude's controlling TTY ────────────────────────────────────────
 find_claude_tty() {
     local pid=$$
     local depth=10
+    local process_name="${GHOSTTY_NOTIFY_PROCESS_NAME:-claude}"
+    case "$process_name" in claude|codex) ;; *) return 1 ;; esac
     while (( depth-- > 0 )) && [[ "$pid" -gt 1 ]]; do
         local parent
         parent=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
@@ -75,7 +78,7 @@ find_claude_tty() {
         local cmd
         cmd=$(ps -o command= -p "$parent" 2>/dev/null)
         case "$cmd" in
-            claude|claude\ *|*/claude|*/claude\ *)
+            "$process_name"|"$process_name "*|*/"$process_name"|*/"$process_name "*)
                 local tty
                 tty=$(ps -o tty= -p "$parent" 2>/dev/null | tr -d ' ')
                 [[ -n "$tty" && "$tty" != "??" ]] && printf '/dev/%s\n' "$tty"
@@ -91,7 +94,7 @@ TTY_PATH=$(find_claude_tty)
 [[ -z "$TTY_PATH" ]] && exit 0
 [[ -w "$TTY_PATH" ]] || exit 0
 
-MARKER="__CLAUDE_TAB_MARKER_${SESSION_ID}__"
+MARKER="__${GHOSTTY_NOTIFY_PROCESS_NAME:-CLAUDE}_TAB_MARKER_${SESSION_ID}__"
 TAB_ID=""
 MARKER_WRITTEN=0
 
@@ -169,7 +172,7 @@ APPLESCRIPT
     [[ -z "$target" ]] && return 0
     local orig
     orig=$(printf '%s' "$SNAPSHOT" | awk -F'\t' -v id="$target" '$1 == id { print $2; exit }')
-    [[ -z "$orig" ]] && orig="Claude Code"
+    [[ -z "$orig" ]] && orig="${GHOSTTY_NOTIFY_APP_NAME:-Claude Code}"
     printf '\033]2;%s\033\\' "$orig" > "$TTY_PATH" 2>/dev/null
 }
 trap 'restore_marker_title; rmdir "$LOCK_DIR" 2>/dev/null' EXIT

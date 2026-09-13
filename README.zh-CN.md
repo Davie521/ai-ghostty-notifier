@@ -24,6 +24,28 @@ Repo: https://github.com/Davie521/claude-ghostty-notify
 
 ---
 
+## Codex 也可以用
+
+Ghostty 中的 Codex CLI 可以复用同一套通知、**Go to tab** 跳转和返回标签页后自动清除机制。通知标题显示 **Codex ✅**，状态保存在 `~/.codex/notifications/`。
+
+在本仓库运行（安装器需要 Python 3.11+；回调兼容 macOS 自带 Python 3.9）：
+
+```bash
+python3 scripts/install-codex.py
+```
+
+安装器复制脚本到 `~/.codex/ghostty-notify/`，备份并更新 `~/.codex/config.toml` 顶层的 `notify` 数组。支持 `CODEX_HOME`。依赖沿用 Claude 的 **jq + alerter**；未安装 alerter 时降级到 terminal-notifier。已有的其他自定义通知命令需要先显式合并。
+
+**重新启动已打开的 Codex CLI 会话后生效。** 新启动的会话自动加载，包括 `cx` 别名启动的会话。无需修改启动命令或新增 lifecycle hooks。
+
+首次安装时，从 Claude 的 `settings.json` 复制提醒阈值；没有配置则使用本项目默认的 180 / 600 / 1200 秒。之后编辑 `~/.codex/ghostty-notify/config.json` 即可调整，环境变量优先。设 `GHOSTTY_NOTIFY_MIN_ELAPSED` 为 `"0"` 可让每轮完成都弹窗。Codex 自带的完成通知由本回调接替，原有审批提醒设置保留，避免重复弹窗。
+
+接入使用 [Codex 官方 `notify` 完成回调](https://developers.openai.com/codex/config-advanced/#notifications)。回调只把 `agent-turn-complete` 转成共享通知脚本的输入；只读查询本地会话索引和 rollout，按 **turn-id** 取本轮耗时及会话名称，不把启动时间、旧轮次或被中断的任务算进去。恢复到另一个进程时会重新定位标签页，同目录的多个会话各自绑定。
+
+临时会话、关闭记录或记录格式变化导致耗时不可用时，仍显示无声的「Task complete」，不编造耗时。回调仅服务有终端的 Codex 主会话；桌面端、无终端的后台服务及能识别的子代理不会冒出 Ghostty 完成提醒。Codex 使用 alerter/terminal-notifier 投递；可选的 Claude 原生 agent 不由此接入启动。
+
+---
+
 ## 为什么要有它
 
 Claude Code 自带的「任务完成」信号,是在你当前正看着的那个 tab 里响一声终端铃 —— 一旦你切了 app、或者同时开着好几个会话,它就没用了。社区里的通知工具有帮助,但每个都在某处止步:

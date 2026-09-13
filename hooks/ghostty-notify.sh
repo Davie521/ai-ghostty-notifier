@@ -41,7 +41,7 @@ TRANSCRIPT_PATH=$(printf '%s' "$HOOK_DATA" | jq -r '.transcript_path // empty' 2
 # shape the sibling hooks require before any of that.
 [[ "$SESSION_ID" =~ ^[a-fA-F0-9-]+$ ]] || exit 0
 
-SAVE_DIR="$HOME/.claude/notifications/ghostty-sessions"
+SAVE_DIR="${GHOSTTY_NOTIFY_SESSION_DIR:-$HOME/.claude/notifications/ghostty-sessions}"
 START_FILE="$SAVE_DIR/${SESSION_ID}.start"
 
 # ── Elapsed-time gates ────────────────────────────────────────────────────
@@ -66,6 +66,21 @@ START=0
 [[ "$START" =~ ^[0-9]+$ ]] || START=0
 ELAPSED=$((NOW - START))
 
+# Codex's completion callback supplies per-turn timing from its rollout. It
+# has no start callback, so never time the whole CLI process or an old turn.
+# Ephemeral/unavailable rollouts still deserve a completion alert, but must
+# not invent a duration or a long-task sound.
+ELAPSED_UNKNOWN=false
+if [[ "${GHOSTTY_NOTIFY_PROCESS_NAME:-claude}" == "codex" ]]; then
+    REPORTED_ELAPSED=$(printf '%s' "$HOOK_DATA" | jq -r '.elapsed_seconds // empty' 2>/dev/null)
+    if [[ "$REPORTED_ELAPSED" =~ ^[0-9]{1,9}$ ]]; then
+        ELAPSED=$((10#$REPORTED_ELAPSED))
+        START=1
+    else
+        ELAPSED_UNKNOWN=true
+    fi
+fi
+
 # On Stop, always clear the start marker so the next round re-arms.
 clear_start_on_stop() {
     case "$HOOK_EVENT" in
@@ -79,12 +94,13 @@ clear_start_on_stop() {
 # will fire while Claude is blocked on it.
 case "$HOOK_EVENT" in
     Stop|stop)
-        if [[ "$START" -le 0 ]] || (( ELAPSED < MIN_ELAPSED )); then
+        if [[ "$ELAPSED_UNKNOWN" != true ]] && { [[ "$START" -le 0 ]] || (( ELAPSED < MIN_ELAPSED )); }; then
             clear_start_on_stop
             exit 0
         fi
         SILENT=false
         (( ELAPSED < SOUND_ELAPSED )) && SILENT=true
+        [[ "$ELAPSED_UNKNOWN" == true ]] && SILENT=true
         ;;
     Notification|notification)
         [[ "${GHOSTTY_NOTIFY_ON_PROMPT:-0}" = "1" ]] || exit 0
@@ -97,7 +113,7 @@ case "$HOOK_EVENT" in
 esac
 
 # ── Rate limit (avoid spam from parallel sub-agents) ──────────────────────
-RATE_DIR="$HOME/.claude/notifications/state"
+RATE_DIR="${GHOSTTY_NOTIFY_RATE_DIR:-$HOME/.claude/notifications/state}"
 mkdir -p "$RATE_DIR"
 PROJECT_NAME=$(basename "${CWD:-$PWD}")
 RATE_KEY=$(printf '%s-%s-%s' "$HOOK_EVENT" "$SESSION_ID" "$PROJECT_NAME" | tr -c 'A-Za-z0-9._-' '_')
@@ -171,9 +187,10 @@ SESSION_TITLE=$(printf '%s' "$SESSION_TITLE" | tr -d '\000-\037\177')
 # displaces is already carried by the ✅/🔔 in TITLE.
 case "$HOOK_EVENT" in
     Stop|stop)
-        TITLE="Claude ✅"
+        TITLE="${GHOSTTY_NOTIFY_APP_NAME:-Claude} ✅"
         SUBTITLE="${SESSION_TITLE:-Task Complete} — $PROJECT_NAME"
         MESSAGE=$(printf 'Finished after %dm %ds' $((ELAPSED / 60)) $((ELAPSED % 60)))
+        [[ "$ELAPSED_UNKNOWN" == true ]] && MESSAGE="Task complete"
         SOUND="Glass"
         ;;
     Notification|notification)
@@ -222,7 +239,7 @@ find_alerter() {
     return 1
 }
 ALERTER="${GHOSTTY_NOTIFY_ALERTER:-$(find_alerter || true)}"
-GROUP_ID="ghostty-notify-${SESSION_ID}"
+GROUP_ID="${GHOSTTY_NOTIFY_GROUP_PREFIX:-ghostty-notify}-${SESSION_ID}"
 
 fire_with_alerter() {
     [[ -n "$ALERTER" && -x "$ALERTER" ]] || return 1
