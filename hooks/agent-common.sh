@@ -13,6 +13,10 @@ AGENT_SPOOL="$AGENT_ROOT/spool"
 AGENT_PID_FILE="$AGENT_ROOT/agent.pid"
 AGENT_READY_FILE="$AGENT_ROOT/ready"
 AGENT_BUNDLE_NAME="ClaudeGhosttyNotify.app"
+# Where scripts/install-agent.sh puts the copy launchd keeps alive: a fixed
+# place outside any checkout, so moving or deleting the repository breaks
+# neither the LaunchAgent nor this discovery.
+AGENT_INSTALL_DIR="$HOME/Library/Application Support/claude-ghostty-notify"
 
 # agent_app <hooks-dir>
 # Prints the agent bundle path, or returns 1 when the agent is unavailable.
@@ -24,6 +28,10 @@ AGENT_BUNDLE_NAME="ClaudeGhosttyNotify.app"
 # A non-empty override is still checked for an executable binary. Accepting it
 # blindly would let a stale path route every notification into a spool nothing
 # is draining.
+#
+# The installed copy is tried first: it is the one launchd restarts and the one
+# a notification click launches when the agent is down. The build under a
+# checkout only matters on a machine that never ran the install script.
 agent_app() {
     local hooks_dir="${1:-}"
     local candidate
@@ -34,6 +42,7 @@ agent_app() {
         return 0
     fi
     for candidate in \
+        "$AGENT_INSTALL_DIR/$AGENT_BUNDLE_NAME" \
         "$hooks_dir/../build/$AGENT_BUNDLE_NAME" \
         "$hooks_dir/$AGENT_BUNDLE_NAME" \
         "$HOME/.claude/hooks/$AGENT_BUNDLE_NAME"; do

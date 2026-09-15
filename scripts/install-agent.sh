@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
-# Make the notification agent resident via a launchd LaunchAgent.
+# Install the notification agent where launchd can keep it alive.
+#
+# The bundle scripts/build-agent.sh assembled under the checkout is copied to
+# ~/Library/Application Support/claude-ghostty-notify/ and a LaunchAgent points
+# at that copy. The checkout is then free to move or disappear. launchd stores
+# absolute paths, and a LaunchAgent aimed into a repository stops working the
+# day the repository is renamed — exit 78, penalty box, no dialog — while the
+# hooks fall back to alerter without a word, which is the very failure the
+# agent exists to fix. hooks/agent-common.sh looks in the same fixed place, so
+# a moved checkout does not lose the agent either.
 #
 # Why launchd rather than "let the first hook start it": launchd restarts the
 # agent if it ever crashes, starts it at login without waiting for a hook, and
@@ -8,11 +17,14 @@
 # installed still works — this just removes the cold-start latency on the first
 # notification after login.
 #
-# The plist is generated rather than committed because ProgramArguments needs the
-# absolute path of wherever the bundle actually landed.
+# Rerun after every scripts/build-agent.sh: the installed copy is what runs,
+# not the build under the checkout.
+#
+# The plist is generated rather than committed because ProgramArguments needs
+# the absolute path of the installed copy, which contains the home directory.
 #
 # Usage:
-#   bash scripts/install-agent.sh              install and start
+#   bash scripts/install-agent.sh              install (or update) and start
 #   bash scripts/install-agent.sh --uninstall  stop and remove
 
 set -euo pipefail
@@ -22,9 +34,14 @@ REPO=$(cd "$HERE/.." && pwd)
 
 LABEL="io.github.davie521.cgnotify"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-APP="$REPO/build/ClaudeGhosttyNotify.app"
+BUNDLE_NAME="ClaudeGhosttyNotify.app"
+BUILT="$REPO/build/$BUNDLE_NAME"
+INSTALL_DIR="$HOME/Library/Application Support/claude-ghostty-notify"
+APP="$INSTALL_DIR/$BUNDLE_NAME"
 BIN="$APP/Contents/MacOS/ghostty-notify-agent"
 DOMAIN="gui/$(id -u)"
+STATE="$HOME/.claude/notifications/ghostty-agent"
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
 unload() {
     # bootout fails when nothing is loaded; that is the normal case on a fresh
@@ -32,18 +49,61 @@ unload() {
     launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
 }
 
-if [[ "${1:-}" == "--uninstall" ]]; then
+# Stop every agent instance, wherever it was launched from. A running agent
+# keeps executing from the old inode after the bundle is replaced, and
+# agent_running in hooks/agent-common.sh would confirm that stale process as
+# healthy — so nothing would ever start the new copy. The liveness markers go
+# too: a recycled pid is exactly what the ps check there defends against.
+stop_agents() {
     unload
+    pkill -f "/$BUNDLE_NAME/Contents/MacOS/ghostty-notify-agent" 2>/dev/null || true
+    rm -f "$STATE/agent.pid" "$STATE/ready"
+    sleep 1
+}
+
+if [[ "${1:-}" == "--uninstall" ]]; then
+    stop_agents
     rm -f "$PLIST"
-    echo "==> Removed $LABEL"
+    if [[ -x "$LSREGISTER" && -d "$APP" ]]; then
+        "$LSREGISTER" -u "$APP" >/dev/null 2>&1 || true
+    fi
+    rm -rf "$APP"
+    rmdir "$INSTALL_DIR" 2>/dev/null || true
+    echo "==> Removed $LABEL and $APP"
+    echo "    Session bookkeeping under $STATE is kept; remove it by hand if unwanted."
     exit 0
 fi
 
-[[ -x "$BIN" ]] || {
-    echo "FATAL: $BIN missing. Build it first:" >&2
+[[ -x "$BUILT/Contents/MacOS/ghostty-notify-agent" ]] || {
+    echo "FATAL: $BUILT missing. Build it first:" >&2
     echo "  bash scripts/build-agent.sh" >&2
     exit 2
 }
+
+echo "==> Installing $APP"
+stop_agents
+mkdir -p "$INSTALL_DIR"
+# Stage beside the target and rename into place, so a copy that fails halfway
+# leaves the previous install intact. ditto keeps the code signature, extended
+# attributes and permissions that TCC and LaunchServices key their records on.
+STAGED="$INSTALL_DIR/.$BUNDLE_NAME.new"
+rm -rf "$STAGED"
+ditto "$BUILT" "$STAGED"
+rm -rf "$APP"
+mv "$STAGED" "$APP"
+# The copy must carry the build's signature: TCC keys the notification and
+# Automation grants to it, so a copy that lost it would be asked again — or,
+# for notifications, would silently display nothing.
+codesign --verify --deep --strict "$APP" 2>/dev/null ||
+    echo "  warning: the installed copy failed signature verification; macOS may ask for permissions again" >&2
+if [[ -x "$LSREGISTER" ]]; then
+    # One registration per bundle identifier. A click on a notification while
+    # the agent is down makes LaunchServices launch the app by identifier, and
+    # that must resolve to the installed copy, not to the build in a checkout
+    # that may be gone tomorrow.
+    "$LSREGISTER" -u "$BUILT" >/dev/null 2>&1 || true
+    "$LSREGISTER" -f "$APP" >/dev/null 2>&1 || true
+fi
 
 mkdir -p "$(dirname "$PLIST")"
 cat > "$PLIST" <<PLIST_EOF
@@ -87,7 +147,11 @@ PLIST_EOF
 # good. Launching through `open` (i.e. through LaunchServices) does prompt
 # normally. So: prompt once here, wait for the answer, and only then install the
 # LaunchAgent, which from then on merely restarts an already-authorized app.
-READY="$HOME/.claude/notifications/ghostty-agent/ready"
+#
+# This runs on every install, not only the first: the answer is read from the
+# copy that was just put in place, so a copy that lost its grant is found out
+# here rather than by a notification that never appears.
+READY="$STATE/ready"
 
 # One prompt round trip: launch through LaunchServices, wait for the agent to
 # publish an answer, read it, then stop that instance. Stopping matters twice
@@ -105,45 +169,57 @@ prompt_once() {
         sleep 1
     done
     ANSWER=$(cat "$READY" 2>/dev/null || true)
-    pkill -f "$BIN" 2>/dev/null || true
+    pkill -f "/$BUNDLE_NAME/Contents/MacOS/ghostty-notify-agent" 2>/dev/null || true
     sleep 1
 }
 
-if [[ "$(cat "$READY" 2>/dev/null)" != "authorized" ]]; then
-    echo "==> Requesting notification permission (a dialog will appear)"
-    echo "    Click Allow. Clicking Don't Allow permanently disables this build's"
-    echo "    identifier — macOS leaves no System Settings entry to undo it."
+echo "==> Checking notification permission (a dialog appears the first time)"
+echo "    Click Allow. Clicking Don't Allow permanently disables this build's"
+echo "    identifier — macOS leaves no System Settings entry to undo it."
+prompt_once
+
+# "error" is not the user's answer: the system refused to process the
+# request and no dialog ever appeared — seen on a bundle's first contact
+# with the notification system, before its registration settles. One
+# retry usually lands the dialog; reporting it as DENIED told users their
+# identifier was permanently burned when it was nothing of the sort.
+if [[ "$ANSWER" == "error" ]]; then
+    echo "    macOS did not process the request (no dialog appeared); retrying once"
+    sleep 2
     prompt_once
-
-    # "error" is not the user's answer: the system refused to process the
-    # request and no dialog ever appeared — seen on a bundle's first contact
-    # with the notification system, before its registration settles. One
-    # retry usually lands the dialog; reporting it as DENIED told users their
-    # identifier was permanently burned when it was nothing of the sort.
-    if [[ "$ANSWER" == "error" ]]; then
-        echo "    macOS did not process the request (no dialog appeared); retrying once"
-        sleep 2
-        prompt_once
-    fi
-
-    case "$ANSWER" in
-        authorized) echo "    granted" ;;
-        denied)
-            echo "    DENIED — the user declined, so the agent cannot display" >&2
-            echo "    notifications. Hooks will keep using the alerter/terminal-notifier path." >&2
-            ;;
-        error)
-            echo "    macOS refused the request twice (no dialog was shown)." >&2
-            echo "    This is a registration hiccup, not a denial — rerun this script." >&2
-            ;;
-        *) echo "    no answer yet; the agent will keep running and can be re-asked" >&2 ;;
-    esac
 fi
+
+case "$ANSWER" in
+    authorized) echo "    granted" ;;
+    denied)
+        echo "    DENIED — the user declined, so the agent cannot display" >&2
+        echo "    notifications. Hooks will keep using the alerter/terminal-notifier path." >&2
+        ;;
+    error)
+        echo "    macOS refused the request twice (no dialog was shown)." >&2
+        echo "    This is a registration hiccup, not a denial — rerun this script." >&2
+        ;;
+    *) echo "    no answer yet; the agent will keep running and can be re-asked" >&2 ;;
+esac
 
 unload
 launchctl bootstrap "$DOMAIN" "$PLIST"
 
-echo "==> Installed $LABEL"
+# Installed means running: a LaunchAgent that is loaded but whose process
+# never came up looks identical from the outside, and that is how a stale
+# path went unnoticed for weeks. Wait for the pidfile launchd's instance
+# writes, and name the command that explains a failure.
+for _ in $(seq 1 20); do
+    [[ -s "$STATE/agent.pid" ]] && break
+    sleep 0.5
+done
+if [[ -s "$STATE/agent.pid" ]] && kill -0 "$(cat "$STATE/agent.pid")" 2>/dev/null; then
+    echo "==> Installed $LABEL, running as pid $(cat "$STATE/agent.pid")"
+else
+    echo "==> Installed $LABEL, but the agent has not started:" >&2
+    echo "    launchctl print $DOMAIN/$LABEL" >&2
+fi
+echo "    app:   $APP"
 echo "    plist: $PLIST"
 echo "    stop:  bash scripts/install-agent.sh --uninstall"
 echo
@@ -152,7 +228,7 @@ echo
 # fresh bundle identifier carrying the key from first registration — and Apple has
 # said the style is not programmatically settable. So: detect it and walk the user
 # there, which is what other apps in this position do.
-STYLE_FILE="$HOME/.claude/notifications/ghostty-agent/alert-style"
+STYLE_FILE="$STATE/alert-style"
 for _ in $(seq 1 15); do
     [[ -s "$STYLE_FILE" ]] && break
     sleep 1
@@ -170,3 +246,7 @@ echo "On first notification macOS will ask twice:"
 echo "  1. permission to send notifications"
 echo "  2. permission to control Ghostty (needed for click-to-jump)"
 echo "Both are one-time and both must be allowed."
+echo
+echo "If you use Focus modes, add Claude Ghostty Notify to their allowed apps:"
+echo "a Focus that already lets Terminal (the shell path's identity) through"
+echo "still sends this app's alerts straight to Notification Center."
