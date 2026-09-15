@@ -45,7 +45,10 @@ source "$SCRIPT_DIR/agent-common.sh" 2>/dev/null || exit 0
 
 APP=$(agent_app "$SCRIPT_DIR") || exit 0
 
-SAVE_FILE="$HOME/.claude/notifications/ghostty-sessions/${SESSION_ID}.json"
+# The Codex adapter keeps its bindings apart from Claude's and says where;
+# Claude's own hooks leave the override unset.
+SAVE_DIR="${GHOSTTY_NOTIFY_SESSION_DIR:-$HOME/.claude/notifications/ghostty-sessions}"
+SAVE_FILE="$SAVE_DIR/${SESSION_ID}.json"
 TAB_ID=""
 [[ -f "$SAVE_FILE" ]] && TAB_ID=$(jq -r '.tab_id // empty' "$SAVE_FILE" 2>/dev/null)
 

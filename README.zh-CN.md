@@ -41,6 +41,7 @@ python3 scripts/install-codex.py
 - **设置**在 `~/.codex/ghostty-notify/config.json`：首次安装把 Claude `settings.json` 里所有 `GHOSTTY_NOTIFY_*` 偏好复制过来（没有则 180 / 600 / 1200 秒）；脚本认的任何开关——阈值、`GHOSTTY_NOTIFY_BACKEND`、`GHOSTTY_NOTIFY_ALERTER`……——都可以写在这个文件里，环境变量优先。
 - **会话标题**：优先用 Codex 自己存的线程名，否则用会话第一句提问。
 - **只有终端会话会弹。** 同一个 `hooks.json` 也会被 Codex 桌面端的线程、以及其他 agent 拉起的 `codex mcp-server` 触发；它们没有可跳回的 tab，一律跳过。
+- **原生 agent 也管 Codex。** 装了 [agent](#5-可选原生-agent) 之后，Codex 的通知同样由它发：点击必达、精确撤回、菜单栏列表，和 Claude 的一样；新提问也同样经它撤回。想让 Codex 留在 shell 路径，在 `config.json` 里把 `GHOSTTY_NOTIFY_AGENT_APP` 设成空字符串。
 - **Codex 自带的回合完成提醒**会被关掉以免重复：`[tui] notifications` 改成 `["approval-requested", "plan-mode-prompt"]`，审批和 plan 模式的提问照常提醒。因此短于阈值的回合不会有任何提醒。
 - **重跑安装器不会丢掉信任。** Codex 按条目在 `hooks.json` 里的位置和定义记信任；安装器原地更新自己的条目，更新脚本本身也不需要重新信任。如果删除旧条目不得不挪动了你自己的 hook，它会说明。
 - **从旧版 `notify` 回调升级**：安装器会删掉旧版写入的 `notify`——包括被 Codex 桌面端 Computer Use 用 `--previous-notify` 包过一层的情况（那层包装让每条通知晚两分钟），并保留包装器自己的部分；同时删掉 `PreToolUse` 那条。
@@ -120,20 +121,23 @@ hook 通过插件 manifest 自动注册 —— **不需要手动改 `settings.js
 
 ```bash
 bash scripts/build-agent.sh     # 需要 Swift 工具链(xcode-select --install)
-bash scripts/install-agent.sh   # 编译 LaunchAgent 并申请权限
+bash scripts/install-agent.sh   # 把 app 拷到固定位置、装 LaunchAgent、申请权限
 ```
+
+安装会把 bundle 拷到 `~/Library/Application Support/claude-ghostty-notify/`,LaunchAgent 指向那份拷贝,所以仓库随便挪、随便删 —— 直接指向仓库目录的 LaunchAgent 会在仓库改名那天静默失效。每次重新 build 之后要再跑一次安装。Codex 会话用的是同一个 agent(见[上文](#codex-也可以用))。
 
 区别:
 
+- **点击一定送到认识那个 tab 的进程。** 所有 `alerter` 进程都以同一个身份(`com.apple.Terminal`)发通知,macOS 把点击随便派给其中一个进程;不是它发的通知它就丢掉,真正发通知的那个只被告知「通知没了」—— 于是通知消失、什么都不跳。同时开着好几个会话、各自都在经 `alerter` 发和清通知时,丢掉的点击不在少数。agent 是一个进程、有自己的 bundle 身份,每次点击都落在知道 tab 的地方。
 - **一个进程,而不是每条通知一个。** shell 路径每弹一条通知就派一个 watcher,每秒醒一次直到你回来;agent 订阅 app 激活事件,两条通知之间什么都不做。
 - **精确撤回。** 它经 `UNUserNotificationCenter` 发送、按 identifier 撤回,所以同一 session 的新通知会**替换**旧的而不是堆叠。
 - **菜单栏图标**,图标上就带着「几个 session 在等你」的计数,菜单里逐条列出 —— 每一行原样重复那条通知的内容,点一下跳到它的 tab。在 Temporary 提醒样式下通知没等你点就滑走了,这是唯一的回去的路。它同时显示是否已授权、macOS 给它的提醒样式是哪种 —— 否则一个显示不出任何东西的后台进程,和一个正常工作的长得一模一样。
 
-安装时会要两个权限,都是一次性的:通知、以及控制 Ghostty(点击跳转要用)。两个都要允许。
+安装时会要两个权限,都是一次性的:通知、以及控制 Ghostty(点击跳转要用)。两个都要允许。用专注模式的话,把 **Claude Ghostty Notify** 也加进它的允许列表 —— shell 路径是以 Terminal 身份发通知的,你的专注模式可能早就放行了它,而 agent 在系统眼里是另一个 app。
 
 > **通知权限那个一定要点「允许」。** 点「不允许」对该构建是**永久**的 —— macOS 不会在系统设置里留下开关可以撤销,唯一的出路是换一个 bundle identifier。
 
-卸载:`bash scripts/install-agent.sh --uninstall`,hook 会自动回落到 shell 路径。
+卸载:`bash scripts/install-agent.sh --uninstall`(删 LaunchAgent 和那份拷贝),hook 会自动回落到 shell 路径。
 
 ### 手动安装(不用插件系统)
 
@@ -158,7 +162,7 @@ cd claude-ghostty-notify
 | `GHOSTTY_NOTIFY_ON_PROMPT`     | `0`    | 设成 `1` 后,`Notification` 事件(权限/输入提示)也会立即弹通知 + Ping 音。不跑 bypass-permissions 模式的话推荐打开 |
 | `GHOSTTY_NOTIFY_CLEAR_ON_FOCUS` | `1`   | 聚焦到会话所在 tab 时自动清除通知,在该会话提交新 prompt 时同样清除。tab 未知时(tmux、Ghostty 不可脚本化)降级为「Ghostty 重新回到前台时清除」。用 `0`/`false`/`no`/`off` 关闭;其他值一律视为开启 |
 | `GHOSTTY_NOTIFY_FOCUS_POLL`    | `1`    | 聚焦检测的轮询间隔(秒,可用小数)。`0` 会让 watcher 空转,因此回落到默认值。走 agent 投递时无意义 —— 它没有轮询 |
-| `GHOSTTY_NOTIFY_AGENT_APP`     | *(自动发现)* | agent bundle 的路径。设成**空字符串**可以钉住 shell 路径、无视已安装的 agent;不设则「有就用」;指向一个不是可执行 bundle 的路径会被拒绝而不是盲信 |
+| `GHOSTTY_NOTIFY_AGENT_APP`     | *(自动发现)* | agent bundle 的路径。设成**空字符串**可以钉住 shell 路径、无视已安装的 agent;不设则「有就用」—— 先找 `~/Library/Application Support/claude-ghostty-notify/` 下装好的那份;指向一个不是可执行 bundle 的路径会被拒绝而不是盲信。Codex 从 `~/.codex/ghostty-notify/config.json` 读它 |
 | `GHOSTTY_NOTIFY_MENU_BAR`      | `1`    | agent 的菜单栏图标。`0`/`false`/`no`/`off` 隐藏 —— 代价是失去待处理计数、逐条跳转的列表,以及「agent 还活着且有权限」的唯一可见凭据 |
 
 值必须是纯整数(秒),否则回落到默认值(`GHOSTTY_NOTIFY_FOCUS_POLL` 可用小数)。
@@ -179,7 +183,7 @@ cd claude-ghostty-notify
 
 1. Script Editor **和 Terminal** 的 **Alert Style** 都改成 **Persistent** 了吗?(第 3 步 —— 通知挂在哪个 bundle 下取决于 alerter 版本)
 2. 改完 env 有没有**重启** Claude Code?(第 4 步)
-3. macOS 的**勿扰 / 专注模式**开了吗?关掉再试。
+3. macOS 的**勿扰 / 专注模式**开了吗?专注模式会把它没明确放行的 app 的通知**静默**送进通知中心 —— agent 日志照样写「posted」,`usernoted` 照样写「Presenting」。关掉它,或者把负责投递的 app 加进该专注模式的「允许的 app」:装了原生 agent 就是 **Claude Ghostty Notify**,shell 路径是 **Terminal**(alerter 26.x)或 **Script Editor**(旧版 alerter)。专注模式已经放行了 Terminal 不等于放行了 agent,所以换到 agent 之后通知可能「消失」,加进去就好。
 4. 检查 hook 跑过没:`ls ~/.claude/notifications/ghostty-sessions/`,应能看到当前 session 的 `<session_id>.json` 和 `.start` 文件。
 5. **alerter 跑了但通知就是不显示** —— 负责投递的 bundle 在系统设置里从来没被授权过通知。`alerter` 能跑完、正常退出,但 macOS 静默丢了显示。解决:强制走 terminal-notifier 后端(它有自己独立的通知授权):
 
@@ -203,10 +207,15 @@ cd claude-ghostty-notify
 
 说明你点的是通知**主体**,不是 **Go to tab** 按钮。`alerter` 默认把 body 点击路由到 `--sender` 对应的 app,而 Script Editor 被激活时默认就是弹新建文档框。要么总是点 **Go to tab**(推荐),要么打开 Ghostty 的通知权限、给脚本加 `--sender com.mitchellh.ghostty`(但 Ghostty 之后会发自己的 `notify-on-command-finish-after` 通知,可能更吵)。
 
+### 点了通知,它只是消失了,没有跳转
+
+shell 路径下所有 `alerter` 都以同一个 app 身份(`com.apple.Terminal`)发通知,macOS 可能把你的点击派给另一个 `alerter` 进程 —— 多半是别的会话刚为了清自己的通知而启动的那个。它不认识这条通知就丢掉点击,而发通知的那个只被告知「已被关闭」,于是什么都不跳。会话开得越多,发生得越频繁。装上[原生 agent](#5-可选原生-agent):一个进程、独立身份、每次点击都有人接。
+
 ### 跳错 tab 了
 
 1. 你用 `--resume` 在**新 tab** 里恢复了旧 session,保存的 tab ID 失效。解决:`rm ~/.claude/notifications/ghostty-sessions/<session_id>.json`,随便跑一条命令让它重新识别。
 2. 跑 Claude 的原 tab 被关了。点通知只会 activate Ghostty,跳不过去。
+3. 会话还开着、Ghostty 却重启过(tab id 只在一个 Ghostty 进程里有意义)。绑定会在该会话下一次工具调用时重新识别 —— Codex 是下一个回合结束时 —— 只有在那之前点的通知会落到「只激活 Ghostty」。
 
 ### alerter 进程还挂着没退
 
@@ -262,7 +271,7 @@ cd claude-ghostty-notify
 
 **插件方式:** `/plugin uninstall claude-ghostty-notify` —— hook 自动注销。
 
-**原生 agent**(如果装了):`bash scripts/install-agent.sh --uninstall`,然后 `rm -rf ~/.claude/notifications/ghostty-agent`。撤销它的通知权限是另一件事,要去系统设置 → 通知里做。
+**原生 agent**(如果装了):`bash scripts/install-agent.sh --uninstall` 会删掉 LaunchAgent 和 `~/Library/Application Support/claude-ghostty-notify/` 下的拷贝,然后 `rm -rf ~/.claude/notifications/ghostty-agent`。撤销它的通知权限是另一件事,要去系统设置 → 通知里做。
 
 **手动安装:**
 

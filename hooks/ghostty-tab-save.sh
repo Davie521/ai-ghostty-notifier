@@ -41,8 +41,30 @@ mkdir -p "$SAVE_DIR"
 # corrupt the next round's elapsed time).
 [[ -f "$START_FILE" ]] || date +%s > "$START_FILE"
 
-# Skip tab-id resolution if already saved for this session.
-[[ -f "$SAVE_FILE" ]] && exit 0
+# Skip tab-id resolution if already saved for this session — unless Ghostty
+# has been restarted since. Tab ids are object identifiers inside the Ghostty
+# process, so a restart invalidates every binding while the sessions in its
+# tabs live on; a click then finds no tab and only raises Ghostty. The
+# process id is the cheapest witness: one LaunchServices lookup per tool
+# call, no Apple Events. A binding with no recorded pid predates this check
+# and is resolved once more. (Asked of LaunchServices rather than pgrep:
+# pgrep cannot see Ghostty's process at all on macOS 26 — neither by name
+# nor by full command line — while ps lists it.)
+GHOSTTY_PID=$(lsappinfo info -only pid com.mitchellh.ghostty 2>/dev/null | tr -dc '0-9')
+binding_current() {
+    [[ -f "$SAVE_FILE" ]] || return 1
+    [[ -n "$GHOSTTY_PID" ]] || return 0
+    [[ "$(jq -r '.ghostty_pid // empty' "$SAVE_FILE" 2>/dev/null)" == "$GHOSTTY_PID" ]]
+}
+binding_current && exit 0
+
+# The Ghostty pid rides along so a later run can tell this binding from one
+# issued by an earlier Ghostty; left out when no Ghostty process was found.
+write_binding() {
+    jq -nc --arg tab "$1" --arg cwd "$CWD" --arg pid "$GHOSTTY_PID" \
+        '{tab_id: $tab, cwd: $cwd} + (if $pid == "" then {} else {ghostty_pid: $pid} end)' \
+        > "$SAVE_FILE"
+}
 
 # Negative cache: if a previous attempt showed Ghostty isn't scriptable
 # (AppleScript support shipped in Ghostty 1.3; the macOS Automation
@@ -130,7 +152,7 @@ fi
 trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
 
 # Another instance may have completed the dance while we raced for the lock.
-[[ -f "$SAVE_FILE" ]] && exit 0
+binding_current && exit 0
 
 # ── Snapshot all tab titles BEFORE marker ──────────────────────────────────
 SNAPSHOT=""
@@ -239,18 +261,13 @@ if [[ -z "$TAB_ID" ]]; then
     ATTEMPTS=$((ATTEMPTS + 1))
     printf '%s\n' "$ATTEMPTS" > "$ATTEMPTS_FILE" 2>/dev/null
     if (( ATTEMPTS >= 3 )); then
-        printf '{"tab_id":"","cwd":%s}\n' \
-            "$(printf '%s' "$CWD" | jq -Rs .)" \
-            > "$SAVE_FILE"
+        write_binding ""
         rm -f "$ATTEMPTS_FILE"
     fi
     exit 0
 fi
 rm -f "$ATTEMPTS_FILE"
 
-printf '{"tab_id":%s,"cwd":%s}\n' \
-    "$(printf '%s' "$TAB_ID" | jq -Rs .)" \
-    "$(printf '%s' "$CWD" | jq -Rs .)" \
-    > "$SAVE_FILE"
+write_binding "$TAB_ID"
 
 exit 0

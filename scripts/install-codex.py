@@ -24,7 +24,7 @@ REPO = Path(__file__).resolve().parent.parent
 FILES = (
     "codex-hook.sh", "ghostty-tab-save.sh", "ghostty-tab-focus.sh",
     "ghostty-notify.sh", "ghostty-notify-clear.sh", "ghostty-round-reset.sh",
-    "agent-common.sh",
+    "agent-common.sh", "ghostty-agent-anchor.sh",
 )
 EVENTS = ("UserPromptSubmit", "Stop")
 DEFAULTS = {

@@ -44,15 +44,22 @@ OWNER = "1000:ttysNONE:Sun Sep 13 17:00:00 2026"
 
 # ps as the scripts call it: `ps -o <cols> -p <pid>`. Every process reports
 # pid 1000 as its parent; 1000 is the codex CLI, whose TTY the test controls.
+# FAKE_AGENT_PID names the process standing in for the resident agent.
 FAKE_PS = '''#!/usr/bin/python3
 import os, sys
 cols = sys.argv[2] if len(sys.argv) > 3 and sys.argv[1] == "-o" else ""
 pid = sys.argv[-1]
 tty = os.environ.get("FAKE_CODEX_TTY", "ttysNONE")
+agent = os.environ.get("FAKE_AGENT_PID", "")
 if cols == "ppid=":
     print("1" if pid == "1000" else "1000")
 elif cols == "command=":
-    print("/vendor/bin/codex" if pid == "1000" else "/bin/bash")
+    if pid == "1000":
+        print("/vendor/bin/codex")
+    elif pid == agent:
+        print("/x/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent")
+    else:
+        print("/bin/bash")
 elif cols == "tty=":
     print(tty if pid == "1000" else "??")
 elif cols == "lstart=":
@@ -226,6 +233,82 @@ class CodexHookTests(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in self.state.iterdir() if p.name.startswith(("0ld", "fre5h"))),
                          ["fre5h.title"])
 
+    # ── The resident agent ──────────────────────────────────────────────────
+    def install_agent(self, ready="authorized"):
+        """A fake agent bundle at the installed location, reported alive and
+        authorized. This test process stands in for the agent (the liveness
+        check is `kill -0` plus what ps says the pid runs), `open` is stubbed
+        so nothing is launched, and alerter is made unavailable so the only
+        other way out is the recording terminal-notifier."""
+        app = self.root / "Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app"
+        (app / "Contents/MacOS").mkdir(parents=True)
+        self.script(app / "Contents/MacOS/ghostty-notify-agent", "#!/bin/sh\nexit 0\n")
+        self.script(self.bin / "open", "#!/bin/sh\nexit 0\n")
+        agent_root = self.root / ".claude/notifications/ghostty-agent"
+        agent_root.mkdir(parents=True)
+        (agent_root / "agent.pid").write_text("{}\n".format(os.getpid()))
+        (agent_root / "ready").write_text(ready + "\n")
+        os.environ.update({
+            "FAKE_AGENT_PID": str(os.getpid()),
+            "GHOSTTY_NOTIFY_BACKEND": "auto",
+            "GHOSTTY_NOTIFY_ALERTER": str(self.root / "no-alerter"),
+        })
+        return agent_root / "spool"
+
+    def requests(self, spool):
+        return sorted((json.loads(p.read_text()) for p in spool.glob("*.json")),
+                      key=lambda request: request["type"])
+
+    def test_prompt_anchors_and_dismisses_through_the_agent(self):
+        spool = self.install_agent()
+        os.environ["GHOSTTY_NOTIFY_CLEAR_ON_FOCUS"] = "1"
+        self.bind()
+        (self.state / (SID + ".json")).write_text('{"tab_id":"codex-target-tab"}')
+        self.run_hook("UserPromptSubmit", prompt="back again")
+        # The tab comes from Codex's own binding, not Claude's session dir.
+        self.assertEqual(self.requests(spool), [
+            {"type": "anchor", "session_id": SID, "tab_id": "codex-target-tab"},
+            {"type": "dismiss", "session_id": SID},
+        ])
+
+    def test_long_round_is_delivered_by_the_agent(self):
+        spool = self.install_agent()
+        self.bind()
+        (self.state / (SID + ".json")).write_text('{"tab_id":"codex-target-tab"}')
+        self.run_hook("Stop", last_assistant_message="done")
+        self.wait_until(lambda: list(spool.glob("*.json")))
+        request, = self.requests(spool)
+        self.assertEqual(request["type"], "notify")
+        self.assertEqual(request["title"], "Codex ✅")
+        self.assertEqual(request["subtitle"], "修复登录 — same-project")
+        self.assertEqual(request["tab_id"], "codex-target-tab")
+        self.assertEqual(request["timeout"], "1200")
+        self.assertEqual(request["clear_on_focus"], "false")
+        time.sleep(0.5)
+        # Nothing reached the shell backends, and no watcher was spawned: the
+        # agent withdraws on focus by itself.
+        self.assertEqual(self.notices(), [])
+        self.assertFalse((self.state / (SID + ".watch-pid")).exists())
+        self.assertFalse((self.state / (SID + ".start")).exists())
+
+    def test_config_can_pin_the_shell_path(self):
+        spool = self.install_agent()
+        settings = self.installed / "config.json"
+        settings.write_text(json.dumps({**json.loads(settings.read_text()),
+                                        "GHOSTTY_NOTIFY_AGENT_APP": ""}))
+        self.bind()
+        self.run_hook("Stop")
+        self.wait_until(self.notices)
+        self.assertEqual(self.notices()[0]["-title"], "Codex ✅")
+        self.assertEqual(list(spool.glob("*.json")), [])
+
+    def test_unauthorized_agent_falls_back_to_the_shell_path(self):
+        spool = self.install_agent(ready="denied")
+        self.bind()
+        self.run_hook("Stop")
+        self.wait_until(self.notices)
+        self.assertEqual(list(spool.glob("*.json")), [])
+
     # ── Stop: delivery through the shared scripts ───────────────────────────
     def test_long_round_notifies_with_codex_branding_and_clears_timer(self):
         self.bind()
@@ -398,6 +481,34 @@ class CodexHookTests(unittest.TestCase):
         self.wait_until(self.notices)
         self.assertFalse((self.state / (SID + ".json")).exists())
         self.assertEqual((self.state / (SID + ".attempts")).read_text(), "1\n")
+
+    def test_binding_is_refreshed_after_ghostty_restarts(self):
+        tty = self.fake_tty()
+        # What the hook takes for "the Ghostty that is running now".
+        self.script(self.bin / "lsappinfo", '#!/bin/sh\necho \'"pid"=4242\'\n')
+        saved = self.state / (SID + ".json")
+        # A binding from another Ghostty, and one that predates the check.
+        for stale in ('{"tab_id":"old-tab","cwd":"/x","ghostty_pid":"1"}',
+                      '{"tab_id":"old-tab","cwd":"/x"}'):
+            self.bind()
+            saved.write_text(stale)
+            tty.write_text("")
+            self.run_hook("Stop")
+            # The timer goes last in the detached work, after the binding.
+            self.wait_until(lambda: not (self.state / (SID + ".start")).exists())
+            self.assertEqual(json.loads(saved.read_text())["tab_id"], "tab-1")
+            self.assertEqual(json.loads(saved.read_text()).get("ghostty_pid"), "4242")
+            self.assertEqual(tty.read_text(), "\x1b]2;Old title\x1b\\")
+            shutil.rmtree(self.codex_home / "notifications/state", ignore_errors=True)
+        # Control: the same Ghostty is still running, so the binding stands
+        # and no marker is written.
+        self.bind()
+        saved.write_text('{"tab_id":"old-tab","cwd":"/x","ghostty_pid":"4242"}')
+        tty.write_text("")
+        self.run_hook("Stop")
+        self.wait_until(lambda: not (self.state / (SID + ".start")).exists())
+        self.assertEqual(json.loads(saved.read_text())["tab_id"], "old-tab")
+        self.assertEqual(tty.read_text(), "")
 
     def test_short_round_skips_the_marker_round_trip(self):
         tty = self.fake_tty()

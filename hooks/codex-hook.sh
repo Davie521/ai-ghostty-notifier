@@ -17,7 +17,8 @@
 #      sub-agent traffic, which reports the root session's id;
 #   4. on Stop, hands over to a detached process that lets the turn end,
 #      skips turn boundaries Codex continues straight through, resolves the
-#      tab, and only then delivers through the shared scripts.
+#      tab, and only then delivers through the shared scripts — to the
+#      resident agent when it is installed, else alerter.
 #
 # Why the tab is resolved at Stop: ghostty-tab-save.sh identifies the tab by
 # writing a marker title and asking Ghostty who shows it. The Codex TUI
@@ -84,12 +85,13 @@ if [[ -f "$CONFIG_FILE" ]]; then
         | select(.value != null)
         | "\(.key)=\(.value | tostring)"' "$CONFIG_FILE" 2>/dev/null)
 fi
-# Identity is not configurable. Set-but-empty GHOSTTY_NOTIFY_AGENT_APP pins
-# the shell delivery path: the resident agent is Claude-branded and lives in
-# Claude's hooks dir.
+# Identity is not configurable: it keeps Codex's state, rate stamps and
+# notification groups apart from Claude's. The resident agent is shared. The
+# shared scripts discover it exactly as Claude's hooks do, and a
+# GHOSTTY_NOTIFY_AGENT_APP in config.json or the environment still names a
+# specific bundle — or, set empty, pins the shell delivery path.
 export GHOSTTY_NOTIFY_PROCESS_NAME="codex"
 export GHOSTTY_NOTIFY_APP_NAME="Codex"
-export GHOSTTY_NOTIFY_AGENT_APP=""
 export GHOSTTY_NOTIFY_SESSION_DIR="${GHOSTTY_NOTIFY_SESSION_DIR:-$CODEX_HOME/notifications/ghostty-sessions}"
 export GHOSTTY_NOTIFY_RATE_DIR="${GHOSTTY_NOTIFY_RATE_DIR:-$CODEX_HOME/notifications/state}"
 export GHOSTTY_NOTIFY_GROUP_PREFIX="${GHOSTTY_NOTIFY_GROUP_PREFIX:-codex-ghostty-notify}"
@@ -230,6 +232,11 @@ case "$EVENT" in
         # Clears a still-visible alert for this session (the user is back)
         # and the previous timer; then the round is timed from this prompt.
         printf '%s' "$HOOK_DATA" | "$SCRIPT_DIR/ghostty-round-reset.sh"
+        # The same proof of presence for the resident agent, when it is the
+        # one holding the alert: anchor the session's tab, then withdraw.
+        # Returns at once when no agent is installed.
+        [[ -x "$SCRIPT_DIR/ghostty-agent-anchor.sh" ]] &&
+            printf '%s' "$HOOK_DATA" | "$SCRIPT_DIR/ghostty-agent-anchor.sh"
         date +%s > "$START_FILE" 2>/dev/null
         ;;
     Stop)
@@ -254,9 +261,11 @@ case "$EVENT" in
             START=$(cat "$START_FILE" 2>/dev/null || echo 0)
             [[ "$START" =~ ^[0-9]+$ ]] || START=0
             # The marker round-trip costs Apple Events; rounds the shared
-            # script will suppress anyway skip it.
+            # script will suppress anyway skip it. ghostty-tab-save.sh itself
+            # returns at once while the binding is current, and re-resolves
+            # the tab after a Ghostty restart.
             if (( START > 0 && $(date +%s) - START >= MIN_ELAPSED )) \
-                && [[ ! -f "$SAVE_FILE" && -n "$TTY_PATH" ]]; then
+                && [[ -n "$TTY_PATH" ]]; then
                 printf '%s' "$HOOK_DATA" | GHOSTTY_NOTIFY_TTY="$TTY_PATH" \
                     GHOSTTY_NOTIFY_MARKER_RETRY_DELAYS="$RETRY_DELAYS" \
                     "$SCRIPT_DIR/ghostty-tab-save.sh"

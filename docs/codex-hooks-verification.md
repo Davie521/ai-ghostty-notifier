@@ -79,3 +79,48 @@ From the 2026-09-14 review of the branch:
   terminal and blocks until EOF, so every alerter call in the shared scripts
   now has `</dev/null` (the hooks were safe — their stdin is the drained
   payload — but a manual `ghostty-notify-clear.sh` from a pipeline hung).
+
+## The resident agent, same day
+
+Why: on a machine running ten-odd Claude sessions, clicks on alerter's
+notifications were lost. Every `alerter` posts as `com.apple.Terminal`, and
+`usernoted` hands a click to whichever of those connections it likes; the one
+that did not post the notification drops it (its uuid guard), and the one that
+did is only told "closed". Reproduced twice: a click with no other alerter
+activity was never answered until the 90 s timeout, and a click 2 s after an
+unrelated `alerter --remove` came back as "Dismiss". Neither ever produced a
+`Received response` line in `usernoted`'s log.
+
+What changed: the agent is installed to `~/Library/Application Support/` (the
+old LaunchAgent pointed into a checkout that had moved and had been failing
+with exit 78), Codex's adapter no longer pins the shell path, and the anchor
+hook honours `GHOSTTY_NOTIFY_SESSION_DIR`. Claude's hooks on the same machine
+had never used the agent — they predated it.
+
+Verified with Codex CLI 0.154.0 and the agent 0.4.0 (unchanged since
+2026-08-16):
+
+- `codex exec` in a Ghostty tab: Stop → tab bound with `ghostty_pid` →
+  `posted claude-<session>` in the agent log, `Presenting … as alert` in
+  `usernoted`; the notification read `Codex ✅`.
+- Three clicks in a row (a live Claude session, the Codex run, a synthetic
+  Claude session bound to a `sleep` tab): three `Received response` lines,
+  three `jump: focused <tab>, verified selected` lines, the right tab each
+  time.
+- Submitting a prompt in a session withdrew its notification (`withdrew
+  claude-<session>` right after the prompt), through the anchor hook.
+- Ghostty had been restarted two days earlier: 18 of the 28 bindings from the
+  previous week named tabs that no longer existed. `ghostty-tab-save.sh` now
+  records the Ghostty pid (from `lsappinfo`; `pgrep` cannot see the process)
+  and re-resolves after a restart — the Codex adapter calls it on every
+  qualifying Stop and it returns at once while the binding is current.
+- A Focus mode ("Work", auto-activated) delivered the agent's alerts straight
+  to Notification Center while letting Terminal through: `usernoted` logged
+  `interruptionSuppression: delay delivery … resolutionReason: mode
+  configuration type` for the agent and `none … mode configuration for
+  application` for Terminal. Turning the Focus off made the alerts float; the
+  README now says to allow the agent in Focus modes.
+
+`tests/test_codex_hooks.py` grew to 41 tests (agent delivery, the config
+pin, the unauthorized fallback, the anchor/dismiss pair, rebinding after a
+restart); each new guard was mutated in turn and its test went red.
