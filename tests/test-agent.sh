@@ -277,6 +277,17 @@ echo
 echo "Results: $pass passed, $fail failed"
 if (( fail > 0 )); then
     echo "Failed: ${fail_list[*]}"
+    # A failure here happens inside a process nobody can see; on a CI runner
+    # the sandbox is deleted on exit. Leave the agent's own account behind.
+    echo
+    echo "── agent.log (last 40 lines) ──"
+    tail -n 40 "$LOG" 2>/dev/null
+    echo "── spool ──"
+    ls -la "$ROOT/spool" 2>/dev/null
+    echo "── pidfile / ready ──"
+    echo "pid=$(cat "$ROOT/agent.pid" 2>/dev/null) ready=$(cat "$ROOT/ready" 2>/dev/null)"
+    echo "── agent processes ──"
+    ps -axo pid,ppid,lstart,command | grep '[g]hostty-notify-agent'
     exit 1
 fi
 exit 0
