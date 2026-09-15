@@ -47,13 +47,13 @@ SESSION_ID="${1:-}"
 # filesystem paths, so anything outside Claude Code's UUID alphabet is out.
 [[ "$SESSION_ID" =~ ^[a-fA-F0-9-]+$ ]] || exit 0
 
-SAVE_DIR="$HOME/.claude/notifications/ghostty-sessions"
+SAVE_DIR="${GHOSTTY_NOTIFY_SESSION_DIR:-$HOME/.claude/notifications/ghostty-sessions}"
 SAVE_FILE="$SAVE_DIR/${SESSION_ID}.json"
 ALERTER_PID_FILE="$SAVE_DIR/${SESSION_ID}.alerter-pid"
 WATCH_PID_FILE="$SAVE_DIR/${SESSION_ID}.watch-pid"
 AS_SENTINEL="$SAVE_DIR/applescript-unavailable"
 # Must stay in sync with GROUP_ID in ghostty-notify.sh.
-GROUP_ID="ghostty-notify-${SESSION_ID}"
+GROUP_ID="${GHOSTTY_NOTIFY_GROUP_PREFIX:-ghostty-notify}-${SESSION_ID}"
 
 NOTIFY_TIMEOUT="${GHOSTTY_NOTIFY_TIMEOUT:-1200}"
 [[ "$NOTIFY_TIMEOUT" =~ ^[0-9]+$ ]] || NOTIFY_TIMEOUT=1200
@@ -117,11 +117,13 @@ remove_delivered() {
     # bundle — so try both; removing an absent group is a silent no-op.
     # Dialect probe mirrors ghostty-notify.sh: alerter 26.2+ (Swift) takes
     # GNU-style --flags, everything earlier is single-dash.
+    # </dev/null on every alerter call: with a non-terminal stdin it reads a
+    # message from there first, --help included, and blocks until EOF.
     if [[ -n "$ALERTER" && -x "$ALERTER" ]]; then
-        if "$ALERTER" --help 2>&1 | grep -q -- '--remove'; then
-            "$ALERTER" --remove "$GROUP_ID" >/dev/null 2>&1
+        if "$ALERTER" --help </dev/null 2>&1 | grep -q -- '--remove'; then
+            "$ALERTER" --remove "$GROUP_ID" </dev/null >/dev/null 2>&1
         else
-            "$ALERTER" -remove "$GROUP_ID" >/dev/null 2>&1
+            "$ALERTER" -remove "$GROUP_ID" </dev/null >/dev/null 2>&1
         fi
     fi
     command -v terminal-notifier >/dev/null 2>&1 \

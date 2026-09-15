@@ -24,6 +24,66 @@ Repo: https://github.com/Davie521/claude-ghostty-notify
 
 ---
 
+## Codex CLI too
+
+Codex CLI running in Ghostty gets the same notification, **Go to tab** jump and
+clear-on-return, titled **Codex ✅**. Codex CLI 0.153+ has native lifecycle
+hooks whose payload matches Claude Code's, so it runs the very same scripts
+through a small adapter. From this checkout (Python 3.11+ for the installer
+only):
+
+```bash
+python3 scripts/install-codex.py
+```
+
+Then start `codex` in Ghostty and run **`/hooks`** once to trust the two
+`ghostty-notify` entries (`UserPromptSubmit`, `Stop`) — Codex reviews every
+hook entry it has not seen before. Sessions that were already open pick the
+hooks up after a restart.
+
+The installer copies the scripts to `~/.codex/ghostty-notify/` (moving the
+checkout breaks nothing), adds the two entries to `~/.codex/hooks.json` next
+to any hooks you already have, and backs up every file it changes under
+`~/.codex/backups/`. `CODEX_HOME` is honoured. State lives apart from
+Claude's, in `~/.codex/notifications/`.
+
+- **Timing starts at the prompt.** Codex can spend minutes on reasoning or
+  hosted tools before any local command, so unlike Claude's hooks the round
+  is timed from `UserPromptSubmit`, not from the first tool call. Turn
+  boundaries Codex runs straight through — `/goal` continuations, a queued
+  follow-up — are recognised from the session's rollout and neither alert
+  nor reset the clock.
+- **The tab is bound right after the turn ends.** The Codex TUI animates the
+  tab title while it works, so the marker round-trip Claude does mid-round
+  cannot succeed there; the Stop hook hands off to a detached process that
+  waits about 1.5 s for the title to hold still, binds the tab (retrying
+  through Codex's thread-title animation), then delivers. Alerts arrive one
+  to two seconds after the turn ends; the "Finished after" figure is exact.
+- **Settings** live in `~/.codex/ghostty-notify/config.json`: on first
+  install every `GHOSTTY_NOTIFY_*` preference from Claude's `settings.json`
+  is copied there (else 180 / 600 / 1200 s), and any knob the scripts read —
+  thresholds, `GHOSTTY_NOTIFY_BACKEND`, `GHOSTTY_NOTIFY_ALERTER`, … — can be
+  set in that file. Environment variables win over it.
+- **Session title:** the thread name Codex stores, otherwise the first prompt
+  of the session.
+- **Only terminal sessions notify.** The same `hooks.json` also fires for Codex
+  Desktop threads and for `codex mcp-server` processes other agents spawn;
+  none of those has a tab to return to, so they are skipped.
+- **Codex's own TUI alert** for a finished turn is turned off so it does not
+  double ours: `[tui] notifications` becomes `["approval-requested",
+  "plan-mode-prompt"]`, so approval and plan-mode questions still surface.
+  Turns shorter than the threshold therefore produce no alert at all.
+- **Re-running the installer keeps your trust.** Codex ties trust to each
+  entry's position and definition in `hooks.json`; the installer updates its
+  entries in place, and script updates never need re-trusting. If removing a
+  retired entry had to move one of your own hooks, it says so.
+- **Upgrading from the `notify` callback** of earlier versions: the installer
+  removes that `notify` entry — including when Codex Desktop's Computer Use has
+  wrapped it with `--previous-notify`, which delayed every alert by two minutes
+  — and keeps the wrapper's own part, and drops the `PreToolUse` entry.
+
+---
+
 ## Why this exists
 
 Claude Code's own "task done" signal is a terminal bell in whatever tab you happen to be looking at — useless once you've switched apps or have several sessions running. The community notifiers help, but each stops short somewhere:
@@ -272,6 +332,19 @@ rm -f ~/.claude/notifications/state/ghostty-notify-*
 ```
 
 Then remove the `env` and `hooks` entries from `~/.claude/settings.json`.
+
+**Codex CLI** (`~/.codex` below is `$CODEX_HOME` if you set one):
+
+1. Delete the entries whose command contains `ghostty-notify/codex-hook.sh`
+   from `~/.codex/hooks.json`, then **restart every open Codex session** —
+   a running session keeps its hook list and would report a failed hook on
+   each prompt and turn once the script is gone.
+2. `rm -rf ~/.codex/ghostty-notify ~/.codex/notifications`.
+3. Optional tidy-up in `~/.codex/config.toml`: the `[hooks.state."…hooks.json:
+   user_prompt_submit:0:0"]` / `…stop:0:0` trust records, and `[tui]
+   notifications` back to `true` if you want Codex's own turn-complete alert
+   again. Backups of the files the installer changed are in
+   `~/.codex/backups/`.
 
 ## Limitations
 

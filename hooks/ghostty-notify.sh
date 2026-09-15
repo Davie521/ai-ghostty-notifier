@@ -41,7 +41,7 @@ TRANSCRIPT_PATH=$(printf '%s' "$HOOK_DATA" | jq -r '.transcript_path // empty' 2
 # shape the sibling hooks require before any of that.
 [[ "$SESSION_ID" =~ ^[a-fA-F0-9-]+$ ]] || exit 0
 
-SAVE_DIR="$HOME/.claude/notifications/ghostty-sessions"
+SAVE_DIR="${GHOSTTY_NOTIFY_SESSION_DIR:-$HOME/.claude/notifications/ghostty-sessions}"
 START_FILE="$SAVE_DIR/${SESSION_ID}.start"
 
 # ── Elapsed-time gates ────────────────────────────────────────────────────
@@ -97,7 +97,7 @@ case "$HOOK_EVENT" in
 esac
 
 # ── Rate limit (avoid spam from parallel sub-agents) ──────────────────────
-RATE_DIR="$HOME/.claude/notifications/state"
+RATE_DIR="${GHOSTTY_NOTIFY_RATE_DIR:-$HOME/.claude/notifications/state}"
 mkdir -p "$RATE_DIR"
 PROJECT_NAME=$(basename "${CWD:-$PWD}")
 RATE_KEY=$(printf '%s-%s-%s' "$HOOK_EVENT" "$SESSION_ID" "$PROJECT_NAME" | tr -c 'A-Za-z0-9._-' '_')
@@ -171,7 +171,7 @@ SESSION_TITLE=$(printf '%s' "$SESSION_TITLE" | tr -d '\000-\037\177')
 # displaces is already carried by the ✅/🔔 in TITLE.
 case "$HOOK_EVENT" in
     Stop|stop)
-        TITLE="Claude ✅"
+        TITLE="${GHOSTTY_NOTIFY_APP_NAME:-Claude} ✅"
         SUBTITLE="${SESSION_TITLE:-Task Complete} — $PROJECT_NAME"
         MESSAGE=$(printf 'Finished after %dm %ds' $((ELAPSED / 60)) $((ELAPSED % 60)))
         SOUND="Glass"
@@ -222,7 +222,7 @@ find_alerter() {
     return 1
 }
 ALERTER="${GHOSTTY_NOTIFY_ALERTER:-$(find_alerter || true)}"
-GROUP_ID="ghostty-notify-${SESSION_ID}"
+GROUP_ID="${GHOSTTY_NOTIFY_GROUP_PREFIX:-ghostty-notify}-${SESSION_ID}"
 
 fire_with_alerter() {
     [[ -n "$ALERTER" && -x "$ALERTER" ]] || return 1
@@ -233,7 +233,10 @@ fire_with_alerter() {
     # Probe --help to pick the dialect — the legacy help text has no
     # "--close-label" token.
     local args=()
-    if "$ALERTER" --help 2>&1 | grep -q -- '--close-label'; then
+    # </dev/null everywhere alerter runs: it reads a message from stdin when
+    # that is not a terminal, and --help is no exception — probed from a
+    # pipeline or a caller that never closes stdin, it would block forever.
+    if "$ALERTER" --help </dev/null 2>&1 | grep -q -- '--close-label'; then
         args=(
             --title "$TITLE"
             --subtitle "$SUBTITLE"
@@ -282,14 +285,14 @@ fire_with_alerter() {
     (
         out=$(mktemp "${TMPDIR:-/tmp}/ghostty-notify-action.XXXXXX" 2>/dev/null) || out=""
         if [[ -n "$out" ]]; then
-            "$ALERTER" "${args[@]}" > "$out" 2>/dev/null &
+            "$ALERTER" "${args[@]}" </dev/null > "$out" 2>/dev/null &
             apid=$!
             printf '%s\n' "$apid" > "$PID_FILE" 2>/dev/null
             wait "$apid"
             action=$(cat "$out" 2>/dev/null)
             rm -f "$out" 2>/dev/null
         else
-            action=$("$ALERTER" "${args[@]}" 2>/dev/null)
+            action=$("$ALERTER" "${args[@]}" </dev/null 2>/dev/null)
         fi
         case "$action" in
             "$ACTION_LABEL"|@CONTENTCLICKED)

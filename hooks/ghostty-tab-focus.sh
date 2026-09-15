@@ -16,7 +16,7 @@ osascript -e 'tell application "Ghostty" to activate' 2>/dev/null
 # else (slashes, dots) could traverse to a .json outside SAVE_DIR.
 [[ "$SESSION_ID" =~ ^[a-fA-F0-9-]+$ ]] || exit 0
 
-SAVE_DIR="$HOME/.claude/notifications/ghostty-sessions"
+SAVE_DIR="${GHOSTTY_NOTIFY_SESSION_DIR:-$HOME/.claude/notifications/ghostty-sessions}"
 SAVE_FILE="$SAVE_DIR/${SESSION_ID}.json"
 [[ -f "$SAVE_FILE" ]] || exit 0
 

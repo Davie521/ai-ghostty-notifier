@@ -23,7 +23,8 @@ SESSION_ID=$(printf '%s' "$HOOK_DATA" | jq -r '.session_id // empty' 2>/dev/null
 [[ -z "$SESSION_ID" ]] && exit 0
 [[ "$SESSION_ID" =~ ^[a-fA-F0-9-]+$ ]] || exit 0
 
-rm -f "$HOME/.claude/notifications/ghostty-sessions/${SESSION_ID}.start"
+SAVE_DIR="${GHOSTTY_NOTIFY_SESSION_DIR:-$HOME/.claude/notifications/ghostty-sessions}"
+rm -f "$SAVE_DIR/${SESSION_ID}.start"
 
 # A new prompt in this session proves the user is back at this tab — any
 # still-visible completion notification for it is stale. Clear it (and its
