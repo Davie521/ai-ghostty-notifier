@@ -233,7 +233,10 @@ fire_with_alerter() {
     # Probe --help to pick the dialect — the legacy help text has no
     # "--close-label" token.
     local args=()
-    if "$ALERTER" --help 2>&1 | grep -q -- '--close-label'; then
+    # </dev/null everywhere alerter runs: it reads a message from stdin when
+    # that is not a terminal, and --help is no exception — probed from a
+    # pipeline or a caller that never closes stdin, it would block forever.
+    if "$ALERTER" --help </dev/null 2>&1 | grep -q -- '--close-label'; then
         args=(
             --title "$TITLE"
             --subtitle "$SUBTITLE"
@@ -282,14 +285,14 @@ fire_with_alerter() {
     (
         out=$(mktemp "${TMPDIR:-/tmp}/ghostty-notify-action.XXXXXX" 2>/dev/null) || out=""
         if [[ -n "$out" ]]; then
-            "$ALERTER" "${args[@]}" > "$out" 2>/dev/null &
+            "$ALERTER" "${args[@]}" </dev/null > "$out" 2>/dev/null &
             apid=$!
             printf '%s\n' "$apid" > "$PID_FILE" 2>/dev/null
             wait "$apid"
             action=$(cat "$out" 2>/dev/null)
             rm -f "$out" 2>/dev/null
         else
-            action=$("$ALERTER" "${args[@]}" 2>/dev/null)
+            action=$("$ALERTER" "${args[@]}" </dev/null 2>/dev/null)
         fi
         case "$action" in
             "$ACTION_LABEL"|@CONTENTCLICKED)

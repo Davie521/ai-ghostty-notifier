@@ -7,6 +7,11 @@
 #   3. Write a unique marker via OSC 2 to Claude's TTY
 #   4. Query Ghostty for the tab whose title is the marker — that's us
 #   5. Write the original title back via OSC 2 to clean up
+#
+# The Codex adapter runs it after a turn instead, from a detached process:
+# GHOSTTY_NOTIFY_TTY names the terminal (the CLI is no longer an ancestor)
+# and GHOSTTY_NOTIFY_MARKER_RETRY_DELAYS spaces out extra round-trips while
+# the Codex TUI is still animating its title.
 
 [[ "${TERM_PROGRAM:-}" != "ghostty" ]] && [[ -z "${GHOSTTY_RESOURCES_DIR:-}" ]] && exit 0
 
@@ -63,7 +68,8 @@ ATTEMPTS=$(cat "$ATTEMPTS_FILE" 2>/dev/null || echo 0)
 # pidfiles are the same story — watchers deliberately leave theirs behind
 # rather than race a successor for the filename.
 find "$SAVE_DIR" -type f \( -name '*.json' -o -name '*.start' -o -name '*.attempts' \
-    -o -name '*.alerter-pid' -o -name '*.watch-pid' -o -name '*.callback-lock' \) -mtime +7 -delete 2>/dev/null
+    -o -name '*.alerter-pid' -o -name '*.watch-pid' -o -name '*.callback-lock' \
+    -o -name '*.codex-owner' -o -name '*.title' \) -mtime +7 -delete 2>/dev/null
 
 # ── Locate Claude's controlling TTY ────────────────────────────────────────
 find_claude_tty() {
@@ -90,9 +96,17 @@ find_claude_tty() {
     return 1
 }
 
-TTY_PATH=$(find_claude_tty)
+TTY_PATH="${GHOSTTY_NOTIFY_TTY:-}"
+[[ -n "$TTY_PATH" ]] || TTY_PATH=$(find_claude_tty)
 [[ -z "$TTY_PATH" ]] && exit 0
 [[ -w "$TTY_PATH" ]] || exit 0
+
+# Extra marker round-trips, as seconds to wait before each. Only the Codex
+# adapter sets this; an unparsable value means the single default pass.
+RETRY_DELAYS=()
+if [[ "${GHOSTTY_NOTIFY_MARKER_RETRY_DELAYS:-}" =~ ^[0-9.[:space:]]+$ ]]; then
+    read -ra RETRY_DELAYS <<< "$GHOSTTY_NOTIFY_MARKER_RETRY_DELAYS"
+fi
 
 MARKER="__${GHOSTTY_NOTIFY_PROCESS_NAME:-CLAUDE}_TAB_MARKER_${SESSION_ID}__"
 TAB_ID=""
@@ -119,7 +133,9 @@ trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
 [[ -f "$SAVE_FILE" ]] && exit 0
 
 # ── Snapshot all tab titles BEFORE marker ──────────────────────────────────
-SNAPSHOT=$(osascript <<'APPLESCRIPT' 2>/dev/null
+SNAPSHOT=""
+snapshot_titles() {
+    SNAPSHOT=$(osascript <<'APPLESCRIPT' 2>/dev/null
 tell application "Ghostty"
     set out to ""
     repeat with w in every window
@@ -132,15 +148,15 @@ tell application "Ghostty"
     return out
 end tell
 APPLESCRIPT
-)
-SNAPSHOT_STATUS=$?
+    )
+}
 
 # Verify Ghostty is actually scriptable BEFORE touching the tab title. If
 # osascript can't control Ghostty (no AppleScript support, or the user
 # denied the Automation prompt), writing the marker would leave the title
 # stuck as the marker string with no way to query or restore it — and the
 # failed round-trip would repeat on every single tool call.
-if (( SNAPSHOT_STATUS != 0 )); then
+if ! snapshot_titles; then
     date +%s > "$AS_SENTINEL" 2>/dev/null
     exit 0
 fi
@@ -177,17 +193,11 @@ APPLESCRIPT
 }
 trap 'restore_marker_title; rmdir "$LOCK_DIR" 2>/dev/null' EXIT
 
-# ── Fire OSC 2 marker ───────────────────────────────────────────────────────
-printf '\033]2;%s\033\\' "$MARKER" > "$TTY_PATH" 2>/dev/null
-MARKER_WRITTEN=1
-
-# Small delay so Ghostty processes the escape and updates AppleScript state
-sleep 0.15
-
 # ── Find the tab whose title is now our marker ──────────────────────────────
 # Pass marker via env; AppleScript reads it via `system attribute` which IS
 # inherited when osascript itself runs under the env.
-TAB_ID=$(MARKER="$MARKER" osascript <<'APPLESCRIPT' 2>/dev/null
+query_marker_tab() {
+    MARKER="$MARKER" osascript <<'APPLESCRIPT' 2>/dev/null
 set targetMarker to (system attribute "MARKER")
 tell application "Ghostty"
     repeat with w in every window
@@ -202,9 +212,29 @@ tell application "Ghostty"
     return ""
 end tell
 APPLESCRIPT
-)
+}
 
-# Trap will restore title on exit — unconditionally, even if TAB_ID is empty.
+# ── Marker round-trip ───────────────────────────────────────────────────────
+# One pass is the default and all Claude needs: its tab title is static, so
+# the marker survives the 0.15 s Ghostty takes to expose it. Each requested
+# retry re-snapshots first — the title to restore may have changed meanwhile
+# — then writes the marker again. The title is put back after every pass so
+# no attempt leaves the marker on screen.
+for delay in "" "${RETRY_DELAYS[@]}"; do
+    if [[ -n "$delay" ]]; then
+        sleep "$delay"
+        snapshot_titles || break
+    fi
+    printf '\033]2;%s\033\\' "$MARKER" > "$TTY_PATH" 2>/dev/null
+    MARKER_WRITTEN=1
+    # Small delay so Ghostty processes the escape and updates AppleScript state
+    sleep 0.15
+    TAB_ID=$(query_marker_tab)
+    restore_marker_title
+    MARKER_WRITTEN=0
+    [[ -n "$TAB_ID" ]] && break
+done
+
 if [[ -z "$TAB_ID" ]]; then
     ATTEMPTS=$((ATTEMPTS + 1))
     printf '%s\n' "$ATTEMPTS" > "$ATTEMPTS_FILE" 2>/dev/null

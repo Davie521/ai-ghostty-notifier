@@ -2,10 +2,12 @@
 """Install the Codex CLI hooks locally, preserving unrelated settings.
 
 Copies the shared scripts plus the Codex adapter to ~/.codex/ghostty-notify/,
-adds three command hooks to ~/.codex/hooks.json (PreToolUse, UserPromptSubmit,
-Stop) and retires the `notify` callback earlier versions of this project
-installed — also when another tool has wrapped that callback since. Needs
-Python 3.11+ (tomllib) to run; the installed scripts need only bash + jq.
+adds two command hooks to ~/.codex/hooks.json (UserPromptSubmit, Stop) and
+retires what earlier versions installed: the PreToolUse entry and the
+`notify` callback — also when another tool has wrapped that callback since.
+Every change is computed before anything is written, so a config the
+migration cannot handle aborts with nothing touched. Needs Python 3.11+
+(tomllib) to run; the installed scripts need only bash + jq.
 """
 
 import json
@@ -24,20 +26,39 @@ FILES = (
     "ghostty-notify.sh", "ghostty-notify-clear.sh", "ghostty-round-reset.sh",
     "agent-common.sh",
 )
-EVENTS = ("PreToolUse", "UserPromptSubmit", "Stop")
+EVENTS = ("UserPromptSubmit", "Stop")
 DEFAULTS = {
     "GHOSTTY_NOTIFY_MIN_ELAPSED": "180",
     "GHOSTTY_NOTIFY_SOUND_ELAPSED": "600",
     "GHOSTTY_NOTIFY_TIMEOUT": "1200",
     "GHOSTTY_NOTIFY_CLEAR_ON_FOCUS": "1",
 }
+# Knobs that describe Claude's own install rather than a preference; never
+# copied from settings.json (the adapter sets the identity ones itself).
+PRIVATE_KEYS = {
+    "GHOSTTY_NOTIFY_PROCESS_NAME", "GHOSTTY_NOTIFY_APP_NAME", "GHOSTTY_NOTIFY_AGENT_APP",
+    "GHOSTTY_NOTIFY_SESSION_DIR", "GHOSTTY_NOTIFY_RATE_DIR", "GHOSTTY_NOTIFY_GROUP_PREFIX",
+    "GHOSTTY_NOTIFY_FOCUS_SCRIPT", "GHOSTTY_NOTIFY_CLEAR_SCRIPT", "GHOSTTY_NOTIFY_TTY",
+    "GHOSTTY_NOTIFY_MARKER_RETRY_DELAYS", "GHOSTTY_NOTIFY_CODEX_SETTLE",
+}
 ADAPTER = "ghostty-notify/codex-hook.sh"
 LEGACY_CALLBACK = "ghostty-notify/codex-notify.py"
 LEGACY_COMMENT = "# Codex completion notifications in Ghostty (claude-ghostty-notify)"
+# Codex's own TUI desktop alerts, minus agent-turn-complete (that is what
+# this project delivers, on its own threshold).
+TUI_ALERTS_KEPT = ["approval-requested", "plan-mode-prompt"]
+ALERTER_PATHS = ("/opt/homebrew/bin/alerter", "/usr/local/bin/alerter",
+                 str(Path.home() / ".local/bin/alerter"))
 
 
 def hook_command(destination, event):
     return '"{}" {}'.format(destination / "codex-hook.sh", event)
+
+
+def our_handler(destination, event):
+    # Codex hashes this definition into the hook's trust record: change it
+    # and every user has to trust the entry again in /hooks.
+    return {"type": "command", "command": hook_command(destination, event), "timeout": 15}
 
 
 def is_ours(entry):
@@ -51,35 +72,61 @@ def mentions_legacy_callback(arg):
     return LEGACY_CALLBACK in text or LEGACY_CALLBACK in text.replace("\\/", "/")
 
 
+def _foreign_positions(groups):
+    positions = {}
+    for group_index, group in enumerate(groups):
+        if isinstance(group, dict) and isinstance(group.get("hooks"), list):
+            for handler_index, handler in enumerate(group["hooks"]):
+                if not is_ours(handler):
+                    positions[id(handler)] = (group_index, handler_index)
+    return positions
+
+
 def merged_hooks(existing, destination):
-    """hooks.json content with exactly one entry of ours per event; all other
-    hooks untouched. Re-running yields the same document."""
+    """Return (hooks.json content, events whose other hooks moved).
+
+    Codex keys a hook's trust by its position (event:group:handler) plus a
+    hash of the definition it finds there, so entries are updated in place:
+    ours are rewritten where they already are and appended only when absent,
+    and everything else keeps its slot. Removing a retired entry of ours can
+    still shift what followed it; those events are reported so the caller
+    can say which hooks need another look in /hooks.
+    """
     config = dict(existing) if isinstance(existing, dict) else {}
     hooks = config.get("hooks")
     hooks = dict(hooks) if isinstance(hooks, dict) else {}
-    for event, groups in list(hooks.items()):
+    renumbered = []
+    placed = set()
+    for event in list(hooks):
+        groups = hooks[event]
         if not isinstance(groups, list):
             continue
+        before = _foreign_positions(groups)
         kept = []
         for group in groups:
-            if isinstance(group, dict) and isinstance(group.get("hooks"), list):
-                inner = [hook for hook in group["hooks"] if not is_ours(hook)]
-                if not inner:
-                    continue
-                group = {**group, "hooks": inner}
-            kept.append(group)
+            if not (isinstance(group, dict) and isinstance(group.get("hooks"), list)):
+                kept.append(group)
+                continue
+            handlers = []
+            for handler in group["hooks"]:
+                if not is_ours(handler):
+                    handlers.append(handler)
+                elif event in EVENTS and event not in placed:
+                    placed.add(event)
+                    handlers.append(our_handler(destination, event))
+            if handlers:
+                kept.append({**group, "hooks": handlers})
+        if any(_foreign_positions(kept).get(key) != position for key, position in before.items()):
+            renumbered.append(event)
         if kept or event in EVENTS:
             hooks[event] = kept
         else:
             del hooks[event]
     for event in EVENTS:
-        hooks.setdefault(event, []).append({"hooks": [{
-            "type": "command",
-            "command": hook_command(destination, event),
-            "timeout": 15,
-        }]})
+        if event not in placed:
+            hooks.setdefault(event, []).append({"hooks": [our_handler(destination, event)]})
     config["hooks"] = hooks
-    return config
+    return config, renumbered
 
 
 def _assignment_end(lines, start):
@@ -127,7 +174,7 @@ def without_legacy_notify(original):
             remaining.append(arg)
         if any(mentions_legacy_callback(arg) for arg in remaining):
             raise ValueError("cannot separate the legacy callback from `notify`; "
-                             "edit ~/.codex/config.toml by hand")
+                             "edit config.toml by hand")
         replacement = remaining
     lines = original.splitlines(keepends=True)
     result = []
@@ -161,38 +208,52 @@ def without_legacy_notify(original):
 
 
 def without_tui_turn_alert(original):
-    """Keep Codex's own TUI desktop alert from doubling ours.
+    """Keep Codex's own TUI completion alert from doubling ours.
 
-    `[tui] notifications = true` covers agent-turn-complete, which is what
-    this project delivers; narrow it to approval prompts. An explicit list
-    loses just that event. Unset or false is left as it is.
+    `[tui] notifications` unset or `true` means every alert kind, including
+    agent-turn-complete; it becomes the explicit list of the other kinds, so
+    approval and plan-mode prompts still surface. An explicit list loses just
+    that one event. `false` and lists without it are left as they are.
     """
     parsed = tomllib.loads(original)
     tui = parsed.get("tui")
     tui = tui if isinstance(tui, dict) else {}
     value = tui.get("notifications")
-    if value is True:
-        narrowed = ["approval-requested"]
+    if value is None or value is True:
+        narrowed = list(TUI_ALERTS_KEPT)
     elif isinstance(value, list) and "agent-turn-complete" in value:
         narrowed = [event for event in value if event != "agent-turn-complete"]
     else:
         return original
+    assignment = "notifications = " + json.dumps(narrowed) + "\n"
     lines = original.splitlines(keepends=True)
     result = []
     section = ""
+    written = False
     i = 0
     while i < len(lines):
         line = lines[i]
         stripped = line.strip()
         if stripped.startswith("["):
             section = stripped.split("#", 1)[0].strip()
-        if section == "[tui]" and re.match(r"^notifications\s*=", stripped):
+            result.append(line)
+            i += 1
+            if section == "[tui]" and value is None and not written:
+                result.append(assignment)
+                written = True
+            continue
+        if section == "[tui]" and not written and re.match(r"^notifications\s*=", stripped):
             end = _assignment_end(lines, i)
-            result.append("notifications = " + json.dumps(narrowed) + "\n")
+            result.append(assignment)
+            written = True
             i = end
             continue
         result.append(line)
         i += 1
+    if not written:
+        if result and not result[-1].endswith("\n"):
+            result.append("\n")
+        result.append("\n[tui]\n" + assignment)
     updated = "".join(result)
     expected = dict(parsed)
     expected["tui"] = {**tui, "notifications": narrowed}
@@ -204,20 +265,80 @@ def without_tui_turn_alert(original):
 def _backup(codex_home, path):
     backup = codex_home / "backups" / "ghostty-notify-{}{}".format(time.time_ns(), path.suffix)
     backup.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(path, backup)
-    backup.chmod(0o600)
+    # Created private from the start: config.toml can carry MCP secrets.
+    descriptor = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(path.read_bytes())
     print("Backup: {}".format(backup))
 
 
-def _replace(path, text, mode):
-    temporary = path.with_name(path.name + ".ghostty-notify.tmp")
-    temporary.write_text(text)
-    temporary.chmod(mode)
-    temporary.replace(path)
+def _replace(path, text, default_mode):
+    """Atomically replace the file's content, following a symlink to its
+    target (a dotfiles link must keep pointing at the dotfiles copy) and
+    never exposing the content at a wider mode than the file already has."""
+    target = path.resolve() if path.is_symlink() else path
+    mode = target.stat().st_mode & 0o777 if target.exists() else default_mode
+    temporary = target.with_name(target.name + ".ghostty-notify.tmp")
+    temporary.unlink(missing_ok=True)
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "w") as stream:
+            stream.write(text)
+        os.chmod(temporary, mode)
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _initial_settings(claude_settings):
+    settings = DEFAULTS.copy()
+    try:
+        source = json.loads(claude_settings.read_text()).get("env", {})
+    except (OSError, ValueError, AttributeError):
+        return settings
+    if not isinstance(source, dict):
+        return settings
+    for key, value in source.items():
+        if key.startswith("GHOSTTY_NOTIFY_") and key not in PRIVATE_KEYS \
+                and isinstance(value, (str, int)) and not isinstance(value, bool):
+            settings[key] = str(value)
+    return settings
 
 
 def install(codex_home, claude_settings):
+    if shutil.which("jq") is None:
+        raise SystemExit("jq is required by the hooks (brew install jq); nothing was installed.")
+    if shutil.which("alerter") is None and not any(os.access(p, os.X_OK) for p in ALERTER_PATHS):
+        if shutil.which("terminal-notifier") is None:
+            print("Warning: neither alerter nor terminal-notifier is installed; "
+                  "no notification can be shown until one is (brew install alerter).")
+        else:
+            print("Note: alerter is not installed; terminal-notifier will show the "
+                  "alerts but cannot offer the Go to tab button (brew install alerter).")
+
     destination = codex_home / "ghostty-notify"
+    hooks_path = codex_home / "hooks.json"
+    config_path = codex_home / "config.toml"
+
+    # ── Compute everything first; nothing below this block may raise. ──
+    existing = {}
+    if hooks_path.exists():
+        try:
+            existing = json.loads(hooks_path.read_text())
+        except ValueError as error:
+            raise SystemExit("{} is not valid JSON ({}); nothing was changed.".format(hooks_path, error))
+    merged, renumbered = merged_hooks(existing, destination)
+    original = config_path.read_text() if config_path.exists() else None
+    migrated = original
+    if original is not None:
+        try:
+            migrated = without_tui_turn_alert(without_legacy_notify(original))
+        except (tomllib.TOMLDecodeError, ValueError) as error:
+            raise SystemExit(
+                "{} could not be migrated ({}); nothing was changed. Remove the old "
+                "`notify` callback and narrow `[tui] notifications` by hand, then rerun."
+                .format(config_path, error))
+
     destination.mkdir(parents=True, exist_ok=True)
     for name in FILES:
         target = destination / name
@@ -231,41 +352,26 @@ def install(codex_home, claude_settings):
 
     settings_path = destination / "config.json"
     if not settings_path.exists():
-        settings = DEFAULTS.copy()
-        try:
-            source = json.loads(claude_settings.read_text()).get("env", {})
-            for key in settings:
-                if isinstance(source.get(key), (str, int)):
-                    settings[key] = str(source[key])
-        except (OSError, ValueError, AttributeError):
-            pass
-        settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+        settings_path.write_text(json.dumps(_initial_settings(claude_settings), indent=2) + "\n")
 
-    hooks_path = codex_home / "hooks.json"
-    existing = {}
-    if hooks_path.exists():
-        existing = json.loads(hooks_path.read_text())
-    updated = merged_hooks(existing, destination)
-    if updated != existing:
+    if merged != existing:
         if hooks_path.exists():
             _backup(codex_home, hooks_path)
-        _replace(hooks_path, json.dumps(updated, indent=2, ensure_ascii=False) + "\n",
-                 hooks_path.stat().st_mode & 0o777 if hooks_path.exists() else 0o644)
-
-    config_path = codex_home / "config.toml"
-    if config_path.exists():
-        original = config_path.read_text()
-        migrated = without_tui_turn_alert(without_legacy_notify(original))
-        if migrated != original:
-            _backup(codex_home, config_path)
-            _replace(config_path, migrated, config_path.stat().st_mode & 0o777)
+        _replace(hooks_path, json.dumps(merged, indent=2, ensure_ascii=False) + "\n", 0o644)
+    if migrated != original:
+        _backup(codex_home, config_path)
+        _replace(config_path, migrated, 0o600)
 
     print("Installed: {}".format(destination))
     print("Hooks:     {}".format(hooks_path))
     print("Settings:  {}".format(settings_path))
+    if renumbered:
+        print()
+        print("Removing a retired entry moved other hooks under {}. Codex keys hook trust "
+              "by position, so those now need another look in /hooks.".format(", ".join(renumbered)))
     print()
-    print("Next: start `codex` in Ghostty and run /hooks to trust the three")
-    print("ghostty-notify entries (Codex reviews new or changed hooks once).")
+    print("Next: start `codex` in Ghostty and run /hooks to trust the ghostty-notify")
+    print("entries Codex has not seen before (only new or changed ones ask).")
     print("Sessions already running pick the hooks up after a restart.")
     return destination
 

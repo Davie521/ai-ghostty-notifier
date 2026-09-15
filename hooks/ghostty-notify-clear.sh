@@ -117,11 +117,13 @@ remove_delivered() {
     # bundle — so try both; removing an absent group is a silent no-op.
     # Dialect probe mirrors ghostty-notify.sh: alerter 26.2+ (Swift) takes
     # GNU-style --flags, everything earlier is single-dash.
+    # </dev/null on every alerter call: with a non-terminal stdin it reads a
+    # message from there first, --help included, and blocks until EOF.
     if [[ -n "$ALERTER" && -x "$ALERTER" ]]; then
-        if "$ALERTER" --help 2>&1 | grep -q -- '--remove'; then
-            "$ALERTER" --remove "$GROUP_ID" >/dev/null 2>&1
+        if "$ALERTER" --help </dev/null 2>&1 | grep -q -- '--remove'; then
+            "$ALERTER" --remove "$GROUP_ID" </dev/null >/dev/null 2>&1
         else
-            "$ALERTER" -remove "$GROUP_ID" >/dev/null 2>&1
+            "$ALERTER" -remove "$GROUP_ID" </dev/null >/dev/null 2>&1
         fi
     fi
     command -v terminal-notifier >/dev/null 2>&1 \
