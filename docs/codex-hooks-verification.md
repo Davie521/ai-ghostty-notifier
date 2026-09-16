@@ -111,7 +111,7 @@ Verified with Codex CLI 0.154.0 and the agent 0.4.0 (unchanged since
   claude-<session>` right after the prompt), through the anchor hook.
 - Ghostty had been restarted two days earlier: 18 of the 28 bindings from the
   previous week named tabs that no longer existed. `ghostty-tab-save.sh` now
-  records the Ghostty pid (from `lsappinfo`; `pgrep` cannot see the process)
+  records the Ghostty pid, read from LaunchServices by bundle identifier,
   and re-resolves after a restart — the Codex adapter calls it on every
   qualifying Stop and it returns at once while the binding is current.
 - A Focus mode ("Work", auto-activated) delivered the agent's alerts straight

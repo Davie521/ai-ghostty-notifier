@@ -47,9 +47,10 @@ mkdir -p "$SAVE_DIR"
 # tabs live on; a click then finds no tab and only raises Ghostty. The
 # process id is the cheapest witness: one LaunchServices lookup per tool
 # call, no Apple Events. A binding with no recorded pid predates this check
-# and is resolved once more. (Asked of LaunchServices rather than pgrep:
-# pgrep cannot see Ghostty's process at all on macOS 26 — neither by name
-# nor by full command line — while ps lists it.)
+# and is resolved once more. Asked of LaunchServices by bundle identifier
+# rather than matching a process name: it is the same authority Ghostty's
+# own tab ids come from, and no unrelated process called "ghostty" can be
+# mistaken for it.
 GHOSTTY_PID=$(lsappinfo info -only pid com.mitchellh.ghostty 2>/dev/null | tr -dc '0-9')
 binding_current() {
     [[ -f "$SAVE_FILE" ]] || return 1
