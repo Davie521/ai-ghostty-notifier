@@ -1,5 +1,5 @@
 #!/bin/bash
-# Installer for ai-ghosty-notifier.
+# Installer for ai-ghostty-notifier.
 # Copies the hook scripts into ~/.claude/hooks/ and prints the
 # settings.json snippet to merge into the user's config.
 
@@ -44,7 +44,7 @@ install_from_local() {
 }
 
 install_from_github() {
-    local RAW="https://raw.githubusercontent.com/Davie521/ai-ghosty-notifier/main/hooks"
+    local RAW="https://raw.githubusercontent.com/Davie521/ai-ghostty-notifier/main/hooks"
     # agent-common.sh is sourced, not run, but ghostty-notify.sh and the anchor
     # hook both need it beside them; a manual install that skipped it would
     # silently lose the agent path.
