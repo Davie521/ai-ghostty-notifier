@@ -1,6 +1,6 @@
-# claude-ghostty-notify
+# ai-ghosty-notifier
 
-[![CI](https://github.com/Davie521/claude-ghostty-notify/actions/workflows/ci.yml/badge.svg)](https://github.com/Davie521/claude-ghostty-notify/actions/workflows/ci.yml)
+[![CI](https://github.com/Davie521/ai-ghosty-notifier/actions/workflows/ci.yml/badge.svg)](https://github.com/Davie521/ai-ghosty-notifier/actions/workflows/ci.yml)
 
 **语言 / Language** → [English](README.md) · [中文](README.zh-CN.md)
 
@@ -20,7 +20,7 @@
         点一下  →  Ghostty 直接跳到第 3 个 tab
 ```
 
-Repo: https://github.com/Davie521/claude-ghostty-notify
+Repo: https://github.com/Davie521/ai-ghosty-notifier
 
 ---
 
@@ -57,7 +57,7 @@ Claude Code 自带的「任务完成」信号,是在你当前正看着的那个 
 - 有些靠模拟按键切 tab,既要辅助功能权限、又会在 macOS 升级后失效;
 - 大多数分不清同一目录下开着的两个 Claude 会话,因为它们靠工作目录匹配。
 
-`claude-ghostty-notify` 就是奔着补上这四个缺口去的。同类项目值得一看:[code-notify](https://github.com/mylee04/code-notify)、[claude-code-notifier](https://github.com/kovoor/claude-code-notifier)、[claude-notifications-go](https://github.com/777genius/claude-notifications-go)。
+`ai-ghosty-notifier` 就是奔着补上这四个缺口去的。同类项目值得一看:[code-notify](https://github.com/mylee04/code-notify)、[claude-code-notifier](https://github.com/kovoor/claude-code-notifier)、[claude-notifications-go](https://github.com/777genius/claude-notifications-go)。
 
 ---
 
@@ -101,8 +101,8 @@ xcode-select --install     # Swift 工具链,用来编译通知程序
 在 Claude Code 里:
 
 ```
-/plugin marketplace add Davie521/claude-ghostty-notify
-/plugin install claude-ghostty-notify
+/plugin marketplace add Davie521/ai-ghosty-notifier
+/plugin install ai-ghosty-notifier
 ```
 
 hook 通过插件 manifest 自动注册 —— **不需要手动改 `settings.json`。**
@@ -128,7 +128,7 @@ bash scripts/build-agent.sh     # 需要 Swift 工具链(xcode-select --install)
 bash scripts/install-agent.sh   # 把 app 拷到固定位置、装 LaunchAgent、申请权限
 ```
 
-安装会把 bundle 拷到 `~/Library/Application Support/claude-ghostty-notify/`,LaunchAgent 指向那份拷贝,所以仓库随便挪、随便删 —— 直接指向仓库目录的 LaunchAgent 会在仓库改名那天静默失效。每次重新 build 之后要再跑一次安装。Codex 会话用的是同一个 agent(见[上文](#codex-也可以用))。
+安装会把 bundle 拷到 `~/Library/Application Support/ai-ghosty-notifier/`,LaunchAgent 指向那份拷贝,所以仓库随便挪、随便删 —— 直接指向仓库目录的 LaunchAgent 会在仓库改名那天静默失效。每次重新 build 之后要再跑一次安装。Codex 会话用的是同一个 agent(见[上文](#codex-也可以用))。
 
 它带来什么:
 
@@ -146,8 +146,8 @@ bash scripts/install-agent.sh   # 把 app 拷到固定位置、装 LaunchAgent�
 ### 手动安装(不用插件系统)
 
 ```bash
-git clone https://github.com/Davie521/claude-ghostty-notify.git
-cd claude-ghostty-notify
+git clone https://github.com/Davie521/ai-ghosty-notifier.git
+cd ai-ghosty-notifier
 ./install.sh
 ```
 
@@ -165,7 +165,7 @@ cd claude-ghostty-notify
 | `GHOSTTY_NOTIFY_BACKEND`       | `auto` | `auto` / `agent`(走 agent,它发不出来时回落到 `terminal-notifier`)或 `terminal-notifier`(直接跳过 agent)。兜底路径不接点击跳转:它的 action 连 dismiss 都会触发,分不出来 |
 | `GHOSTTY_NOTIFY_ON_PROMPT`     | `0`    | 设成 `1` 后,`Notification` 事件(权限/输入提示)也会立即弹通知 + Ping 音。不跑 bypass-permissions 模式的话推荐打开 |
 | `GHOSTTY_NOTIFY_CLEAR_ON_FOCUS` | `1`   | 聚焦到会话所在 tab 时自动清除通知,在该会话提交新 prompt 时同样清除。tab 未知时(tmux、Ghostty 不可脚本化)降级为「Ghostty 重新回到前台时清除」。走 `terminal-notifier` 兜底时只有「提交新 prompt」这一个触发。用 `0`/`false`/`no`/`off` 关闭;其他值一律视为开启 |
-| `GHOSTTY_NOTIFY_AGENT_APP`     | *(自动发现)* | agent bundle 的路径。设成**空字符串**可以钉住 shell 路径、无视已安装的 agent;不设则「有就用」—— 先找 `~/Library/Application Support/claude-ghostty-notify/` 下装好的那份;指向一个不是可执行 bundle 的路径会被拒绝而不是盲信。Codex 从 `~/.codex/ghostty-notify/config.json` 读它 |
+| `GHOSTTY_NOTIFY_AGENT_APP`     | *(自动发现)* | agent bundle 的路径。设成**空字符串**可以钉住 shell 路径、无视已安装的 agent;不设则「有就用」—— 先找 `~/Library/Application Support/ai-ghosty-notifier/` 下装好的那份;指向一个不是可执行 bundle 的路径会被拒绝而不是盲信。Codex 从 `~/.codex/ghostty-notify/config.json` 读它 |
 | `GHOSTTY_NOTIFY_MENU_BAR`      | `1`    | agent 的菜单栏图标。`0`/`false`/`no`/`off` 隐藏 —— 代价是失去待处理计数、逐条跳转的列表,以及「agent 还活着且有权限」的唯一可见凭据 |
 
 值必须是纯整数(秒),否则回落到默认值。
@@ -257,9 +257,9 @@ cd claude-ghostty-notify
 
 ## 卸载
 
-**插件方式:** `/plugin uninstall claude-ghostty-notify` —— hook 自动注销。
+**插件方式:** `/plugin uninstall ai-ghosty-notifier` —— hook 自动注销。
 
-**原生 agent**(如果装了):`bash scripts/install-agent.sh --uninstall` 会删掉 LaunchAgent 和 `~/Library/Application Support/claude-ghostty-notify/` 下的拷贝,然后 `rm -rf ~/.claude/notifications/ghostty-agent`。撤销它的通知权限是另一件事,要去系统设置 → 通知里做。
+**原生 agent**(如果装了):`bash scripts/install-agent.sh --uninstall` 会删掉 LaunchAgent 和 `~/Library/Application Support/ai-ghosty-notifier/` 下的拷贝,然后 `rm -rf ~/.claude/notifications/ghostty-agent`。撤销它的通知权限是另一件事,要去系统设置 → 通知里做。
 
 **手动安装:**
 

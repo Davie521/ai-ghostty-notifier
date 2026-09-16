@@ -1,6 +1,6 @@
-# claude-ghostty-notify
+# ai-ghosty-notifier
 
-[![CI](https://github.com/Davie521/claude-ghostty-notify/actions/workflows/ci.yml/badge.svg)](https://github.com/Davie521/claude-ghostty-notify/actions/workflows/ci.yml)
+[![CI](https://github.com/Davie521/ai-ghosty-notifier/actions/workflows/ci.yml/badge.svg)](https://github.com/Davie521/ai-ghosty-notifier/actions/workflows/ci.yml)
 
 **语言 / Language** → [English](README.md) · [中文](README.zh-CN.md)
 
@@ -20,7 +20,7 @@ A long run finishes, macOS shows a notification, you click **Go to tab**, and Gh
         click  →  Ghostty jumps straight to tab 3
 ```
 
-Repo: https://github.com/Davie521/claude-ghostty-notify
+Repo: https://github.com/Davie521/ai-ghosty-notifier
 
 ---
 
@@ -99,7 +99,7 @@ Claude Code's own "task done" signal is a terminal bell in whatever tab you happ
 - some switch tabs by simulating keystrokes, which needs Accessibility permission and breaks on macOS updates;
 - most can't tell apart two Claude sessions open in the same folder, because they match on the working directory.
 
-`claude-ghostty-notify` is built to close exactly those four gaps. Prior art worth a look: [code-notify](https://github.com/mylee04/code-notify), [claude-code-notifier](https://github.com/kovoor/claude-code-notifier), [claude-notifications-go](https://github.com/777genius/claude-notifications-go).
+`ai-ghosty-notifier` is built to close exactly those four gaps. Prior art worth a look: [code-notify](https://github.com/mylee04/code-notify), [claude-code-notifier](https://github.com/kovoor/claude-code-notifier), [claude-notifications-go](https://github.com/777genius/claude-notifications-go).
 
 ---
 
@@ -143,8 +143,8 @@ xcode-select --install     # Swift toolchain, for the notification agent
 Inside Claude Code:
 
 ```
-/plugin marketplace add Davie521/claude-ghostty-notify
-/plugin install claude-ghostty-notify
+/plugin marketplace add Davie521/ai-ghosty-notifier
+/plugin install ai-ghosty-notifier
 ```
 
 Hooks are auto-registered via the plugin manifest — **no manual `settings.json` edits needed.**
@@ -174,7 +174,7 @@ bash scripts/build-agent.sh     # needs a Swift toolchain (xcode-select --instal
 bash scripts/install-agent.sh   # copies the app into place, installs a LaunchAgent, asks for permission
 ```
 
-The install copies the bundle to `~/Library/Application Support/claude-ghostty-notify/`
+The install copies the bundle to `~/Library/Application Support/ai-ghosty-notifier/`
 and points the LaunchAgent at that copy, so the checkout can move or go — a
 LaunchAgent aimed into a repository stops silently the day the repository is
 renamed. Rerun the install after every rebuild. Codex sessions use the same
@@ -217,8 +217,8 @@ the alert but cannot jump.
 ### Manual install (without the plugin system)
 
 ```bash
-git clone https://github.com/Davie521/claude-ghostty-notify.git
-cd claude-ghostty-notify
+git clone https://github.com/Davie521/ai-ghosty-notifier.git
+cd ai-ghosty-notifier
 ./install.sh
 ```
 
@@ -236,7 +236,7 @@ All thresholds are environment variables in your `settings.json` `env` block. Re
 | `GHOSTTY_NOTIFY_BACKEND`       | `auto` | `auto` / `agent` (the agent, falling back to `terminal-notifier` when it cannot display) or `terminal-notifier` (skip the agent). The fallback never wires click-to-jump: its action fires on a dismiss too, with no way to tell them apart. |
 | `GHOSTTY_NOTIFY_ON_PROMPT`     | `0`    | Set to `1` to also alert (immediately, with Ping sound) on `Notification` events — permission / input prompts. Recommended if you do NOT run bypass-permissions mode. |
 | `GHOSTTY_NOTIFY_CLEAR_ON_FOCUS` | `1`   | Auto-dismiss the notification once you focus the session's Ghostty tab — and on your next prompt in that session. When the tab is unknown (tmux, unscriptable Ghostty) it degrades to "Ghostty becomes frontmost again". On the `terminal-notifier` fallback only the next prompt clears it. Turn it off with `0`, `false`, `no`, or `off`; any other value leaves it on. |
-| `GHOSTTY_NOTIFY_AGENT_APP`     | *(discovered)* | Path to the agent bundle. Set it **empty** to pin the shell path and ignore an installed agent. Unset means "use it if it is there" — the installed copy under `~/Library/Application Support/claude-ghostty-notify/` first; a path that is not an executable bundle is refused rather than trusted. Codex reads it from `~/.codex/ghostty-notify/config.json`. |
+| `GHOSTTY_NOTIFY_AGENT_APP`     | *(discovered)* | Path to the agent bundle. Set it **empty** to pin the shell path and ignore an installed agent. Unset means "use it if it is there" — the installed copy under `~/Library/Application Support/ai-ghosty-notifier/` first; a path that is not an executable bundle is refused rather than trusted. Codex reads it from `~/.codex/ghostty-notify/config.json`. |
 | `GHOSTTY_NOTIFY_MENU_BAR`      | `1`    | The agent's menu bar item. `0`, `false`, `no` or `off` hides it — at the cost of losing the waiting-session count, the list that jumps to them, and the only visible sign that the agent is alive and permitted. |
 
 Values must be plain integers (seconds); anything else falls back to the default.
@@ -331,9 +331,9 @@ deliberately wires no click there at all. Install the agent ([step 5](#5-the-nat
 
 ## Uninstall
 
-**Plugin install:** `/plugin uninstall claude-ghostty-notify` — hooks are automatically deregistered.
+**Plugin install:** `/plugin uninstall ai-ghosty-notifier` — hooks are automatically deregistered.
 
-**Native agent** (if you installed it): `bash scripts/install-agent.sh --uninstall` removes the LaunchAgent and the copy under `~/Library/Application Support/claude-ghostty-notify/`; then `rm -rf ~/.claude/notifications/ghostty-agent`. Revoking its notification permission is a separate step in System Settings → Notifications.
+**Native agent** (if you installed it): `bash scripts/install-agent.sh --uninstall` removes the LaunchAgent and the copy under `~/Library/Application Support/ai-ghosty-notifier/`; then `rm -rf ~/.claude/notifications/ghostty-agent`. Revoking its notification permission is a separate step in System Settings → Notifications.
 
 **Manual install:**
 

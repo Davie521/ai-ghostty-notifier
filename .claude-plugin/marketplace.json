@@ -1,12 +1,12 @@
 {
-  "name": "claude-ghostty-notify",
+  "name": "ai-ghosty-notifier",
   "owner": {
     "name": "Davie521",
     "url": "https://github.com/Davie521"
   },
   "plugins": [
     {
-      "name": "claude-ghostty-notify",
+      "name": "ai-ghosty-notifier",
       "source": "./",
       "description": "Ghostty-native notifications for Claude Code and Codex CLI: time-tiered alerts (silent under 3min, no-sound 3-10min, with sound over 10min), a resident agent that jumps to the session's exact tab when you click and clears the notification the moment you return to it"
     }
