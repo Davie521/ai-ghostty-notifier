@@ -107,6 +107,11 @@ class CodexHookTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        # Runs before that cleanup (addCleanup is LIFO): Stop hands its work
+        # to a detached process, and deleting the sandbox while that process
+        # is still writing into it fails the test with "Directory not empty"
+        # — a teardown race reported as a failure of whichever test ran.
+        self.addCleanup(self.settle)
         self.root = Path(self.temp.name)
         self.bin = self.root / "bin"
         self.bin.mkdir()
@@ -162,6 +167,16 @@ class CodexHookTests(unittest.TestCase):
             return []
         return [dict(zip(args[::2], args[1::2]))
                 for args in map(json.loads, self.log.read_text().splitlines())]
+
+    def settle(self, seconds=10):
+        """Wait for the detached Stop work to leave the sandbox alone."""
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            alive = subprocess.run(["pgrep", "-f", str(self.root)],
+                                   capture_output=True, text=True).stdout.split()
+            if not alive:
+                return
+            time.sleep(0.05)
 
     def wait_until(self, predicate, seconds=5):
         deadline = time.monotonic() + seconds
@@ -283,11 +298,10 @@ class CodexHookTests(unittest.TestCase):
         self.assertEqual(request["tab_id"], "codex-target-tab")
         self.assertEqual(request["timeout"], "1200")
         self.assertEqual(request["clear_on_focus"], "false")
-        time.sleep(0.5)
+        self.wait_until(lambda: not (self.state / (SID + ".start")).exists())
         # Nothing reached the shell backends, and no watcher was spawned: the
         # agent withdraws on focus by itself.
         self.assertEqual(self.notices(), [])
-        self.assertFalse((self.state / (SID + ".start")).exists())
 
     def test_config_can_pin_the_shell_path(self):
         spool = self.install_agent()
@@ -319,7 +333,9 @@ class CodexHookTests(unittest.TestCase):
         self.assertIn(notice["-message"], ("Finished after 2m 1s", "Finished after 2m 2s"))
         self.assertEqual(notice["-group"], "codex-ghostty-notify-" + SID)
         self.assertNotIn("-sound", notice)
-        self.assertFalse((self.state / (SID + ".start")).exists())
+        # The detached work clears the timer after delivering, so wait for it
+        # rather than racing it.
+        self.wait_until(lambda: not (self.state / (SID + ".start")).exists())
 
     def test_sound_past_the_long_threshold(self):
         self.bind(started_ago=601)
@@ -534,7 +550,7 @@ class CodexHookTests(unittest.TestCase):
         self.run_hook("Stop")
         self.wait_until(self.notices)
         self.assertEqual(self.notices()[0]["-group"], "codex-ghostty-notify-" + SID)
-        self.assertTrue((self.state / (SID + ".notified")).exists(), "delivery was not stamped")
+        self.wait_until(lambda: (self.state / (SID + ".notified")).exists())
         self.assertFalse((self.root / "removed").exists(), "cleared before the user came back")
         self.run_hook("UserPromptSubmit", prompt="back")
         self.wait_until(lambda: (self.root / "removed").exists())
