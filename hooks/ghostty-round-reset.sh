@@ -29,7 +29,7 @@ rm -f "$SAVE_DIR/${SESSION_ID}.start"
 # A new prompt in this session proves the user is back at this tab — any
 # still-visible completion notification for it is stale. Clear it (and its
 # focus watcher) in the background so prompt submission isn't delayed.
-# Sibling resolution mirrors ghostty-notify.sh's FOCUS_SCRIPT lookup.
+# Resolved beside this script, as the sibling hooks are.
 #
 # This is the same feature as the clear-on-focus watcher and honors the
 # same switch; keep the accepted off values in sync with ghostty-notify.sh.

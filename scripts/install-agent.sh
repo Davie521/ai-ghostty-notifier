@@ -6,8 +6,8 @@
 # at that copy. The checkout is then free to move or disappear. launchd stores
 # absolute paths, and a LaunchAgent aimed into a repository stops working the
 # day the repository is renamed — exit 78, penalty box, no dialog — while the
-# hooks fall back to alerter without a word, which is the very failure the
-# agent exists to fix. hooks/agent-common.sh looks in the same fixed place, so
+# hooks fall back to a notification you cannot click, without a word — the
+# very failure the agent exists to fix. hooks/agent-common.sh looks in the same fixed place, so
 # a moved checkout does not lose the agent either.
 #
 # Why launchd rather than "let the first hook start it": launchd restarts the
@@ -193,7 +193,8 @@ case "$ANSWER" in
     authorized) echo "    granted" ;;
     denied)
         echo "    DENIED — the user declined, so the agent cannot display" >&2
-        echo "    notifications. Hooks will keep using the alerter/terminal-notifier path." >&2
+        echo "    notifications. Hooks will keep using terminal-notifier, which shows" >&2
+        echo "    the alert but cannot jump back to the tab." >&2
         ;;
     error)
         echo "    macOS refused the request twice (no dialog was shown)." >&2

@@ -125,6 +125,19 @@ state_outstanding() {
     jq -r --arg s "$1" '(.sessions[$s].notificationIDs // []) | join(",")' \
         "$STATE" 2>/dev/null
 }
+# Predicates, not values. `wait_for 10 test "$(f)" = x` expands f ONCE,
+# before wait_for runs, and then spends ten seconds comparing two constants
+# — so a state file written a moment later is never seen and the assertion
+# fails with no sign of why. Observed on CI as an intermittent failure of
+# "the identifier is still stable after a restart".
+state_outstanding_is() {  # <session> <expected>
+    [[ "$(state_outstanding "$1")" == "$2" ]]
+}
+pongs_above() {  # <count>
+    local now
+    now=$(grep -cF pong "$LOG" 2>/dev/null || echo 0)
+    (( now > $1 ))
+}
 spool_drained() {
     local remaining
     remaining=$(find "$ROOT/spool" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
@@ -153,7 +166,7 @@ check "consumed request files are removed" wait_for 10 spool_drained
 # ── 2. Readiness is published, and gates delivery ──────────────────────────
 # The severest defect this file guards: a spool write is NOT a delivered
 # notification. Unless the agent says it is authorized, agent_deliver has to
-# fail so ghostty-notify.sh falls back to alerter/terminal-notifier instead of
+# fail so ghostty-notify.sh falls back to terminal-notifier instead of
 # silently swallowing the notification.
 # Whether the agent gets an ANSWER is environmental, not a property of the code:
 # the prompt needs a human, and on a CI runner nobody can click it, so the
@@ -190,26 +203,26 @@ agent_queue "$(jq -nc --arg s "$SID" \
 check "notify posts and records claude-<session>" \
     wait_for 10 log_has "posted claude-$SID"
 check "state.json lists the identifier as outstanding" \
-    wait_for 10 test "$(state_outstanding "$SID")" = "claude-$SID"
+    wait_for 10 state_outstanding_is "$SID" "claude-$SID"
 
 # Posting again must reuse the identifier: that is what makes the notification
 # center REPLACE the banner instead of stacking a second one, which is the
 # behaviour `-group ghostty-notify-<session>` gave both shell backends.
 agent_queue "$(jq -nc --arg s "$SID" '{type:"notify",session_id:$s,title:"again"}')" "$APP"
 check "a repeat notification replaces rather than stacks" \
-    wait_for 10 test "$(state_outstanding "$SID")" = "claude-$SID"
+    wait_for 10 state_outstanding_is "$SID" "claude-$SID"
 
 # ── 4. A second session's notification is tracked separately ───────────────
 agent_queue "$(jq -nc --arg s "$OTHER" '{type:"notify",session_id:$s,title:"other"}')" "$APP"
 check "a second session gets its own identifier" \
-    wait_for 10 test "$(state_outstanding "$OTHER")" = "claude-$OTHER"
+    wait_for 10 state_outstanding_is "$OTHER" "claude-$OTHER"
 
 # ── 5. dismiss withdraws only the session it names ─────────────────────────
 agent_queue "$(jq -nc --arg s "$SID" '{type:"dismiss",session_id:$s}')" "$APP"
 check "dismiss withdraws the named session's notification" \
     wait_for 10 log_has "withdrew claude-$SID"
 check "dismissed session has nothing outstanding" \
-    wait_for 10 test "$(state_outstanding "$SID")" = ""
+    wait_for 10 state_outstanding_is "$SID" ""
 # The bug this guards: a dismiss that clears every session would silently
 # destroy a sibling session's still-unread notification.
 check "the other session's notification survives" \
@@ -235,7 +248,7 @@ agent_queue '{"type":"selfDestruct"}' "$APP"
 check "malformed requests are dropped, not retried" wait_for 10 spool_drained
 agent_queue '{"type":"ping"}' "$APP"
 check "the agent still serves requests after garbage" \
-    wait_for 10 test "$(grep -cF pong "$LOG")" -gt "$PONGS_BEFORE"
+    wait_for 10 pongs_above "$PONGS_BEFORE"
 # A rejected session id must not have created a record.
 check "an invalid session id creates no state" \
     test "$(jq -r '.sessions | has("../escape")' "$STATE" 2>/dev/null)" = "false"
@@ -269,7 +282,7 @@ agent_queue "$(jq -nc --arg s "$SID" '{type:"notify",session_id:$s,title:"after 
 # A changed identifier here would post a SECOND banner beside one that may still
 # be on screen from before the restart, instead of replacing it.
 check "the identifier is still stable after a restart" \
-    wait_for 10 test "$(state_outstanding "$SID")" = "claude-$SID"
+    wait_for 10 state_outstanding_is "$SID" "claude-$SID"
 check "the tab resolved before the restart survived it" \
     test "$(jq -r --arg s "$SID" '.sessions[$s].tabID // ""' "$STATE")" = "BEEF-TAB"
 

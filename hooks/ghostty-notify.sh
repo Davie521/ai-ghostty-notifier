@@ -9,18 +9,20 @@
 #
 # Features:
 #   - Only notify when the round has been running ≥ MIN_ELAPSED seconds
-#   - Click notification → ghostty-tab-focus.sh jumps to the right tab
-#   - Focus the session's tab → ghostty-notify-clear.sh auto-dismisses the
-#     notification (clear-on-focus watcher, GHOSTTY_NOTIFY_CLEAR_ON_FOCUS)
+#   - Delivery goes to the resident agent, which owns the notification: it
+#     answers a click by jumping to the session's tab and withdraws the
+#     alert when you arrive (GHOSTTY_NOTIFY_CLEAR_ON_FOCUS)
+#   - Without the agent, terminal-notifier shows the alert and nothing else;
+#     a new prompt in the session clears it (ghostty-notify-clear.sh)
 #   - Subtitle leads with the session title (stdin session_title field, or
 #     the transcript's last custom-title / ai-title record) so parallel
 #     sessions in the same folder produce distinguishable notifications
 #   - System Glass sound for tasks past SOUND_ELAPSED
 #   - Simple rate limit to prevent duplicate pings from sub-agents
 #
-# Backend dependency checks (terminal-notifier / alerter) live inside each
-# fire_with_* function; a missing preferred backend degrades to the other
-# one VISIBLY instead of silently dropping the notification.
+# The fallback's dependency check lives inside fire_with_terminal_notifier;
+# an agent that cannot display degrades to it VISIBLY instead of silently
+# dropping the notification.
 
 [[ "${TERM_PROGRAM:-}" != "ghostty" ]] && [[ -z "${GHOSTTY_RESOURCES_DIR:-}" ]] && exit 0
 command -v jq >/dev/null 2>&1 || exit 0
@@ -36,9 +38,9 @@ CWD=$(printf '%s' "$HOOK_DATA" | jq -r '.cwd // empty' 2>/dev/null)
 HOOK_EVENT=$(printf '%s' "$HOOK_DATA" | jq -r '.hook_event_name // empty' 2>/dev/null)
 TRANSCRIPT_PATH=$(printf '%s' "$HOOK_DATA" | jq -r '.transcript_path // empty' 2>/dev/null)
 [[ -z "$SESSION_ID" ]] && exit 0
-# The id becomes part of filesystem paths below (start marker, alerter
-# pidfile) and is handed to the focus/clear scripts, so hold it to the same
-# shape the sibling hooks require before any of that.
+# The id becomes part of filesystem paths below and of the notification
+# group handed to the clear script, so hold it to the same shape the sibling
+# hooks require before any of that.
 [[ "$SESSION_ID" =~ ^[a-fA-F0-9-]+$ ]] || exit 0
 
 SAVE_DIR="${GHOSTTY_NOTIFY_SESSION_DIR:-$HOME/.claude/notifications/ghostty-sessions}"
@@ -185,135 +187,34 @@ case "$HOOK_EVENT" in
 esac
 
 # A value leading an argv slot must not start with '-'. The legacy
-# single-dash alerter and terminal-notifier both parse NSUserDefaults-style,
-# where "-wip auth fix" in value position is read as the next FLAG: the tool
-# prints usage and exits without displaying anything. SUBTITLE now leads
+# terminal-notifier parses argv NSUserDefaults-style, where "-wip auth fix"
+# in value position is read as the next FLAG: it prints usage and exits
+# without displaying anything. SUBTITLE now leads
 # with the user-controlled session title (/rename or ai-title) and MESSAGE
 # carries hook-supplied text, so strip leading dashes rather than silently
 # lose the notification.
 while [[ "$SUBTITLE" == -* ]]; do SUBTITLE="${SUBTITLE#-}"; done
 while [[ "$MESSAGE" == -* ]]; do MESSAGE="${MESSAGE#-}"; done
 
-# ── Fire notification with click-to-focus ──────────────────────────────────
-# Prefer `alerter` over terminal-notifier. `alerter` is always alert-style,
-# so clicks reliably trigger the focus action on modern macOS (Banner-style
-# terminal-notifier notifications silently drop -execute clicks).
-#
-# alerter blocks until the user clicks or timeout — we fire-and-forget via
-# backgrounded subshell + disown so the hook returns immediately.
-
-# The focus script is our sibling: under a plugin install the hooks run from
-# the plugin directory and nothing is ever copied to ~/.claude/hooks; under a
-# manual install.sh install every script sits side by side there. The legacy
-# absolute path is kept only as a last-resort fallback.
+# ── Fire notification ──────────────────────────────────────────────────────
+# The resident agent is the delivery path: it posts through
+# UNUserNotificationCenter under its own bundle identity, so a click reaches
+# the process that knows which tab this session lives in. terminal-notifier
+# remains only so a machine without the agent still SEES that the round
+# finished.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
-FOCUS_SCRIPT="${GHOSTTY_NOTIFY_FOCUS_SCRIPT:-$SCRIPT_DIR/ghostty-tab-focus.sh}"
-[[ -x "$FOCUS_SCRIPT" ]] || FOCUS_SCRIPT="$HOME/.claude/hooks/ghostty-tab-focus.sh"
-
-# alerter lives wherever the user's package manager put it (brew installs to
-# /opt/homebrew/bin on Apple silicon, /usr/local/bin on Intel); hooks may run
-# with a trimmed PATH, so probe common locations after `command -v`.
-find_alerter() {
-    command -v alerter 2>/dev/null && return 0
-    local p
-    for p in /opt/homebrew/bin/alerter /usr/local/bin/alerter "$HOME/.local/bin/alerter"; do
-        [[ -x "$p" ]] && { printf '%s\n' "$p"; return 0; }
-    done
-    return 1
-}
-ALERTER="${GHOSTTY_NOTIFY_ALERTER:-$(find_alerter || true)}"
 GROUP_ID="${GHOSTTY_NOTIFY_GROUP_PREFIX:-ghostty-notify}-${SESSION_ID}"
-
-fire_with_alerter() {
-    [[ -n "$ALERTER" && -x "$ALERTER" ]] || return 1
-    local ACTION_LABEL="Go to tab"
-    # alerter 26.2+ (the 2025 Swift rewrite) takes GNU-style --flags; every
-    # earlier release (ObjC, single-dash NSUserDefaults parsing: -title,
-    # -closeLabel) rejects them and prints usage instead of showing anything.
-    # Probe --help to pick the dialect — the legacy help text has no
-    # "--close-label" token.
-    local args=()
-    # </dev/null everywhere alerter runs: it reads a message from stdin when
-    # that is not a terminal, and --help is no exception — probed from a
-    # pipeline or a caller that never closes stdin, it would block forever.
-    if "$ALERTER" --help </dev/null 2>&1 | grep -q -- '--close-label'; then
-        args=(
-            --title "$TITLE"
-            --subtitle "$SUBTITLE"
-            --message "$MESSAGE"
-            --group "$GROUP_ID"
-            --actions "$ACTION_LABEL"
-            --timeout "$NOTIFY_TIMEOUT"
-            --close-label "Dismiss"
-        )
-        [[ "$SILENT" != "true" ]] && args+=(--sound "$SOUND")
-    else
-        args=(
-            -title "$TITLE"
-            -subtitle "$SUBTITLE"
-            -message "$MESSAGE"
-            -group "$GROUP_ID"
-            -actions "$ACTION_LABEL"
-            -timeout "$NOTIFY_TIMEOUT"
-            -closeLabel "Dismiss"
-        )
-        [[ "$SILENT" != "true" ]] && args+=(-sound "$SOUND")
-    fi
-    # Whitelist jump triggers. alerter 26.5+ returns the close-label text
-    # ("Dismiss") instead of @CLOSED when the close button is used, so
-    # blacklisting sentinels isn't safe. Fire focus ONLY when the user
-    # either clicked the "Go to tab" action button, or clicked the
-    # notification body itself (alerter reports @CONTENTCLICKED).
-    # Keep ACTION_LABEL and the actions flag in sync.
-    #
-    # The blocking alerter's PID is exported to a per-session file so
-    # ghostty-notify-clear.sh can kill it on clear-on-focus or on the next
-    # prompt. Its output has to route through a temp file for that: a
-    # command substitution would not reveal the PID until alerter already
-    # exited. A killed alerter yields an empty action → whitelist ignores.
-    #
-    # The stale pidfile is dropped HERE, synchronously, before either
-    # background job starts — that is what lets the watcher spawned below
-    # treat any PID it later reads as belonging to this round. The subshell
-    # deliberately does NOT delete the pidfile when its alerter concludes:
-    # a newer round may already have claimed the name, and deleting it
-    # would strand that round's alert with no watcher and no way to kill
-    # the blocking process.
-    local PID_FILE="$SAVE_DIR/${SESSION_ID}.alerter-pid"
-    mkdir -p "$SAVE_DIR" 2>/dev/null
-    rm -f "$PID_FILE" 2>/dev/null
-    (
-        out=$(mktemp "${TMPDIR:-/tmp}/ghostty-notify-action.XXXXXX" 2>/dev/null) || out=""
-        if [[ -n "$out" ]]; then
-            "$ALERTER" "${args[@]}" </dev/null > "$out" 2>/dev/null &
-            apid=$!
-            printf '%s\n' "$apid" > "$PID_FILE" 2>/dev/null
-            wait "$apid"
-            action=$(cat "$out" 2>/dev/null)
-            rm -f "$out" 2>/dev/null
-        else
-            action=$("$ALERTER" "${args[@]}" </dev/null 2>/dev/null)
-        fi
-        case "$action" in
-            "$ACTION_LABEL"|@CONTENTCLICKED)
-                [[ -x "$FOCUS_SCRIPT" ]] && "$FOCUS_SCRIPT" "$SESSION_ID"
-                ;;
-        esac
-    ) </dev/null >/dev/null 2>&1 &
-    disown
-    # Tell the watcher a pidfile is coming, so it won't "clear" before the
-    # notification has actually been delivered.
-    EXPECT_ALERTER=1
-    return 0
-}
+# Stamped whenever the fallback delivers, so a clear requested before that
+# instant cannot take down a notification the user has not seen yet.
+NOTIFIED_FILE="$SAVE_DIR/${SESSION_ID}.notified"
 
 fire_with_terminal_notifier() {
     command -v terminal-notifier >/dev/null 2>&1 || return 1
     # No click-to-focus on this path — terminal-notifier fires -execute on
-    # ANY click including dismiss, with no way to tell them apart, which
-    # reintroduces the dismiss-steals-focus bug (#1) the alerter whitelist
-    # exists to prevent (regression guard: tests/test-fallback-no-focus.sh).
-    # Intentional degradation: notification shows, user navigates manually.
+    # ANY click including dismiss, with no way to tell them apart, so wiring
+    # it would make dismissing an alert steal focus (bug #1; regression
+    # guard: tests/test-fallback-no-focus.sh). Intentional degradation: the
+    # notification shows, the user navigates manually.
     local args=(
         -title "$TITLE"
         -subtitle "$SUBTITLE"
@@ -322,26 +223,21 @@ fire_with_terminal_notifier() {
     )
     [[ "$SILENT" != "true" ]] && args+=(-sound "$SOUND")
     # Propagate the real exit status: a terminal-notifier that fails (e.g.
-    # its bundle isn't authorized for notifications) must not be reported
-    # as "fired", or the caller spawns a clear-on-focus watcher to poll for
-    # ~20 minutes after a notification that was never displayed.
-    terminal-notifier "${args[@]}" >/dev/null 2>&1
+    # its bundle isn't authorized for notifications) must not be reported as
+    # "fired", or the next prompt would try to clear an alert that was never
+    # displayed.
+    terminal-notifier "${args[@]}" >/dev/null 2>&1 || return 1
+    mkdir -p "$SAVE_DIR" 2>/dev/null
+    date +%s > "$NOTIFIED_FILE" 2>/dev/null
+    return 0
 }
 
-# Backend selection. Default: prefer alerter (supports click-to-jump), fall
-# back to terminal-notifier. Override with GHOSTTY_NOTIFY_BACKEND:
-#   - "terminal-notifier" : force terminal-notifier (use this when the
-#                           notification-owning bundle isn't authorized for
-#                           notifications in System Settings, since alerter
-#                           borrows that bundle and silently fails to display)
-#   - "alerter"           : prefer alerter; if its binary is missing or
-#                           unusable, degrade to terminal-notifier VISIBLY
-#                           rather than dropping the notification silently
-#   - unset / "auto"      : prefer alerter, fall back to terminal-notifier
-#   - "agent"             : require the resident agent; do not fall back
+# Backend selection. Default: the resident agent, falling back to
+# terminal-notifier when it cannot display. Override with
+# GHOSTTY_NOTIFY_BACKEND:
+#   - unset / "auto" / "agent" : the agent, else terminal-notifier
+#   - "terminal-notifier"      : skip the agent entirely
 BACKEND="${GHOSTTY_NOTIFY_BACKEND:-auto}"
-FIRED=0
-EXPECT_ALERTER=0
 USED_AGENT=0
 
 # ── Resident agent (preferred delivery) ────────────────────────────────────
@@ -350,9 +246,7 @@ USED_AGENT=0
 # Ghostty surface comes forward — a NSWorkspace activation subscription, not a
 # poll — and answers a click by focusing that surface over an Apple Event.
 #
-# That subsumes both the alerter click-handler subshell and the per-notification
-# clear-on-focus watcher, so neither runs on this path: no second process
-# outlives the hook, and nothing wakes up once a second.
+# Nothing this hook starts outlives it on that path, and nothing polls.
 AGENT_APP=""
 if [[ "$BACKEND" == "auto" || "$BACKEND" == "agent" ]]; then
     # shellcheck source=hooks/agent-common.sh
@@ -379,7 +273,7 @@ if [[ -n "$AGENT_APP" ]]; then
         *) AGENT_CLEAR=true ;;
     esac
     # agent_deliver fails when the agent is not running or macOS has not granted
-    # it permission to display anything. Falling through to the shell backends
+    # it permission to display anything. Falling through to terminal-notifier
     # then is the whole point: a spooled request is not a delivered
     # notification, and the invariant at the top of this file is that a missing
     # preferred backend degrades VISIBLY.
@@ -390,53 +284,19 @@ if [[ -n "$AGENT_APP" ]]; then
         '{type:"notify",session_id:$s,title:$t,subtitle:$sub,body:$b,sound:$snd,
           tab_id:$tab,timeout:$to,clear_on_focus:$clear}')" \
         "$AGENT_APP"; then
-        FIRED=1
         USED_AGENT=1
     fi
 fi
 
 if [[ "$USED_AGENT" -eq 0 ]]; then
-    case "$BACKEND" in
-        agent)
-            # Explicitly requested the agent and it is unavailable. Degrade
-            # visibly rather than silently swallowing the notification.
-            fire_with_terminal_notifier && FIRED=1
-            ;;
-        terminal-notifier)
-            fire_with_terminal_notifier && FIRED=1
-            ;;
-        *)
-            { fire_with_alerter || fire_with_terminal_notifier; } && FIRED=1
-            ;;
-    esac
+    fire_with_terminal_notifier
 fi
 
-# ── Clear-on-focus watcher ─────────────────────────────────────────────────
-# Focusing the session's tab (or Ghostty itself when the tab is unknown)
-# dismisses the notification: once you're looking at the session, the alert
-# has done its job and would otherwise sit in the corner until clicked or
-# timed out. Opt out with GHOSTTY_NOTIFY_CLEAR_ON_FOCUS=0. Sibling
-# resolution mirrors FOCUS_SCRIPT above.
-#
-# Only an explicit off value disables it: an unrecognized setting falls
-# back to the documented default (on), matching how the numeric knobs above
-# fail back to theirs instead of silently changing behavior. Keep this list
-# in sync with ghostty-round-reset.sh, which gates the same feature.
-case "${GHOSTTY_NOTIFY_CLEAR_ON_FOCUS:-1}" in
-    0|false|no|off|FALSE|NO|OFF) CLEAR_ON_FOCUS=0 ;;
-    *) CLEAR_ON_FOCUS=1 ;;
-esac
-# The agent already withdraws on focus from inside a resident process, so the
-# watcher would be a second, worse implementation of the same feature.
-if [[ "$FIRED" -eq 1 && "$CLEAR_ON_FOCUS" -eq 1 && "$USED_AGENT" -eq 0 ]]; then
-    CLEAR_SCRIPT="${GHOSTTY_NOTIFY_CLEAR_SCRIPT:-$SCRIPT_DIR/ghostty-notify-clear.sh}"
-    [[ -x "$CLEAR_SCRIPT" ]] || CLEAR_SCRIPT="$HOME/.claude/hooks/ghostty-notify-clear.sh"
-    if [[ -x "$CLEAR_SCRIPT" ]]; then
-        GHOSTTY_NOTIFY_EXPECT_ALERTER="$EXPECT_ALERTER" \
-            "$CLEAR_SCRIPT" --watch "$SESSION_ID" </dev/null >/dev/null 2>&1 &
-        disown
-    fi
-fi
+# Clearing when you arrive is the agent's job — it subscribes to activation
+# events from inside one resident process. The fallback keeps only the
+# cheapest half of that feature: ghostty-round-reset.sh clears this
+# session's notification when you submit the next prompt, which is proof
+# enough that you are back, and costs no polling.
 
 clear_start_on_stop
 exit 0

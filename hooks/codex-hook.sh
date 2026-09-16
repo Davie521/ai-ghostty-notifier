@@ -18,7 +18,7 @@
 #   4. on Stop, hands over to a detached process that lets the turn end,
 #      skips turn boundaries Codex continues straight through, resolves the
 #      tab, and only then delivers through the shared scripts — to the
-#      resident agent when it is installed, else alerter.
+#      resident agent when it is installed, else terminal-notifier.
 #
 # Why the tab is resolved at Stop: ghostty-tab-save.sh identifies the tab by
 # writing a marker title and asking Ghostty who shows it. The Codex TUI
@@ -69,7 +69,7 @@ CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 # ── Settings ───────────────────────────────────────────────────────────────
 # config.json beside this script (written by install-codex.py) carries any
 # GHOSTTY_NOTIFY_* knob the shared scripts read — thresholds, backend,
-# alerter path, focus poll … — and the environment wins over it. Claude gets
+# backend, agent path … — and the environment wins over it. Claude gets
 # the same knobs from settings.json's "env"; Codex has no per-hook env block,
 # hence the file.
 CONFIG_FILE="$SCRIPT_DIR/config.json"
@@ -111,7 +111,7 @@ if [[ "$EVENT" == "UserPromptSubmit" ]]; then
     # same set, but only runs for terminal sessions; Desktop and MCP threads
     # leave their "-" owner marks here and never reach it.
     find "$STATE_DIR" -type f \( -name '*.codex-owner' -o -name '*.title' -o -name '*.start' \
-        -o -name '*.json' -o -name '*.attempts' -o -name '*.alerter-pid' -o -name '*.watch-pid' \) \
+        -o -name '*.json' -o -name '*.attempts' -o -name '*.notified' \) \
         -mtime +7 -delete 2>/dev/null
 fi
 

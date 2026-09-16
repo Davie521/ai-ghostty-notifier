@@ -16,13 +16,11 @@ if ! command -v jq >/dev/null 2>&1; then
     exit 1
 fi
 
-if ! command -v alerter >/dev/null 2>&1 \
-    && [[ ! -x /opt/homebrew/bin/alerter ]] \
-    && [[ ! -x /usr/local/bin/alerter ]] \
-    && [[ ! -x "$HOME/.local/bin/alerter" ]]; then
-    echo "⚠️  Missing recommended dependency: alerter"
-    echo "   Install:  brew install alerter"
-    echo "   (hooks will still install, but notifications fall back to terminal-notifier)"
+if ! command -v terminal-notifier >/dev/null 2>&1; then
+    echo "⚠️  Missing fallback dependency: terminal-notifier"
+    echo "   Install:  brew install terminal-notifier"
+    echo "   (needed only where the native agent cannot deliver; the agent is"
+    echo "    what gives you click-to-jump — see the README)"
 fi
 
 # Resolve the source hooks dir.
@@ -38,7 +36,7 @@ install_from_local() {
     # agent-common.sh is sourced, not run, but ghostty-notify.sh and the anchor
     # hook both need it beside them; a manual install that skipped it would
     # silently lose the agent path.
-    for f in ghostty-tab-save.sh ghostty-tab-focus.sh ghostty-notify.sh ghostty-round-reset.sh ghostty-notify-clear.sh agent-common.sh ghostty-agent-anchor.sh; do
+    for f in ghostty-tab-save.sh ghostty-notify.sh ghostty-round-reset.sh ghostty-notify-clear.sh agent-common.sh ghostty-agent-anchor.sh; do
         cp "$LOCAL_HOOKS/$f" "$HOOKS_DIR/$f"
         chmod +x "$HOOKS_DIR/$f"
         echo "  ✓ installed $f (local)"
@@ -50,7 +48,7 @@ install_from_github() {
     # agent-common.sh is sourced, not run, but ghostty-notify.sh and the anchor
     # hook both need it beside them; a manual install that skipped it would
     # silently lose the agent path.
-    for f in ghostty-tab-save.sh ghostty-tab-focus.sh ghostty-notify.sh ghostty-round-reset.sh ghostty-notify-clear.sh agent-common.sh ghostty-agent-anchor.sh; do
+    for f in ghostty-tab-save.sh ghostty-notify.sh ghostty-round-reset.sh ghostty-notify-clear.sh agent-common.sh ghostty-agent-anchor.sh; do
         curl -fsSL "$RAW/$f" -o "$HOOKS_DIR/$f"
         chmod +x "$HOOKS_DIR/$f"
         echo "  ✓ installed $f (remote)"
@@ -101,9 +99,11 @@ EOF
 echo
 echo "   (Replace \$USER with your username — hooks require absolute paths.)"
 echo
-echo "2. System Settings → Notifications → Alert Style → Persistent, for BOTH"
-echo "   'Script Editor' (legacy alerter ≤1.x) and 'Terminal' (alerter 26.x,"
-echo "   whose default sender bundle is com.apple.Terminal)."
+echo "2. Build and install the native agent. It delivers the notification,"
+echo "   answers the click and clears it when you come back:"
+echo "     bash scripts/build-agent.sh && bash scripts/install-agent.sh"
+echo "   Then set Alert Style to Persistent in System Settings >"
+echo "   Notifications > Claude Ghostty Notify."
 echo
 echo "3. Restart Claude Code so the env vars take effect."
 echo "─────────────────────────────────────────────────────────"
