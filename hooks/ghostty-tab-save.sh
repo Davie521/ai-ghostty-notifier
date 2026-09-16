@@ -91,7 +91,7 @@ ATTEMPTS=$(cat "$ATTEMPTS_FILE" 2>/dev/null || echo 0)
 # pidfiles are the same story — watchers deliberately leave theirs behind
 # rather than race a successor for the filename.
 find "$SAVE_DIR" -type f \( -name '*.json' -o -name '*.start' -o -name '*.attempts' \
-    -o -name '*.alerter-pid' -o -name '*.watch-pid' -o -name '*.callback-lock' \
+    -o -name '*.notified' -o -name '*.callback-lock' \
     -o -name '*.codex-owner' -o -name '*.title' \) -mtime +7 -delete 2>/dev/null
 
 # ── Locate Claude's controlling TTY ────────────────────────────────────────

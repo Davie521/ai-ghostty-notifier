@@ -153,7 +153,7 @@ check "consumed request files are removed" wait_for 10 spool_drained
 # ── 2. Readiness is published, and gates delivery ──────────────────────────
 # The severest defect this file guards: a spool write is NOT a delivered
 # notification. Unless the agent says it is authorized, agent_deliver has to
-# fail so ghostty-notify.sh falls back to alerter/terminal-notifier instead of
+# fail so ghostty-notify.sh falls back to terminal-notifier instead of
 # silently swallowing the notification.
 # Whether the agent gets an ANSWER is environmental, not a property of the code:
 # the prompt needs a human, and on a CI runner nobody can click it, so the

@@ -31,9 +31,8 @@ mkdir -p \
     "$HOME/.claude/notifications/ghostty-sessions" \
     "$SANDBOX/bin"
 
-# Force the synchronous terminal-notifier path: point alerter at a
-# nonexistent binary so discovery can't find a real one on this machine.
-export GHOSTTY_NOTIFY_ALERTER="$SANDBOX/no-such-alerter"
+# The synchronous terminal-notifier path is what this suite reads argv
+# from; the resident agent is disabled below so it is the one that fires.
 
 # Fake terminal-notifier: records argv, one arg per line.
 TN_LOG="$SANDBOX/tn-args.log"
@@ -160,9 +159,9 @@ run_case "multi-line title kept whole" \
     ",\"transcript_path\":$(printf '%s' "$T3" | jq -Rs .)"
 
 # 7. A title starting with '-' must not be parsed as the next flag. Both
-#    the legacy single-dash alerter and terminal-notifier read argv
-#    NSUserDefaults-style, so "-wip" in value position used to swallow the
-#    flag and drop the notification entirely (usage dump, exit 0).
+#    terminal-notifier reads argv NSUserDefaults-style, so "-wip" in value
+#    position used to swallow the flag and drop the notification entirely
+#    (usage dump, exit 0).
 run_case "dash-leading title does not break argv" \
     "wip auth fix — webapp" \
     ",\"session_title\":\"-wip auth fix\""

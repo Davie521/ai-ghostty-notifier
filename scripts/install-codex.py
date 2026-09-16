@@ -22,7 +22,7 @@ import tomllib
 
 REPO = Path(__file__).resolve().parent.parent
 FILES = (
-    "codex-hook.sh", "ghostty-tab-save.sh", "ghostty-tab-focus.sh",
+    "codex-hook.sh", "ghostty-tab-save.sh",
     "ghostty-notify.sh", "ghostty-notify-clear.sh", "ghostty-round-reset.sh",
     "agent-common.sh", "ghostty-agent-anchor.sh",
 )
@@ -38,7 +38,7 @@ DEFAULTS = {
 PRIVATE_KEYS = {
     "GHOSTTY_NOTIFY_PROCESS_NAME", "GHOSTTY_NOTIFY_APP_NAME", "GHOSTTY_NOTIFY_AGENT_APP",
     "GHOSTTY_NOTIFY_SESSION_DIR", "GHOSTTY_NOTIFY_RATE_DIR", "GHOSTTY_NOTIFY_GROUP_PREFIX",
-    "GHOSTTY_NOTIFY_FOCUS_SCRIPT", "GHOSTTY_NOTIFY_CLEAR_SCRIPT", "GHOSTTY_NOTIFY_TTY",
+    "GHOSTTY_NOTIFY_CLEAR_SCRIPT", "GHOSTTY_NOTIFY_TTY",
     "GHOSTTY_NOTIFY_MARKER_RETRY_DELAYS", "GHOSTTY_NOTIFY_CODEX_SETTLE",
 }
 ADAPTER = "ghostty-notify/codex-hook.sh"
@@ -47,8 +47,7 @@ LEGACY_COMMENT = "# Codex completion notifications in Ghostty (claude-ghostty-no
 # Codex's own TUI desktop alerts, minus agent-turn-complete (that is what
 # this project delivers, on its own threshold).
 TUI_ALERTS_KEPT = ["approval-requested", "plan-mode-prompt"]
-ALERTER_PATHS = ("/opt/homebrew/bin/alerter", "/usr/local/bin/alerter",
-                 str(Path.home() / ".local/bin/alerter"))
+AGENT_BUNDLE = Path.home() / "Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app"
 
 
 def hook_command(destination, event):
@@ -308,13 +307,15 @@ def _initial_settings(claude_settings):
 def install(codex_home, claude_settings):
     if shutil.which("jq") is None:
         raise SystemExit("jq is required by the hooks (brew install jq); nothing was installed.")
-    if shutil.which("alerter") is None and not any(os.access(p, os.X_OK) for p in ALERTER_PATHS):
+    if not os.access(AGENT_BUNDLE / "Contents/MacOS/ghostty-notify-agent", os.X_OK):
         if shutil.which("terminal-notifier") is None:
-            print("Warning: neither alerter nor terminal-notifier is installed; "
-                  "no notification can be shown until one is (brew install alerter).")
+            print("Warning: the notification agent is not installed and neither is "
+                  "terminal-notifier; nothing can be shown until one of them is. "
+                  "Install the agent with scripts/build-agent.sh + install-agent.sh.")
         else:
-            print("Note: alerter is not installed; terminal-notifier will show the "
-                  "alerts but cannot offer the Go to tab button (brew install alerter).")
+            print("Note: the notification agent is not installed, so terminal-notifier "
+                  "will show the alerts without the jump back to the tab. Install it "
+                  "with scripts/build-agent.sh + scripts/install-agent.sh.")
 
     destination = codex_home / "ghostty-notify"
     hooks_path = codex_home / "hooks.json"

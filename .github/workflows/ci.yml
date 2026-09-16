@@ -44,10 +44,9 @@ jobs:
 
       - name: Regression tests
         run: |
-          bash tests/test-alerter-dispatch.sh
           bash tests/test-fallback-no-focus.sh
           bash tests/test-session-title.sh
-          bash tests/test-clear-on-focus.sh
+          bash tests/test-clear-on-prompt.sh
 
       - uses: actions/setup-python@v5
         with:

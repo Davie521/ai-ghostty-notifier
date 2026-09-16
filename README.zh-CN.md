@@ -38,10 +38,10 @@ python3 scripts/install-codex.py
 
 - **计时从提问开始。** Codex 一轮可能先推理或跑托管工具好几分钟才碰本地命令，所以和 Claude 那套不同，这里从 `UserPromptSubmit` 起计时，而不是第一次工具调用。Codex 直接接着跑的回合边界——`/goal` 自动续跑、排队的后续提问——会从会话 rollout 里识别出来，既不弹也不清零。
 - **回合结束后才绑定标签页。** Codex TUI 干活时会不停刷新标签页标题，Claude 那种回合中途的标记探测在这里注定失败；所以 Stop 钩子交给一个后台进程，等约 1.5 秒标题静止后再绑定（会重试穿过 Codex 生成线程标题的动画），然后才投递。通知比回合结束晚一两秒，「Finished after」的时长是准的。
-- **设置**在 `~/.codex/ghostty-notify/config.json`：首次安装把 Claude `settings.json` 里所有 `GHOSTTY_NOTIFY_*` 偏好复制过来（没有则 180 / 600 / 1200 秒）；脚本认的任何开关——阈值、`GHOSTTY_NOTIFY_BACKEND`、`GHOSTTY_NOTIFY_ALERTER`……——都可以写在这个文件里，环境变量优先。
+- **设置**在 `~/.codex/ghostty-notify/config.json`：首次安装把 Claude `settings.json` 里所有 `GHOSTTY_NOTIFY_*` 偏好复制过来（没有则 180 / 600 / 1200 秒）；脚本认的任何开关——阈值、`GHOSTTY_NOTIFY_BACKEND`、`GHOSTTY_NOTIFY_AGENT_APP`……——都可以写在这个文件里，环境变量优先。
 - **会话标题**：优先用 Codex 自己存的线程名，否则用会话第一句提问。
 - **只有终端会话会弹。** 同一个 `hooks.json` 也会被 Codex 桌面端的线程、以及其他 agent 拉起的 `codex mcp-server` 触发；它们没有可跳回的 tab，一律跳过。
-- **原生 agent 也管 Codex。** 装了 [agent](#5-可选原生-agent) 之后，Codex 的通知同样由它发：点击必达、精确撤回、菜单栏列表，和 Claude 的一样；新提问也同样经它撤回。想让 Codex 留在 shell 路径，在 `config.json` 里把 `GHOSTTY_NOTIFY_AGENT_APP` 设成空字符串。
+- **原生 agent 也管 Codex。** 装了 [agent](#5-原生-agent) 之后，Codex 的通知同样由它发：点击必达、精确撤回、菜单栏列表，和 Claude 的一样；新提问也同样经它撤回。想让 Codex 留在 shell 路径，在 `config.json` 里把 `GHOSTTY_NOTIFY_AGENT_APP` 设成空字符串。
 - **Codex 自带的回合完成提醒**会被关掉以免重复：`[tui] notifications` 改成 `["approval-requested", "plan-mode-prompt"]`，审批和 plan 模式的提问照常提醒。因此短于阈值的回合不会有任何提醒。
 - **重跑安装器不会丢掉信任。** Codex 按条目在 `hooks.json` 里的位置和定义记信任；安装器原地更新自己的条目，更新脚本本身也不需要重新信任。如果删除旧条目不得不挪动了你自己的 hook，它会说明。
 - **从旧版 `notify` 回调升级**：安装器会删掉旧版写入的 `notify`——包括被 Codex 桌面端 Computer Use 用 `--previous-notify` 包过一层的情况（那层包装让每条通知晚两分钟），并保留包装器自己的部分；同时删掉 `PreToolUse` 那条。
@@ -71,13 +71,13 @@ Claude Code 自带的「任务完成」信号,是在你当前正看着的那个 
 
 - **落在精确的那个 tab。** 一个 OSC 2 marker + 一次 AppleScript 查询,每个 session 只做一次就锁定精确的 surface,同一目录的两个会话永不混淆。
 - **短任务不刷屏。** 上面三档全是环境变量 —— 按你自己的节奏调。
-- **点击是真能用的。** 优先用 `alerter` 的提醒样式 **Go to tab** 按钮(新版 macOS 会静默丢掉横幅样式通知上的 action 点击);缺失时降级到 `terminal-notifier`。
-- **你一回来,通知自己消失。** 聚焦到会话所在的 tab —— 不管是点通知跳回来还是自己切回来 —— 右上角的提醒立即自动清除;在会话里提交新 prompt 也会清除。角落和通知中心都不会越积越多。背后的 watcher 只活到通知消失为止(清除、点击或超时都会让它退出)。用 `GHOSTTY_NOTIFY_CLEAR_ON_FOCUS=0` 关闭。
+- **点击是真能用的。** 一个常驻小程序以自己的身份发出每条通知、自己接住点击,所以点击一定送到知道这个会话在哪个 tab 的那个进程。
+- **你一回来,通知自己消失。** 聚焦到会话所在的 tab —— 不管是点通知跳回来还是自己切回来 —— 右上角的提醒立即自动清除;在会话里提交新 prompt 也会清除。角落和通知中心都不会越积越多。用 `GHOSTTY_NOTIFY_CLEAR_ON_FOCUS=0` 关闭。
 - **永远不需要辅助功能权限。** 用 Ghostty 原生 AppleScript `select tab`,不是模拟按键。
 - **多会话、resume 无碍。** 状态按 `session_id` 做 key,`--resume` 之后依然稳定。
 - **报得出是哪个会话。** 副标题以会话标题开头 —— 优先读 hook 的 `session_title` 字段,否则取 transcript 里最后一条 `custom-title` 记录(`/rename` 手动或改名插件写入),再否则取最后一条自动生成的 `ai-title` 记录 —— 同一目录下开五个会话也能一眼分清。优先级和 `--resume` 选择器完全一致。
 - **为真实使用做了加固。** 中断/崩溃重新计时、Ghostty 不可脚本化及 tmux 降级、marker 往返串行化、配置 fail-closed、AppleScript 防注入 —— 每条都有回归测试、都受 CI 把关。
-- **完全归你掌控。** 就是几个小 bash hook —— 没有常驻进程、没有 Node、没有遥测 —— 不受 Claude Code 和插件升级影响。
+- **完全归你掌控。** 几个小 bash hook,加一个你自己编译的、平时什么都不做的常驻小程序 —— 没有 Node、没有遥测 —— 不受 Claude Code 和插件升级影响。
 
 通知在任务完成(`Stop`)时弹。权限/输入提示默认静默;设 `GHOSTTY_NOTIFY_ON_PROMPT=1` 可在 Claude 卡在后台 tab 的提示上时立刻收到提醒(不跑 bypass-permissions 模式的话推荐打开)。
 
@@ -88,11 +88,13 @@ Claude Code 自带的「任务完成」信号,是在你当前正看着的那个 
 ### 1. 依赖
 
 ```bash
-brew install jq alerter
+brew install jq
+xcode-select --install     # Swift 工具链,用来编译通知程序
 ```
 
 - **jq** —— 解析 Claude Code 喂给 hook 的 JSON
-- **alerter** —— 带 action 按钮的 persistent 样式通知(原生 `terminal-notifier` 在 Banner 样式下点击不稳定)
+- **Swift 工具链** —— 编译[第 5 步](#5-原生-agent)的通知程序,通知由它发出、点击由它接
+- **terminal-notifier**(可选,`brew install terminal-notifier`)—— 编译不了通知程序的机器上的兜底,只能看见通知、点了不跳转(它的 action 连 dismiss 都会触发,分不出来)
 
 ### 2. 插件
 
@@ -107,17 +109,19 @@ hook 通过插件 manifest 自动注册 —— **不需要手动改 `settings.js
 
 ### 3. 一个 macOS 系统设置
 
-**系统设置 → 通知 → 提醒样式 → 提醒 (Persistent)**,**Script Editor 和 Terminal 两个条目都设**(机器上有哪个设哪个)。装了[原生 agent](#5-可选原生-agent) 之后要设的是 **Claude Ghostty Notify** 这个条目 —— agent 会自己检测到设错并弹窗带你去那一页。
+**系统设置 → 通知 → Claude Ghostty Notify → 提醒样式 → 提醒 (Persistent)。**
 
-> 通知挂在哪个 bundle 下取决于 alerter 版本:老版 alerter(≤1.x,ObjC)借用 Script Editor 的 bundle,而 alerter 26.x(Swift 重写版)默认是 `com.apple.Terminal`(它的 `--help` 写着 `--sender ... (default: com.apple.Terminal)`)。两个都设没有副作用,能覆盖任一版本。**提醒 (Persistent)** 样式会让通知留在屏幕上、直接显示 **Go to tab** 按钮;**横幅 (Banner)** 样式一闪即逝,按钮藏在 "Show" 折叠菜单里,点击不稳定。
+这个条目在第 5 步 agent 申请过权限之后才会出现;agent 自己也会检测到设错并弹窗带你去那一页。
+
+> **提醒 (Persistent)** 样式会让通知留在屏幕上直到你处理它,并直接显示 **Go to tab** 按钮;**横幅 (Banner)** 样式几秒就滑走,按钮藏在 "Show" 折叠菜单里,只能从通知中心或菜单栏图标回去。
 
 ### 4. 重启 Claude Code
 
 退出再打开,新 hook 才会被加载。默认阈值(3 分钟 / 10 分钟 / 20 分钟超时)开箱即用,想调见 [配置](#配置)。
 
-### 5. 可选:原生 agent
+### 5. 原生 agent
 
-上面几步已经能用。agent 把投递换成一个常驻 app,同时开好几个 session 的话值得装:
+它才是把「一条通知」变成「跳回那个 tab」的东西。编译一次即可:
 
 ```bash
 bash scripts/build-agent.sh     # 需要 Swift 工具链(xcode-select --install)
@@ -126,18 +130,18 @@ bash scripts/install-agent.sh   # 把 app 拷到固定位置、装 LaunchAgent�
 
 安装会把 bundle 拷到 `~/Library/Application Support/claude-ghostty-notify/`,LaunchAgent 指向那份拷贝,所以仓库随便挪、随便删 —— 直接指向仓库目录的 LaunchAgent 会在仓库改名那天静默失效。每次重新 build 之后要再跑一次安装。Codex 会话用的是同一个 agent(见[上文](#codex-也可以用))。
 
-区别:
+它带来什么:
 
-- **点击一定送到认识那个 tab 的进程。** 所有 `alerter` 进程都以同一个身份(`com.apple.Terminal`)发通知,macOS 把点击随便派给其中一个进程;不是它发的通知它就丢掉,真正发通知的那个只被告知「通知没了」—— 于是通知消失、什么都不跳。同时开着好几个会话、各自都在经 `alerter` 发和清通知时,丢掉的点击不在少数。agent 是一个进程、有自己的 bundle 身份,每次点击都落在知道 tab 的地方。
-- **一个进程,而不是每条通知一个。** shell 路径每弹一条通知就派一个 watcher,每秒醒一次直到你回来;agent 订阅 app 激活事件,两条通知之间什么都不做。
+- **点击落得到实处。** 它有自己的 bundle 身份,macOS 会把点击交给知道这个会话在哪个 tab 的那个进程。(它取代的 `alerter` 后端是以 `com.apple.Terminal` 身份发通知的,机器上每个 alerter 进程共用这个身份,macOS 把点击随便派给其中一个,而那个进程不认识这条通知就丢掉。同时开好几个会话时,丢掉的点击不在少数 —— 这也是 shell 路径干脆不再提供跳转的原因。)
+- **一个闲着的进程。** 它订阅 app 激活事件,两条通知之间什么都不做 —— 不轮询,也不会为每条通知派进程。
 - **精确撤回。** 它经 `UNUserNotificationCenter` 发送、按 identifier 撤回,所以同一 session 的新通知会**替换**旧的而不是堆叠。
 - **菜单栏图标**,图标上就带着「几个 session 在等你」的计数,菜单里逐条列出 —— 每一行原样重复那条通知的内容,点一下跳到它的 tab。在 Temporary 提醒样式下通知没等你点就滑走了,这是唯一的回去的路。它同时显示是否已授权、macOS 给它的提醒样式是哪种 —— 否则一个显示不出任何东西的后台进程,和一个正常工作的长得一模一样。
 
-安装时会要两个权限,都是一次性的:通知、以及控制 Ghostty(点击跳转要用)。两个都要允许。用专注模式的话,把 **Claude Ghostty Notify** 也加进它的允许列表 —— shell 路径是以 Terminal 身份发通知的,你的专注模式可能早就放行了它,而 agent 在系统眼里是另一个 app。
+安装时会要两个权限,都是一次性的:通知、以及控制 Ghostty(点击跳转要用)。两个都要允许。用专注模式的话,把 **Claude Ghostty Notify** 也加进它的允许列表,否则它的通知会直接进通知中心,不弹也不响。
 
 > **通知权限那个一定要点「允许」。** 点「不允许」对该构建是**永久**的 —— macOS 不会在系统设置里留下开关可以撤销,唯一的出路是换一个 bundle identifier。
 
-卸载:`bash scripts/install-agent.sh --uninstall`(删 LaunchAgent 和那份拷贝),hook 会自动回落到 shell 路径。
+卸载:`bash scripts/install-agent.sh --uninstall`(删 LaunchAgent 和那份拷贝)。之后 hook 回落到 `terminal-notifier`,能看见通知但点了不跳。
 
 ### 手动安装(不用插件系统)
 
@@ -158,14 +162,13 @@ cd claude-ghostty-notify
 | `GHOSTTY_NOTIFY_MIN_ELAPSED`   | `180`  | 低于这个秒数(3 分钟):**静默** —— 完全不弹通知 |
 | `GHOSTTY_NOTIFY_SOUND_ELAPSED` | `600`  | 低于这个(10 分钟)但高于 MIN:**弹通知但无声** |
 | `GHOSTTY_NOTIFY_TIMEOUT`       | `1200` | 通知在屏幕上保留多久(20 分钟),到时自动消失 |
-| `GHOSTTY_NOTIFY_BACKEND`       | `auto` | `auto`(先 alerter,没有再 fallback 到 terminal-notifier)/ `terminal-notifier`(强制)。alerter 弹不出通知时设成 `terminal-notifier` —— 见排查那节。terminal-notifier 后端不接点击跳转(它的 `-execute` 连 dismiss 都会触发);强制 alerter 但二进制缺失时会降级到 terminal-notifier,而不是静默吞掉通知 |
+| `GHOSTTY_NOTIFY_BACKEND`       | `auto` | `auto` / `agent`(走 agent,它发不出来时回落到 `terminal-notifier`)或 `terminal-notifier`(直接跳过 agent)。兜底路径不接点击跳转:它的 action 连 dismiss 都会触发,分不出来 |
 | `GHOSTTY_NOTIFY_ON_PROMPT`     | `0`    | 设成 `1` 后,`Notification` 事件(权限/输入提示)也会立即弹通知 + Ping 音。不跑 bypass-permissions 模式的话推荐打开 |
-| `GHOSTTY_NOTIFY_CLEAR_ON_FOCUS` | `1`   | 聚焦到会话所在 tab 时自动清除通知,在该会话提交新 prompt 时同样清除。tab 未知时(tmux、Ghostty 不可脚本化)降级为「Ghostty 重新回到前台时清除」。用 `0`/`false`/`no`/`off` 关闭;其他值一律视为开启 |
-| `GHOSTTY_NOTIFY_FOCUS_POLL`    | `1`    | 聚焦检测的轮询间隔(秒,可用小数)。`0` 会让 watcher 空转,因此回落到默认值。走 agent 投递时无意义 —— 它没有轮询 |
+| `GHOSTTY_NOTIFY_CLEAR_ON_FOCUS` | `1`   | 聚焦到会话所在 tab 时自动清除通知,在该会话提交新 prompt 时同样清除。tab 未知时(tmux、Ghostty 不可脚本化)降级为「Ghostty 重新回到前台时清除」。走 `terminal-notifier` 兜底时只有「提交新 prompt」这一个触发。用 `0`/`false`/`no`/`off` 关闭;其他值一律视为开启 |
 | `GHOSTTY_NOTIFY_AGENT_APP`     | *(自动发现)* | agent bundle 的路径。设成**空字符串**可以钉住 shell 路径、无视已安装的 agent;不设则「有就用」—— 先找 `~/Library/Application Support/claude-ghostty-notify/` 下装好的那份;指向一个不是可执行 bundle 的路径会被拒绝而不是盲信。Codex 从 `~/.codex/ghostty-notify/config.json` 读它 |
 | `GHOSTTY_NOTIFY_MENU_BAR`      | `1`    | agent 的菜单栏图标。`0`/`false`/`no`/`off` 隐藏 —— 代价是失去待处理计数、逐条跳转的列表,以及「agent 还活着且有权限」的唯一可见凭据 |
 
-值必须是纯整数(秒),否则回落到默认值(`GHOSTTY_NOTIFY_FOCUS_POLL` 可用小数)。
+值必须是纯整数(秒),否则回落到默认值。
 
 **例子** —— 超过 30 秒的任务就弹通知,但只有超过 5 分钟的才响铃,通知挂 20 分钟才消失:
 
@@ -181,19 +184,13 @@ cd claude-ghostty-notify
 
 ### 完全看不到通知
 
-1. Script Editor **和 Terminal** 的 **Alert Style** 都改成 **Persistent** 了吗?(第 3 步 —— 通知挂在哪个 bundle 下取决于 alerter 版本)
+1. **Claude Ghostty Notify** 的提醒样式改成**提醒 (Persistent)** 了吗?(第 3 步)agent 在跑吗?`launchctl print gui/$(id -u)/io.github.davie521.cgnotify`
 2. 改完 env 有没有**重启** Claude Code?(第 4 步)
-3. macOS 的**勿扰 / 专注模式**开了吗?专注模式会把它没明确放行的 app 的通知**静默**送进通知中心 —— agent 日志照样写「posted」,`usernoted` 照样写「Presenting」。关掉它,或者把负责投递的 app 加进该专注模式的「允许的 app」:装了原生 agent 就是 **Claude Ghostty Notify**,shell 路径是 **Terminal**(alerter 26.x)或 **Script Editor**(旧版 alerter)。专注模式已经放行了 Terminal 不等于放行了 agent,所以换到 agent 之后通知可能「消失」,加进去就好。
+3. macOS 的**勿扰 / 专注模式**开了吗?专注模式会把它没明确放行的 app 的通知**静默**送进通知中心 —— agent 日志照样写「posted」,`usernoted` 照样写「Presenting」。关掉它,或者把 **Claude Ghostty Notify** 加进该专注模式的「允许的 app」。
 4. 检查 hook 跑过没:`ls ~/.claude/notifications/ghostty-sessions/`,应能看到当前 session 的 `<session_id>.json` 和 `.start` 文件。
-5. **alerter 跑了但通知就是不显示** —— 负责投递的 bundle 在系统设置里从来没被授权过通知。`alerter` 能跑完、正常退出,但 macOS 静默丢了显示。解决:强制走 terminal-notifier 后端(它有自己独立的通知授权):
+5. 看 agent 自己的记录:`~/.claude/notifications/ghostty-agent/agent.log` 会写它有没有起来、macOS 有没有授权、发了什么。菜单栏图标一眼能看到同样的信息。
 
-   ```json
-   "env": {
-     "GHOSTTY_NOTIFY_BACKEND": "terminal-notifier"
-   }
-   ```
-
-### 同时弹两条通知,其中一条是 Script Editor 图标、内容是我的 assistant 回复文字
+### 同时弹两条通知,另一条重复我的 assistant 回复文字
 
 那是 [everything-claude-code](https://github.com/affaan-m/everything-claude-code)(ECC)plugin 自带的 `stop:desktop-notify` hook,每次 Stop 都发它自己的通知,跟本项目撞了。只关掉它这一个 hook(ECC 其他功能保留):
 
@@ -203,13 +200,9 @@ cd claude-ghostty-notify
 }
 ```
 
-### 点通知跳出 Script Editor 的「新建文档」对话框,而不是跳回 Ghostty
+### 点了通知没反应
 
-说明你点的是通知**主体**,不是 **Go to tab** 按钮。`alerter` 默认把 body 点击路由到 `--sender` 对应的 app,而 Script Editor 被激活时默认就是弹新建文档框。要么总是点 **Go to tab**(推荐),要么打开 Ghostty 的通知权限、给脚本加 `--sender com.mitchellh.ghostty`(但 Ghostty 之后会发自己的 `notify-on-command-finish-after` 通知,可能更吵)。
-
-### 点了通知,它只是消失了,没有跳转
-
-shell 路径下所有 `alerter` 都以同一个 app 身份(`com.apple.Terminal`)发通知,macOS 可能把你的点击派给另一个 `alerter` 进程 —— 多半是别的会话刚为了清自己的通知而启动的那个。它不认识这条通知就丢掉点击,而发通知的那个只被告知「已被关闭」,于是什么都不跳。会话开得越多,发生得越频繁。装上[原生 agent](#5-可选原生-agent):一个进程、独立身份、每次点击都有人接。
+只有原生 agent 能路由点击。没装它时 hook 回落到 `terminal-notifier`,而它的 action 连 dismiss 都会触发,所以本项目在那条路径上干脆不接任何点击。装上 agent([第 5 步](#5-原生-agent))。
 
 ### 跳错 tab 了
 
@@ -217,55 +210,50 @@ shell 路径下所有 `alerter` 都以同一个 app 身份(`com.apple.Terminal`)
 2. 跑 Claude 的原 tab 被关了。点通知只会 activate Ghostty,跳不过去。
 3. 会话还开着、Ghostty 却重启过(tab id 只在一个 Ghostty 进程里有意义)。绑定会在该会话下一次工具调用时重新识别 —— Codex 是下一个回合结束时 —— 只有在那之前点的通知会落到「只激活 Ghostty」。
 
-### alerter 进程还挂着没退
-
-基本是历史问题了。`alerter` 会阻塞到你点按钮、超时(`GHOSTTY_NOTIFY_TIMEOUT` 秒),或者被聚焦清除机制回收(你聚焦到会话 tab 或提交新 prompt 时)。如果还有残留(比如设了 `GHOSTTY_NOTIFY_CLEAR_ON_FOCUS=0`):`pkill -f 'alerter.*ghostty-notify'`。
-
 ## 原理
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │ PreToolUse → ghostty-tab-save.sh          (每会话一次)  │
 │   往 tab 标题写 OSC 2 marker → AppleScript 找到这个 tab │
-│   → 把 {tab_id} 存到 per-session 文件                   │
+│   → 把 {tab_id, ghostty_pid} 存到 per-session 文件      │
 └─────────────────────────────────────────────────────────┘
 ┌─────────────────────────────────────────────────────────┐
 │ UserPromptSubmit → ghostty-round-reset.sh               │
 │   重新武装本轮计时器(扛得住 Esc / 崩溃)                 │
+│                  → ghostty-agent-anchor.sh              │
+│   告诉 agent 这个会话在哪个 tab,并让它撤回旧通知        │
 └─────────────────────────────────────────────────────────┘
 ┌─────────────────────────────────────────────────────────┐
 │ Stop → ghostty-notify.sh                                │
-│   耗时 ≥ MIN?→ 弹 alerter,带一个 "Go to tab" 按钮       │
+│   耗时 ≥ MIN?→ 往 agent 的队列目录丢一个 JSON 文件      │
 └─────────────────────────────────────────────────────────┘
-                          │  点 "Go to tab"
+                          │
                           ▼
 ┌─────────────────────────────────────────────────────────┐
-│ ghostty-tab-focus.sh                                    │
-│   读 {tab_id} → AppleScript select tab → 跳到那个 tab   │
-└─────────────────────────────────────────────────────────┘
-┌─────────────────────────────────────────────────────────┐
-│ 聚焦到会话所在 tab(或提交新 prompt)                     │
-│   → ghostty-notify-clear.sh 自动清除通知                │
+│ ClaudeGhosttyNotify.app(常驻)                           │
+│   发出通知 · 点击时选中 {tab_id} · 你回到那个 tab 时撤回 │
 └─────────────────────────────────────────────────────────┘
 ```
 
-**`ghostty-tab-save.sh`(每次 `PreToolUse`):** 从 stdin 读 `session_id` / `cwd`;记录开始时间戳;沿进程树找到 Claude 的 controlling TTY;先确认 Ghostty 可脚本化,再往 tab 标题写一个含 session ID 的独特 OSC 2 marker;通过 AppleScript 查现在哪个 tab 带着这个 marker;恢复原标题(`trap EXIT` 保底);保存 `{tab_id, cwd}`。这套 marker 舞每 session 只跑一次,并在锁的保护下串行执行,并发工具调用没法互相抢。Ghostty 没法被脚本化、或 marker 无法往返(比如在 tmux 里)时,它会退避,该 session 降级为只 activate。
+**`ghostty-tab-save.sh`(每次 `PreToolUse`):** 从 stdin 读 `session_id` / `cwd`;记录开始时间戳;沿进程树找到 Claude 的 controlling TTY;先确认 Ghostty 可脚本化,再往 tab 标题写一个含 session ID 的独特 OSC 2 marker;通过 AppleScript 查现在哪个 tab 带着这个 marker;恢复原标题(`trap EXIT` 保底);保存 `{tab_id, cwd, ghostty_pid}`。这套 marker 舞每 session 只跑一次,并在锁的保护下串行执行,并发工具调用没法互相抢;Ghostty 重启之后会再跑一次 —— tab id 只在一个 Ghostty 进程里有意义。Ghostty 没法被脚本化、或 marker 无法往返(比如在 tmux 里)时,它会退避,该 session 降级为只 activate。
 
-**`ghostty-notify.sh`(`Stop` 触发;开启后也在 `Notification` 触发):** 算出耗时,低于 `MIN_ELAPSED` 直接静默退出;否则先解析会话标题(stdin 有 `session_title` 字段就用它,否则取 transcript 里最后一条 `custom-title` 记录,再否则取最后一条 `ai-title` 记录),再在后台子 shell 里启动 `alerter`,带一个显式 **Go to tab** 按钮(低于 `SOUND_ELAPSED` 时无声)。子 shell 只有在点了按钮或点了通知主体(`@CONTENTCLICKED`)时才调 focus 脚本 —— dismiss / 超时啥也不做。同时记下阻塞 alerter 的 PID,并派生聚焦清除 watcher(见下)。Stop 时清时间戳,下一轮重新计时。
+**`ghostty-notify.sh`(`Stop` 触发;开启后也在 `Notification` 触发):** 算出耗时,低于 `MIN_ELAPSED` 直接静默退出;否则先解析会话标题(stdin 有 `session_title` 字段就用它,否则取 transcript 里最后一条 `custom-title` 记录,再否则取最后一条 `ai-title` 记录),然后把标题、副标题、正文、声音、超时和已解析的 `tab_id` 打包成一个 JSON 文件丢进 agent 的队列目录(靠 rename 发布)。Stop 时清时间戳,下一轮重新计时。agent 没装、没起、或没授权时,它会**可见地**降级到 `terminal-notifier`,而不是把通知吞掉。
 
-**`ghostty-round-reset.sh`(`UserPromptSubmit` 触发):** 清除本轮开始时间戳。用户中断(Esc/Ctrl-C)或崩溃时 Stop 不触发,没有它的话,残留的旧时间戳会把下一轮耗时算得离谱 —— 10 秒的小任务弹出带响铃的「Finished after 20m」假通知。同时顺手清掉这个会话还挂在屏幕上的旧通知 —— 你都提交新 prompt 了,说明人已经回到这个 tab 了。
+**`ghostty-round-reset.sh`(`UserPromptSubmit` 触发):** 清除本轮开始时间戳。用户中断(Esc/Ctrl-C)或崩溃时 Stop 不触发,没有它的话,残留的旧时间戳会把下一轮耗时算得离谱 —— 10 秒的小任务弹出带响铃的「Finished after 20m」假通知。同时让 `ghostty-notify-clear.sh` 去清掉兜底路径还挂在屏幕上的旧通知 —— 你都提交新 prompt 了,说明人已经回到这个 tab 了。
 
-**`ghostty-notify-clear.sh`(每条通知派生一个 watcher):** 先用免权限的 `lsappinfo` 轮询「Ghostty 是否前台」这个便宜条件,只有 Ghostty 在前台时才用 AppleScript 问 Ghostty 当前选中的是哪个 tab。一旦会话所在 tab 成为前台窗口的选中 tab,就按 group ID 移除已投递的通知(`alerter --remove` / `terminal-notifier -remove`)并杀掉阻塞的 `alerter` —— 被杀的 alerter 没有 action 输出,分发白名单本来就无视它,所以清除永远不会误触发跳转。tab 未知时(tmux、Ghostty 不可脚本化)降级为「Ghostty 回到前台」,且只认上升沿 —— 你正待在 Ghostty 别的 tab 里时弹的通知,不会在你看到之前就被清掉。alerter 自行结束(点击/超时)、被更新的 watcher 顶替、或到 `NOTIFY_TIMEOUT` 加宽限期时,watcher 自动退出。
+**`ghostty-agent-anchor.sh`(`UserPromptSubmit` 触发):** 告诉 agent 这个会话住在哪个 tab,再让它撤回该会话还在屏幕上的通知。用 marker 往返写下的那个文件来锚定,比 agent 自己在处理请求那一刻采样「当前选中哪个 tab」准得多。
 
-**`ghostty-tab-focus.sh`(点击时):** 激活 Ghostty,从 session 文件读 `tab_id`,用 Ghostty 原生 AppleScript `select tab` 命令切过去 —— 这是 sdef 里真实的 command(不是属性写入),所以**不需要辅助功能权限**。
+**`ghostty-notify-clear.sh`:** 兜底路径那一半的「回来就清除」。按 group ID 调 `terminal-notifier -remove`,并且带一道保护:在清除请求发出之后才投递的通知不会被误清。不轮询,也不派任何进程。
 
-**装了[原生 agent](#5-可选原生-agent) 之后,** 上面最后三块会合并进一个常驻进程。`ghostty-notify.sh` 仍然负责判断**要不要发、发什么**,然后把请求经 spool 目录(一个请求一个 JSON 文件,靠 rename 发布)交给 agent,而不是去调 `alerter`。agent 经 `UNUserNotificationCenter` 发送,靠 `NSWorkspace` 激活事件撤回(不是轮询),点击也由它自己处理 —— 所以不再派 watcher、没有任何东西按秒醒来、`ghostty-notify-clear.sh` 完全不会跑。macOS 没给 agent 授权时它会**拒收**请求,这正是让 hook 退回 `alerter` 而不是静默丢掉通知的机制。
+**agent(`ClaudeGhosttyNotify.app`):** 一个由 LaunchAgent 拉起的常驻 accessory app,负责消费队列。它经 `UNUserNotificationCenter` 发送,每个会话用一个稳定的 identifier —— 所以同一会话的新通知是**替换**旧的而不是堆叠;点击时用 Ghostty 原生 AppleScript `select tab` 选中该会话的 tab(这是 sdef 里真实的 command,不是属性写入,所以**不需要辅助功能权限**);Ghostty 回到前台且选中的正是那个 tab 时撤回通知,靠的是 `NSWorkspace` 激活事件而不是轮询;并且带一个菜单栏图标,列出正在等你的会话。
 
 ### 设计决策说明
 
 - **为什么用 `session_id` 而不是 `$PPID`?** Claude Code 每次 hook 触发会 fork 中间 shell,PID 不固定。`session_id`(从 hook stdin JSON 读)在整个会话(含 `--resume` 后)都稳定。
 - **为什么用 OSC 2 marker 而不是按 `cwd` 匹配?** 同一目录下开两个 session 时 `cwd` 一样,分不清。marker 给每个 session 独特信号,无论多少 tab 在同一目录都能精确命中。
-- **为什么用 `alerter` 而不是 `terminal-notifier`?** 新版 macOS 在 Banner 样式下会静默丢掉 `terminal-notifier -execute` 的点击。`alerter` 本身就是 alert 样式 + 明确的 action 按钮,点击可靠。
+- **为什么用常驻程序而不是 `alerter`?** 每个 `alerter` 进程都以 `com.apple.Terminal` 身份发通知,机器上所有 alerter 共用这个身份;macOS 把点击随便派给其中一个,不是它发的就丢掉,真正发通知的那个只被告知「通知没了」。会话一多,跳转就成了碰运气,所以 alerter 后端已经删除。agent 用自己的 bundle 身份发通知,也自己接点击。
+- **为什么还留着 `terminal-notifier`?** 它不需要任何工具链,所以编译不了 agent 的机器至少还能**看见**任务结束了。它没法路由点击(action 连 dismiss 都会触发),所以本项目在那条路径上不接点击。
 
 ## 卸载
 
@@ -277,7 +265,6 @@ shell 路径下所有 `alerter` 都以同一个 app 身份(`com.apple.Terminal`)
 
 ```bash
 rm -f ~/.claude/hooks/ghostty-tab-save.sh \
-      ~/.claude/hooks/ghostty-tab-focus.sh \
       ~/.claude/hooks/ghostty-notify.sh \
       ~/.claude/hooks/ghostty-round-reset.sh \
       ~/.claude/hooks/ghostty-notify-clear.sh \

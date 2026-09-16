@@ -238,8 +238,8 @@ class CodexHookTests(unittest.TestCase):
         """A fake agent bundle at the installed location, reported alive and
         authorized. This test process stands in for the agent (the liveness
         check is `kill -0` plus what ps says the pid runs), `open` is stubbed
-        so nothing is launched, and alerter is made unavailable so the only
-        other way out is the recording terminal-notifier."""
+        so nothing is launched, and the only other way out is the recording
+        terminal-notifier."""
         app = self.root / "Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app"
         (app / "Contents/MacOS").mkdir(parents=True)
         self.script(app / "Contents/MacOS/ghostty-notify-agent", "#!/bin/sh\nexit 0\n")
@@ -251,7 +251,6 @@ class CodexHookTests(unittest.TestCase):
         os.environ.update({
             "FAKE_AGENT_PID": str(os.getpid()),
             "GHOSTTY_NOTIFY_BACKEND": "auto",
-            "GHOSTTY_NOTIFY_ALERTER": str(self.root / "no-alerter"),
         })
         return agent_root / "spool"
 
@@ -288,7 +287,6 @@ class CodexHookTests(unittest.TestCase):
         # Nothing reached the shell backends, and no watcher was spawned: the
         # agent withdraws on focus by itself.
         self.assertEqual(self.notices(), [])
-        self.assertFalse((self.state / (SID + ".watch-pid")).exists())
         self.assertFalse((self.state / (SID + ".start")).exists())
 
     def test_config_can_pin_the_shell_path(self):
@@ -517,77 +515,43 @@ class CodexHookTests(unittest.TestCase):
         self.wait_until(lambda: not (self.state / (SID + ".start")).exists())
         self.assertEqual(tty.read_text(), "")
 
-    # ── Click routing through the real focus/clear scripts ──────────────────
-    def install_action_backend(self, action):
+    # ── The fallback path for a Codex session ───────────────────────────────
+    def test_fallback_clears_on_the_next_prompt(self):
+        """Without the agent, terminal-notifier shows the alert and the next
+        prompt in that session takes it down — through Codex's own group, not
+        Claude's."""
         self.bind()
         (self.state / (SID + ".json")).write_text('{"tab_id":"codex-target-tab"}')
-        alerter = self.bin / "alerter"
-        self.script(alerter,
-            '#!/usr/bin/python3\nimport json, os, sys, time\nfrom pathlib import Path\n'
-            'root = Path(os.environ["NOTIFY_TEST_LOG"]).parent\n'
-            'if "--help" in sys.argv: print("--close-label --remove")\n'
-            'elif "--remove" in sys.argv: (root / "removed").write_text(sys.argv[sys.argv.index("--remove") + 1])\n'
-            'else:\n'
-            '    (root / "posted").touch()\n'
-            '    time.sleep(0.2 if os.environ["TEST_ACTION"] else 15)\n'
-            '    print(os.environ["TEST_ACTION"])\n')
-        self.script(self.bin / "osascript", OSASCRIPT)
-        self.script(self.bin / "lsappinfo", '#!/bin/sh\nprintf "com.mitchellh.ghostty\\n"\n')
-        # The owner is cached, so the adapter needs no ps; the watcher must
-        # see real processes to validate the PIDs it kills.
-        (self.bin / "ps").unlink()
-        os.environ.update({
-            "GHOSTTY_NOTIFY_ALERTER": str(alerter),
-            "GHOSTTY_NOTIFY_BACKEND": "alerter",
-            "GHOSTTY_NOTIFY_FOCUS_POLL": "0.1",
-            "TEST_ACTION": action,
-        })
-        self.addCleanup(lambda: subprocess.run(
-            ["/bin/bash", str(self.installed / "ghostty-notify-clear.sh"), SID],
-            env={**os.environ, "GHOSTTY_NOTIFY_SESSION_DIR": str(self.state),
-                 "GHOSTTY_NOTIFY_GROUP_PREFIX": "codex-ghostty-notify"},
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5))
-
-    def alerter_gone(self):
-        pid_file = self.state / (SID + ".alerter-pid")
-        if not pid_file.exists():
-            return False
-        try:
-            os.kill(int(pid_file.read_text()), 0)
-            return False
-        except (ProcessLookupError, ValueError):
-            return True
-
-    def test_go_to_tab_focuses_the_codex_binding(self):
-        self.install_action_backend("Go to tab")
-        self.run_hook("Stop")
-        focused = self.root / "focused"
-        self.wait_until(focused.exists)
-        self.assertEqual(focused.read_text(), "codex-target-tab")
-
-    def test_dismiss_never_focuses(self):
-        self.install_action_backend("Dismiss")
-        self.run_hook("Stop")
-        self.wait_until(self.alerter_gone)
-        # A wrongly dispatched focus lands about 0.5 s after the alerter
-        # exits (two osascript spawns); wait well past that before deciding.
-        time.sleep(2)
-        self.assertFalse((self.root / "focused").exists())
-
-    def test_alert_survives_other_tab_then_clears_on_return(self):
-        self.install_action_backend("")
         os.environ["GHOSTTY_NOTIFY_CLEAR_ON_FOCUS"] = "1"
+        # Recorder that also logs -remove, so the clear is observable.
+        self.script(self.bin / "terminal-notifier",
+            '#!/usr/bin/python3\nimport json, os, sys\nfrom pathlib import Path\n'
+            'root = Path(os.environ["NOTIFY_TEST_LOG"]).parent\n'
+            'if sys.argv[1:2] == ["-remove"]: (root / "removed").write_text(sys.argv[2])\n'
+            'else:\n'
+            '    with open(os.environ["NOTIFY_TEST_LOG"], "a") as f:\n'
+            '        f.write(json.dumps(sys.argv[1:]) + "\\n")\n')
         self.run_hook("Stop")
-        self.wait_until((self.root / "posted").exists)
-        # The watcher polls every 0.1 s; a wrong clear would land within
-        # two polls, so a full second is a comfortable margin.
-        time.sleep(1)
-        self.assertFalse((self.root / "removed").exists())
-        (self.root / "selected").touch()
-        self.wait_until((self.root / "removed").exists)
+        self.wait_until(self.notices)
+        self.assertEqual(self.notices()[0]["-group"], "codex-ghostty-notify-" + SID)
+        self.assertTrue((self.state / (SID + ".notified")).exists(), "delivery was not stamped")
+        self.assertFalse((self.root / "removed").exists(), "cleared before the user came back")
+        self.run_hook("UserPromptSubmit", prompt="back")
+        self.wait_until(lambda: (self.root / "removed").exists())
         self.assertEqual((self.root / "removed").read_text(), "codex-ghostty-notify-" + SID)
-        self.wait_until(lambda: not (self.state / (SID + ".alerter-pid")).exists())
-        self.assertFalse((self.root / "focused").exists())
+
+    def test_fallback_leaves_no_process_behind(self):
+        """The alerter backend used to leave a blocking process and a polling
+        watcher per notification. Neither exists any more."""
+        self.bind()
+        self.run_hook("Stop")
+        self.wait_until(self.notices)
+        time.sleep(0.5)
+        self.assertFalse((self.state / (SID + ".watch-pid")).exists())
+        self.assertFalse((self.state / (SID + ".alerter-pid")).exists())
+        leftover = subprocess.run(["pgrep", "-f", "ghostty-notify-clear"],
+                                  capture_output=True, text=True).stdout.split()
+        self.assertEqual(leftover, [], "a watcher process outlived the hook")
 
 
 class InstallerTests(unittest.TestCase):

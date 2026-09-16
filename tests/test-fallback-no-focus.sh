@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Regression test for fire_with_terminal_notifier fallback path.
+# Regression test for fire_with_terminal_notifier, the fallback used when
+# the resident agent cannot deliver.
 #
-# When alerter is missing, the hook falls back to terminal-notifier. This
-# path must NOT wire click-to-focus (-execute / -activate), because
-# terminal-notifier fires the command on any click with no way to filter
-# dismiss — the same bug the alerter whitelist fixes. We intentionally
-# degrade: notification shows, click does nothing automatic, user
-# navigates manually.
+# This path must NOT wire click-to-focus (-execute / -activate):
+# terminal-notifier fires the command on ANY click with no way to filter a
+# dismiss, so wiring it would make dismissing an alert jump to the tab. We
+# intentionally degrade instead — the notification shows, the click does
+# nothing, the user navigates manually, and click-to-jump is what the
+# resident agent is for.
 
 set -u
 IFS=$'\n\t'
@@ -29,11 +30,6 @@ mkdir -p \
     "$HOME/.local/bin" \
     "$SANDBOX/bin"
 
-# Deliberately point the hook at a nonexistent alerter so it falls back.
-# (The env override keeps the test hermetic — without it, a real alerter on
-# the developer machine's PATH would be picked up by the hook's discovery.)
-export GHOSTTY_NOTIFY_ALERTER="$SANDBOX/no-such-alerter"
-
 # Fake terminal-notifier: records all args the hook passes.
 TN_LOG="$SANDBOX/tn-args.log"
 cat > "$SANDBOX/bin/terminal-notifier" <<SH
@@ -42,22 +38,10 @@ printf '%s\n' "\$@" > "$TN_LOG"
 SH
 chmod +x "$SANDBOX/bin/terminal-notifier"
 
-# Stub focus script: should never be invoked on this path.
-FOCUS_MARKER="$SANDBOX/focus-fired"
-cat > "$HOME/.claude/hooks/ghostty-tab-focus.sh" <<SH
-#!/bin/bash
-echo fired > "$FOCUS_MARKER"
-SH
-chmod +x "$HOME/.claude/hooks/ghostty-tab-focus.sh"
-export GHOSTTY_NOTIFY_FOCUS_SCRIPT="$HOME/.claude/hooks/ghostty-tab-focus.sh"
-
 export TERM_PROGRAM=ghostty
 export GHOSTTY_NOTIFY_MIN_ELAPSED=10
 export GHOSTTY_NOTIFY_TIMEOUT=1
 export GHOSTTY_NOTIFY_BACKEND=auto   # pin against host env overrides
-# Not under test, and its watcher would poll the real lsappinfo/osascript
-# and outlive the run (see tests/test-clear-on-focus.sh for its coverage).
-export GHOSTTY_NOTIFY_CLEAR_ON_FOCUS=0
 # The terminal-notifier fallback is the whole subject here; the resident agent
 # would deliver instead and never touch the stub. Empty disables it.
 export GHOSTTY_NOTIFY_AGENT_APP=""
@@ -107,13 +91,19 @@ else
     pass=$((pass + 1))
 fi
 
-# 4. Focus script was not invoked.
-if [[ -f "$FOCUS_MARKER" ]]; then
-    printf '  \033[31mFAIL\033[0m  focus script ran during fallback flow\n'
+# 4. The fallback leaves nothing running: no click handler, no watcher.
+#    Anything still alive here would be a process outliving the hook for a
+#    notification nobody can click.
+# The pattern must not match this script's own command line: the repository
+# directory is called claude-ghostty-notify, so a bare "ghostty-notify"
+# counts the test itself and every shell that invoked it.
+LEFTOVER=$(pgrep -f "ghostty-notify-clear" 2>/dev/null | wc -l | tr -d ' ')
+if [[ "$LEFTOVER" != "0" ]]; then
+    printf '  \033[31mFAIL\033[0m  fallback left %s process(es) behind\n' "$LEFTOVER"
     fail=$((fail + 1))
-    fail_list+=("focus script fired")
+    fail_list+=("processes left behind")
 else
-    printf '  \033[32mPASS\033[0m  focus script did NOT run\n'
+    printf '  \033[32mPASS\033[0m  fallback leaves no process behind\n'
     pass=$((pass + 1))
 fi
 

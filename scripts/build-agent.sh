@@ -61,7 +61,7 @@ for icon in \
 done
 
 # UNNotificationSound resolves a named sound against the app bundle, not against
-# /System/Library/Sounds — unlike alerter and terminal-notifier, whose vocabulary
+# /System/Library/Sounds — unlike terminal-notifier, whose vocabulary
 # the hooks speak ("Glass", "Ping"). Copy those in so the time-tiered sounds
 # actually play; the agent falls back to the system default for anything missing.
 for sound in /System/Library/Sounds/*.aiff; do
