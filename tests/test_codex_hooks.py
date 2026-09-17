@@ -165,23 +165,39 @@ class CodexHookTests(unittest.TestCase):
 
     @staticmethod
     def hook_group_gone(group):
-        try:
-            os.killpg(group, 0)
-            return False
-        except ProcessLookupError:
-            return True
+        # killpg(group, 0) can report EPERM during runner teardown. Inspect
+        # the exact group instead: zombies cannot write into the sandbox.
+        # Use the real ps, not the ancestry stub installed on this test's PATH.
+        snapshot = subprocess.check_output(
+            ["/bin/ps", "-axo", "pgid=,stat="], text=True)
+        return not any(fields[0] == str(group) and not fields[1].startswith("Z")
+                       for line in snapshot.splitlines()
+                       if len(fields := line.split()) == 2)
 
     def stop_hook_group(self, group):
         # Every hook gets its own session. Reap/stop only this test's workers
         # before TemporaryDirectory removes the files they can still write.
         if self.hook_group_gone(group):
             return
-        os.killpg(group, signal.SIGTERM)
+        try:
+            os.killpg(group, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        except PermissionError:
+            if self.hook_group_gone(group):
+                return
+            raise
         deadline = time.monotonic() + 2
         while time.monotonic() < deadline and not self.hook_group_gone(group):
             time.sleep(0.01)
         if not self.hook_group_gone(group):
-            os.killpg(group, signal.SIGKILL)
+            try:
+                os.killpg(group, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                if not self.hook_group_gone(group):
+                    raise
 
     def notices(self):
         if not self.log.exists():
@@ -689,6 +705,29 @@ class CodexHookTests(unittest.TestCase):
         self.assertEqual((self.root / "removed").read_text(), "codex-ghostty-notify-" + SID)
         self.wait_until(lambda: not (self.state / (SID + ".alerter-pid")).exists())
         self.assertFalse((self.root / "focused").exists())
+
+
+class HookCleanupTests(unittest.TestCase):
+    def test_only_live_members_of_the_exact_group_prevent_cleanup(self):
+        for snapshot, gone in (("41 Z\n42 S\n", True), ("42 S\n", True),
+                               ("41 Z\n41 S\n", False), ("41 T\n", False)):
+            with self.subTest(snapshot=snapshot), \
+                    patch("os.killpg", side_effect=PermissionError), \
+                    patch("subprocess.check_output", return_value=snapshot):
+                self.assertEqual(CodexHookTests.hook_group_gone(41), gone)
+
+    def test_cleanup_tolerates_exit_between_probe_and_signal(self):
+        case = CodexHookTests()
+        with patch.object(case, "hook_group_gone", return_value=False), \
+                patch("os.killpg", side_effect=ProcessLookupError):
+            case.stop_hook_group(41)
+
+    def test_permission_error_is_not_silently_ignored_for_a_live_group(self):
+        case = CodexHookTests()
+        with patch.object(case, "hook_group_gone", return_value=False), \
+                patch("os.killpg", side_effect=PermissionError):
+            with self.assertRaises(PermissionError):
+                case.stop_hook_group(41)
 
 
 class InstallerTests(unittest.TestCase):
