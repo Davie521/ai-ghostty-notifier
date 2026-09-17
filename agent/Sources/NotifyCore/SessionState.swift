@@ -2,6 +2,8 @@ import Foundation
 
 /// What the agent remembers about one Claude session.
 public struct SessionRecord: Equatable, Sendable {
+    public var roundID: String?
+    public var owner: String?
     /// Ghostty tab id this session lives in, or nil when it could never be
     /// resolved — tmux, a session started while Ghostty was in the background,
     /// or AppleScript being unavailable.
@@ -34,7 +36,9 @@ public struct SessionRecord: Equatable, Sendable {
         title: String = "",
         subtitle: String = "",
         body: String = "",
-        postedAt: Double = 0
+        postedAt: Double = 0,
+        roundID: String? = nil,
+        owner: String? = nil
     ) {
         self.tabID = tabID
         self.notificationIDs = notificationIDs
@@ -44,6 +48,8 @@ public struct SessionRecord: Equatable, Sendable {
         self.subtitle = subtitle
         self.body = body
         self.postedAt = postedAt
+        self.roundID = roundID
+        self.owner = owner
     }
 
     /// Drop the notification's text once nothing is on screen for this session.
@@ -55,6 +61,7 @@ public struct SessionRecord: Equatable, Sendable {
     /// notification is gone buys nothing, since no reader looks at it once
     /// `notificationIDs` is empty.
     mutating func clearNotice() {
+        roundID = nil
         title = ""
         subtitle = ""
         body = ""
@@ -88,7 +95,7 @@ public struct SessionState: Equatable, Sendable {
     /// identifier that is already delivered *replaces* it, so a session that
     /// stops repeatedly leaves one notification rather than a stack.
     public static func notificationID(sessionID: String) -> String {
-        "claude-\(sessionID)"
+        sessionID.hasPrefix("codex-") ? sessionID : "claude-\(sessionID)"
     }
 
     /// Point a session at a tab. Passing nil records the session without a tab
@@ -98,6 +105,17 @@ public struct SessionState: Equatable, Sendable {
         var record = sessions[sessionID] ?? SessionRecord()
         if let tabID, !tabID.isEmpty { record.tabID = tabID }
         record.updatedAt = now
+        sessions[sessionID] = record
+    }
+
+    /// A resumed CLI in another terminal invalidates BOTH the disk binding and
+    /// the resident cache. Otherwise a failed new lookup keeps the old tab even
+    /// though the journal correctly deleted its JSON file.
+    public mutating func captureOwner(sessionID: String, owner: String?) {
+        guard let owner, !owner.isEmpty else { return }
+        var record = sessions[sessionID] ?? SessionRecord()
+        if record.owner != owner { record.tabID = nil }
+        record.owner = owner
         sessions[sessionID] = record
     }
 
@@ -114,7 +132,8 @@ public struct SessionState: Equatable, Sendable {
         title: String = "",
         subtitle: String = "",
         body: String = "",
-        now: Double
+        now: Double,
+        roundID: String? = nil
     ) -> String {
         let id = Self.notificationID(sessionID: sessionID)
         var record = sessions[sessionID] ?? SessionRecord()
@@ -127,6 +146,7 @@ public struct SessionState: Equatable, Sendable {
         record.subtitle = subtitle
         record.body = body
         record.postedAt = now
+        record.roundID = roundID
         sessions[sessionID] = record
         return id
     }
@@ -174,6 +194,15 @@ public struct SessionState: Equatable, Sendable {
         record.clearNotice()
         sessions[sessionID] = record
         return ids
+    }
+
+    /// A late prompt from the same generation must not clear its own Stop's
+    /// notification. Legacy notices have no round and are eligible for clearing.
+    public mutating func takePreviousRoundNotifications(sessionID: String, roundID: String)
+        -> [String]
+    {
+        guard sessions[sessionID]?.roundID != roundID else { return [] }
+        return takeNotifications(sessionID: sessionID)
     }
 
     /// Drop one identifier — the notification center already removed it,

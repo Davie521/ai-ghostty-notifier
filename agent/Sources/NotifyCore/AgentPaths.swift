@@ -18,7 +18,7 @@ public enum AgentConstants {
     /// Written by the agent once the notification authorization answer is
     /// known. The hooks read it to decide whether routing through the agent
     /// would actually display anything; they match only `readyAuthorized`, so
-    /// every other value falls back to the shell delivery path.
+    /// every other value selects the native external-backend fallback.
     public static let readyAuthorized = "authorized"
     /// The dialog was shown and the user clicked "Don't Allow" — permanent for
     /// this bundle identifier.
@@ -55,7 +55,7 @@ public struct AgentPaths: Equatable, Sendable {
     /// "agent needs launching" without spawning anything.
     public var pidFile: String { root + "/agent.pid" }
     /// Holds `authorized` or `denied`. A hook that finds anything else must
-    /// assume the agent cannot display a notification and use the shell path.
+    /// assume the agent cannot display a notification and use a native worker.
     public var readyFile: String { root + "/ready" }
     /// Holds `banner`, `alert` or `none` — the notification style macOS has
     /// recorded for this app. An app cannot set it (Apple removed that), so the
@@ -90,6 +90,8 @@ public enum StateCodec {
             var subtitle: String?
             var body: String?
             var postedAt: Double?
+            var roundID: String?
+            var owner: String?
         }
         var sessions: [String: Record]
     }
@@ -105,7 +107,8 @@ public enum StateCodec {
                     title: $0.title,
                     subtitle: $0.subtitle,
                     body: $0.body,
-                    postedAt: $0.postedAt)
+                    postedAt: $0.postedAt,
+                    roundID: $0.roundID, owner: $0.owner)
             }
         )
         let encoder = JSONEncoder()
@@ -138,7 +141,8 @@ public enum StateCodec {
                     // fallback would make an hours-old notification start
                     // reporting itself as "now" the moment the next prompt is
                     // submitted — the exact bug `postedAt` exists to prevent.
-                    postedAt: $0.postedAt ?? $0.updatedAt)
+                    postedAt: $0.postedAt ?? $0.updatedAt,
+                    roundID: $0.roundID, owner: $0.owner)
             }
         )
         return state

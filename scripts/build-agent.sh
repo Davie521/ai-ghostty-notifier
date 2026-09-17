@@ -12,6 +12,15 @@
 
 set -euo pipefail
 
+# Isolated verification builds must not stop the installed service or alter
+# LaunchServices registration. The resulting bundle is otherwise identical.
+ACTIVATE=1
+case "${1:-}" in
+    --build-only) ACTIVATE=0 ;;
+    "") ;;
+    *) echo "usage: build-agent.sh [--build-only]" >&2; exit 2 ;;
+esac
+
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
 
@@ -31,23 +40,28 @@ BUILT=$(swift build -c release --package-path "$REPO/agent" --show-bin-path)/"$B
 [[ -x "$BUILT" ]] || { echo "FATAL: $BUILT missing after build" >&2; exit 2; }
 
 # Stop the old agent BEFORE replacing the bundle. A running agent keeps
-# executing from the deleted inode, and hooks/agent-common.sh's agent_running
-# check then confirms that stale process as healthy — so `open -a` never starts
+# executing from the deleted inode, and readiness checks can still confirm
+# that stale process as healthy — so `open -a` never starts
 # the rebuilt bundle and every fix in this build stays inert until logout.
-echo "==> Stopping any running agent"
-LABEL="io.github.davie521.cgnotify"
-launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-pkill -f "$APP/Contents/MacOS/$BINARY_NAME" 2>/dev/null || true
-# The pidfile has to go too: agent_running reads it, and a pid that has been
-# recycled by an unrelated process is exactly what its ps check defends against.
-rm -f "$HOME/.claude/notifications/ghostty-agent/agent.pid" \
-      "$HOME/.claude/notifications/ghostty-agent/ready"
+if [[ "$ACTIVATE" == 1 ]]; then
+    echo "==> Stopping any running agent"
+    LABEL="io.github.davie521.cgnotify"
+    launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+    pkill -f "$APP/Contents/MacOS/$BINARY_NAME" 2>/dev/null || true
+    # The pidfile has to go too: agent_running reads it, and a pid that has been
+    # recycled by an unrelated process is exactly what its ps check defends against.
+    rm -f "$HOME/.claude/notifications/ghostty-agent/agent.pid" \
+          "$HOME/.claude/notifications/ghostty-agent/ready" \
+          "$HOME/.claude/notifications/ghostty-agent/capabilities" \
+          "$HOME/.claude/notifications/ghostty-agent/native-hook-ready"
+fi
 
 echo "==> Assembling $APP"
 rm -rf "$APP"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 install -m 755 "$BUILT" "$CONTENTS/MacOS/$BINARY_NAME"
 install -m 644 "$REPO/agent/Resources/Info.plist" "$CONTENTS/Info.plist"
+install -m 644 "$REPO/agent/Resources/native-hook-v1" "$CONTENTS/Resources/native-hook-v1"
 
 # Borrow Claude's icon so the notification looks like it came from Claude rather
 # than from a generic binary. Purely cosmetic — a missing icon is not an error.
@@ -79,6 +93,6 @@ codesign --sign - --force --timestamp=none "$APP" >/dev/null 2>&1 ||
 # Register with LaunchServices so `open -a` and notification delivery resolve
 # the bundle without waiting for a periodic rescan.
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
-[[ -x "$LSREGISTER" ]] && "$LSREGISTER" -f "$APP"
+if [[ "$ACTIVATE" == 1 && -x "$LSREGISTER" ]]; then "$LSREGISTER" -f "$APP"; fi
 
 echo "==> Built $APP"

@@ -1,44 +1,18 @@
 import Foundation
 import NotifyCore
 
-/// Drops a request into the spool. The bash hooks do this themselves with `mv`;
-/// this exists so the install script can ping the agent and so the integration
-/// test can drive it without duplicating the atomicity rule.
+/// Native modes publish through the same atomic spool writer. The old v1 wire
+/// format remains available to installers and older clients through --send.
 enum SpoolWriter {
     static func write(json: String, to directory: String) -> Bool {
-        guard let data = json.data(using: .utf8) else { return false }
-        try? FileManager.default.createDirectory(
-            atPath: directory, withIntermediateDirectories: true)
-
-        // `%016ld` — NOT `%016d`, which truncates a 64-bit Int to 32 bits and
-        // turns a millisecond stamp into a negative number, whose leading `-`
-        // then sorts ahead of every hook-written name.
-        let stamp = Int(Date().timeIntervalSince1970 * 1000)
-        let name = String(format: "%016ld-%d.json", stamp, Int(getpid()))
-        let temporary = directory + "/." + name + ".tmp"
-        let final = directory + "/" + name
-
-        guard FileManager.default.createFile(atPath: temporary, contents: data, attributes: nil)
-        else { return false }
-        // Rename is what publishes the request: the watcher must never read a
-        // partially written file.
         do {
-            try FileManager.default.moveItem(atPath: temporary, toPath: final)
+            try AtomicSpool.write(Data(json.utf8), to: directory)
             return true
-        } catch {
-            try? FileManager.default.removeItem(atPath: temporary)
-            return false
-        }
+        } catch { return false }
     }
 }
-
-/// Watches the spool directory and hands decoded requests to the agent.
-///
-/// The transport is a directory of one-JSON-object files made visible by
-/// rename, which keeps the hooks pure bash — no client binary, no socket
-/// lifetime to manage — and an integration test can drive the whole agent by
-/// dropping files. A vnode source on the directory fd fires on the rename, so
-/// delivery is event-driven rather than polled.
+/// Watches complete files published by atomic rename. A vnode source makes
+/// delivery event-driven; the periodic sweep only recovers a replaced inode.
 @MainActor
 final class SpoolWatcher {
     private let directory: String
@@ -62,8 +36,9 @@ final class SpoolWatcher {
     }
 
     func start() {
-        try? FileManager.default.createDirectory(
-            atPath: directory, withIntermediateDirectories: true)
+        do { try AtomicSpool.prepareDirectory(directory) } catch {
+            log("cannot prepare private spool: \(error)")
+        }
         attach()
         // Requests written while the agent was down are still valid work.
         drain()
@@ -128,6 +103,12 @@ final class SpoolWatcher {
         descriptor = -1
     }
 
+    func stop() {
+        sweep?.cancel()
+        sweep = nil
+        detach()
+    }
+
     /// Consume every request file. Each file is unlinked *before* it is decoded
     /// so a malformed one is dropped instead of being retried on every wakeup.
     private func drain() {
@@ -170,6 +151,12 @@ final class SpoolWatcher {
             // still useful, so only notify has an expiry.
             if case .notify = request, candidate.modified < cutoff {
                 log("dropped stale notify \(candidate.name) (queued for too long)")
+                continue
+            }
+            if case .hookEvent(let event) = request, event.kind != .prompt,
+                event.occurredAt < cutoff
+            {
+                log("dropped stale hook event \(candidate.name)")
                 continue
             }
             onRequest(request)

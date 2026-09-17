@@ -24,6 +24,9 @@ struct SessionIDTests {
         "semi;colon",
         "zz-not-hex",
         "unicode-é",
+        "ａｂｃ-１２３",
+        "ＡＢＣ",
+        "١٢٣",
     ])
     func rejected(_ id: String) {
         #expect(!RequestCodec.isValidSessionID(id))
@@ -127,8 +130,9 @@ struct RequestDecodingTests {
 
     // Both knobs are documented; their defaults must survive an absent field.
     @Test func timeoutAndOptOutDefaults() throws {
-        guard case .notify(let notify) = try decode(
-            #"{"type":"notify","session_id":"abc","title":"T"}"#)
+        guard
+            case .notify(let notify) = try decode(
+                #"{"type":"notify","session_id":"abc","title":"T"}"#)
         else {
             Issue.record("expected notify")
             return
@@ -141,8 +145,9 @@ struct RequestDecodingTests {
     // fail towards keeping the alert on screen.
     @Test(arguments: ["0", "-5", "\"\"", "\"nonsense\"", "null"])
     func nonPositiveTimeoutMeansNoTimeout(_ literal: String) throws {
-        guard case .notify(let notify) = try decode(
-            #"{"type":"notify","session_id":"abc","title":"T","timeout":\#(literal)}"#)
+        guard
+            case .notify(let notify) = try decode(
+                #"{"type":"notify","session_id":"abc","title":"T","timeout":\#(literal)}"#)
         else {
             Issue.record("expected notify")
             return
@@ -154,8 +159,9 @@ struct RequestDecodingTests {
     // shell's string form. Both have to disable clearing.
     @Test(arguments: ["false", "\"false\"", "\"0\"", "\"off\"", "\"NO\""])
     func stringyFalseAlsoDisablesClearing(_ literal: String) throws {
-        guard case .notify(let notify) = try decode(
-            #"{"type":"notify","session_id":"abc","title":"T","clear_on_focus":\#(literal)}"#)
+        guard
+            case .notify(let notify) = try decode(
+                #"{"type":"notify","session_id":"abc","title":"T","clear_on_focus":\#(literal)}"#)
         else {
             Issue.record("expected notify")
             return

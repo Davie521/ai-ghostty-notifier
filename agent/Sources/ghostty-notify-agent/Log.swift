@@ -8,6 +8,9 @@ enum AgentLog {
     private static let maxBytes = 1 << 20
 
     static func append(_ message: String, to path: String) {
+        try? FileManager.default.createDirectory(
+            at: URL(fileURLWithPath: path).deletingLastPathComponent(),
+            withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let line = "\(stamp()) \(message)\n"
         guard let data = line.data(using: .utf8) else { return }
         guard let handle = FileHandle(forWritingAtPath: path) else {

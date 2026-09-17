@@ -7,7 +7,7 @@ retires what earlier versions installed: the PreToolUse entry and the
 `notify` callback — also when another tool has wrapped that callback since.
 Every change is computed before anything is written, so a config the
 migration cannot handle aborts with nothing touched. Needs Python 3.11+
-(tomllib) to run; the installed scripts need only bash + jq.
+(tomllib) to run; the hooks require the built macOS native app, not Python/jq.
 """
 
 import json
@@ -15,16 +15,18 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 
 
 REPO = Path(__file__).resolve().parent.parent
 FILES = (
-    "codex-hook.sh", "ghostty-tab-save.sh", "ghostty-tab-focus.sh",
+    "native-hook.sh", "codex-hook.sh", "ghostty-tab-save.sh", "ghostty-tab-focus.sh",
     "ghostty-notify.sh", "ghostty-notify-clear.sh", "ghostty-round-reset.sh",
-    "agent-common.sh", "ghostty-agent-anchor.sh",
+    "ghostty-agent-anchor.sh",
 )
 EVENTS = ("UserPromptSubmit", "Stop")
 DEFAULTS = {
@@ -37,6 +39,7 @@ DEFAULTS = {
 # copied from settings.json (the adapter sets the identity ones itself).
 PRIVATE_KEYS = {
     "GHOSTTY_NOTIFY_PROCESS_NAME", "GHOSTTY_NOTIFY_APP_NAME", "GHOSTTY_NOTIFY_AGENT_APP",
+    "GHOSTTY_NOTIFY_NATIVE_APP",
     "GHOSTTY_NOTIFY_SESSION_DIR", "GHOSTTY_NOTIFY_RATE_DIR", "GHOSTTY_NOTIFY_GROUP_PREFIX",
     "GHOSTTY_NOTIFY_FOCUS_SCRIPT", "GHOSTTY_NOTIFY_CLEAR_SCRIPT", "GHOSTTY_NOTIFY_TTY",
     "GHOSTTY_NOTIFY_MARKER_RETRY_DELAYS", "GHOSTTY_NOTIFY_CODEX_SETTLE",
@@ -305,13 +308,24 @@ def _initial_settings(claude_settings):
     return settings
 
 
+def require_native_runtime():
+    selected = os.environ.get("GHOSTTY_NOTIFY_NATIVE_APP", str(
+        Path.home() / "Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app"))
+    app = Path(selected)
+    if not selected or not (app / "Contents/Resources/native-hook-v1").is_file() or not os.access(
+            app / "Contents/MacOS/ghostty-notify-agent", os.X_OK):
+        raise SystemExit("Required native hook runtime missing or too old; run "
+                         "bash scripts/build-agent.sh --build-only and "
+                         "bash scripts/install-agent.sh first. Nothing was installed.")
+    return app
+
+
 def install(codex_home, claude_settings):
-    if shutil.which("jq") is None:
-        raise SystemExit("jq is required by the hooks (brew install jq); nothing was installed.")
+    require_native_runtime()
     if shutil.which("alerter") is None and not any(os.access(p, os.X_OK) for p in ALERTER_PATHS):
         if shutil.which("terminal-notifier") is None:
-            print("Warning: neither alerter nor terminal-notifier is installed; "
-                  "no notification can be shown until one is (brew install alerter).")
+            print("Note: no external notification fallback is installed; "
+                  "the resident agent must be running and authorized.")
         else:
             print("Note: alerter is not installed; terminal-notifier will show the "
                   "alerts but cannot offer the Go to tab button (brew install alerter).")
@@ -340,12 +354,17 @@ def install(codex_home, claude_settings):
                 .format(config_path, error))
 
     destination.mkdir(parents=True, exist_ok=True)
-    for name in FILES:
-        target = destination / name
-        temporary = destination / (name + ".tmp")
-        shutil.copy2(REPO / "hooks" / name, temporary)
-        temporary.chmod(0o755)
-        temporary.replace(target)
+    # Stage/validate the whole set before touching registered hooks. Publish
+    # the new shared dependency first, then atomically replace its launchers.
+    with tempfile.TemporaryDirectory(prefix=".native-install-", dir=destination) as folder:
+        staged = Path(folder)
+        for name in FILES:
+            temporary = staged / name
+            shutil.copy2(REPO / "hooks" / name, temporary)
+            temporary.chmod(0o755)
+            subprocess.run(["/bin/bash", "-n", str(temporary)], check=True, capture_output=True)
+        for name in FILES:
+            (staged / name).replace(destination / name)
     # The notify-callback adapter of earlier versions; a leftover copy would
     # only mislead anyone reading the directory.
     (destination / "codex-notify.py").unlink(missing_ok=True)

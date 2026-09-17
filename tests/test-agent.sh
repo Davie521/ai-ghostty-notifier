@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Integration test for the resident notification agent.
 #
-# Drives the REAL binary through the REAL spool transport, using the same
-# hooks/agent-common.sh helpers the hooks use, and asserts against the agent's
-# own state file and log.
+# Drives the REAL binary through the REAL spool transport and native hook
+# launchers, asserting against the agent's own state file and log. Frozen
+# shell helpers exercise only the older wire protocol's compatibility path.
 #
 # What this deliberately does NOT assert: that a banner appeared. Notification
 # delivery needs an authorization grant that only a human can give, so a test
@@ -16,6 +16,8 @@
 # it started (pidfile + log line) before any other assertion runs; and every
 # assertion names the exact string it expects rather than "non-empty".
 
+# `check`, `wait_for` and the EXIT trap invoke their function arguments.
+# shellcheck disable=SC2329
 set -u
 IFS=$'\n\t'
 
@@ -42,6 +44,24 @@ fi
 
 SANDBOX=$(mktemp -d)
 AGENT_PID=""
+stop_agent() {
+    [[ -n "$AGENT_PID" ]] || return 0
+    local pid="$AGENT_PID" i=0 result=0
+    kill "$pid" 2>/dev/null || true
+    while (( i < 100 )) && kill -0 "$pid" 2>/dev/null; do
+        sleep 0.1
+        i=$((i + 1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "Agent failed to exit within 10 seconds; stopping owned test PID $pid" >&2
+        kill -KILL "$pid" 2>/dev/null || true
+        result=1
+    fi
+    wait "$pid" 2>/dev/null || result=1
+    AGENT_PID=""
+    return "$result"
+}
+
 cleanup() {
     # Withdraw what this run posted BEFORE stopping the agent. Notification
     # Center is scoped to the bundle identifier, not to HOME — so a sandboxed
@@ -53,24 +73,20 @@ cleanup() {
     # inside cleanup.
     if [[ -n "$AGENT_PID" ]] && kill -0 "$AGENT_PID" 2>/dev/null &&
         command -v agent_queue >/dev/null 2>&1; then
-        for sid in "${SID:-}" "${OTHER:-}"; do
+        for sid in "${SID:-}" "${OTHER:-}" "${NATIVE_SID:-}"; do
             [[ -n "$sid" ]] || continue
             agent_queue "$(jq -nc --arg s "$sid" '{type:"dismiss",session_id:$s}')" "$APP" \
                 2>/dev/null || true
         done
+        if [[ -n "${NATIVE_SID:-}" ]]; then
+            agent_queue "$(jq -nc --arg s "$NATIVE_SID" '{type:"dismiss",session_id:$s,source:"codex"}')" "$APP" \
+                2>/dev/null || true
+        fi
         # Give the watcher a moment to drain before the process goes away.
         sleep 1
-        kill "$AGENT_PID" 2>/dev/null
-        # And wait for it to actually exit. SIGTERM is handled: the agent saves
-        # state and removes its liveness markers on the way out, which refills
-        # the sandbox between readdir and rmdir if we delete it too early —
-        # observed as an intermittent "rm: Directory not empty".
-        local i=0
-        while (( i < 50 )) && kill -0 "$AGENT_PID" 2>/dev/null; do
-            sleep 0.1
-            i=$((i + 1))
-        done
     fi
+    # Reap even a hung test app before deleting its private state directory.
+    stop_agent || echo "Test cleanup required a forced agent exit" >&2
     rm -rf "$SANDBOX"
 }
 trap cleanup EXIT
@@ -79,10 +95,13 @@ export HOME="$SANDBOX"
 ROOT="$HOME/.claude/notifications/ghostty-agent"
 STATE="$ROOT/state.json"
 LOG="$ROOT/agent.log"
+mkdir -p "$ROOT"
+printf 'shown\n' > "$ROOT/style-hint-shown"
+export GHOSTTY_NOTIFY_MENU_BAR=0
 
 # The helpers under test. They read HOME, so source after exporting it.
-# shellcheck source=hooks/agent-common.sh
-source "$REPO/hooks/agent-common.sh"
+# shellcheck source=tests/fixtures/shell-baseline/hooks/agent-common.sh
+source "$REPO/tests/fixtures/shell-baseline/hooks/agent-common.sh"
 
 pass=0; fail=0
 fail_list=()
@@ -125,6 +144,8 @@ state_outstanding() {
     jq -r --arg s "$1" '(.sessions[$s].notificationIDs // []) | join(",")' \
         "$STATE" 2>/dev/null
 }
+state_is() { [[ "$(state_outstanding "$1")" == "$2" ]]; }
+pongs_increased() { [[ "$(grep -cF pong "$LOG")" -gt "$1" ]]; }
 spool_drained() {
     local remaining
     remaining=$(find "$ROOT/spool" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
@@ -135,6 +156,7 @@ echo "== resident agent integration test =="
 
 SID="deadbeef-1111-2222-3333-444455556666"
 OTHER="deadbeef-9999"
+NATIVE_SID="deadbeef-2222-3333"
 
 # ── 1. The agent starts and claims its pidfile ─────────────────────────────
 "$BIN" >/dev/null 2>&1 &
@@ -190,26 +212,26 @@ agent_queue "$(jq -nc --arg s "$SID" \
 check "notify posts and records claude-<session>" \
     wait_for 10 log_has "posted claude-$SID"
 check "state.json lists the identifier as outstanding" \
-    wait_for 10 test "$(state_outstanding "$SID")" = "claude-$SID"
+    wait_for 10 state_is "$SID" "claude-$SID"
 
 # Posting again must reuse the identifier: that is what makes the notification
 # center REPLACE the banner instead of stacking a second one, which is the
 # behaviour `-group ghostty-notify-<session>` gave both shell backends.
 agent_queue "$(jq -nc --arg s "$SID" '{type:"notify",session_id:$s,title:"again"}')" "$APP"
 check "a repeat notification replaces rather than stacks" \
-    wait_for 10 test "$(state_outstanding "$SID")" = "claude-$SID"
+    wait_for 10 state_is "$SID" "claude-$SID"
 
 # ── 4. A second session's notification is tracked separately ───────────────
 agent_queue "$(jq -nc --arg s "$OTHER" '{type:"notify",session_id:$s,title:"other"}')" "$APP"
 check "a second session gets its own identifier" \
-    wait_for 10 test "$(state_outstanding "$OTHER")" = "claude-$OTHER"
+    wait_for 10 state_is "$OTHER" "claude-$OTHER"
 
 # ── 5. dismiss withdraws only the session it names ─────────────────────────
 agent_queue "$(jq -nc --arg s "$SID" '{type:"dismiss",session_id:$s}')" "$APP"
 check "dismiss withdraws the named session's notification" \
     wait_for 10 log_has "withdrew claude-$SID"
 check "dismissed session has nothing outstanding" \
-    wait_for 10 test "$(state_outstanding "$SID")" = ""
+    wait_for 10 state_is "$SID" ""
 # The bug this guards: a dismiss that clears every session would silently
 # destroy a sibling session's still-unread notification.
 check "the other session's notification survives" \
@@ -235,29 +257,121 @@ agent_queue '{"type":"selfDestruct"}' "$APP"
 check "malformed requests are dropped, not retried" wait_for 10 spool_drained
 agent_queue '{"type":"ping"}' "$APP"
 check "the agent still serves requests after garbage" \
-    wait_for 10 test "$(grep -cF pong "$LOG")" -gt "$PONGS_BEFORE"
+    wait_for 10 pongs_increased "$PONGS_BEFORE"
 # A rejected session id must not have created a record.
 check "an invalid session id creates no state" \
     test "$(jq -r '.sessions | has("../escape")' "$STATE" 2>/dev/null)" = "false"
 
-# ── 8. A queued notify that went stale is not replayed ─────────────────────
-# Otherwise an agent that was down all evening posts the whole backlog at once
-# on the next login — banners for rounds that finished hours ago. Backdating the
-# file is exactly what a long outage looks like to the agent.
-#
-# Build and backdate it OUTSIDE the spool, then rename it in: creating it in
-# place would let the watcher consume it as a fresh request before `touch` ran.
-# rename(2) does not alter mtime, which is what the agent sorts and ages on.
+# ── 8. Native hook policy and lifecycle ───────────────────────────────────
+native_notice_is() {
+    [[ "$(jq -r --arg s "$NATIVE_SID" '.sessions[$s].subtitle // ""' "$STATE" 2>/dev/null)" == "$1" ]]
+}
+native_clear() { [[ -z "$(state_outstanding "$NATIVE_SID")" ]]; }
+native_policy() {
+    TERM_PROGRAM=ghostty GHOSTTY_NOTIFY_AGENT_APP="$APP" \
+        GHOSTTY_NOTIFY_TTY=/not-a-live-terminal-fixture \
+        GHOSTTY_NOTIFY_BACKEND=auto GHOSTTY_NOTIFY_CLEAR_ON_FOCUS="$1" \
+        GHOSTTY_NOTIFY_MIN_ELAPSED=10 GHOSTTY_NOTIFY_SOUND_ELAPSED=999999 \
+        /bin/bash "$REPO/hooks/$2"
+}
+SESSIONS="$HOME/.claude/notifications/ghostty-sessions"
+mkdir -p "$SESSIONS"
+printf '%s\n' "$(( $(date +%s) - 30 ))" > "$SESSIONS/$NATIVE_SID.start"
+jq -nc --arg s "$NATIVE_SID" \
+    '{session_id:$s,hook_event_name:"Stop",cwd:"/work/migration",session_title:"native pipeline"}' \
+    | native_policy 0 ghostty-notify.sh
+check "real hook event passes through Swift policy and delivery" \
+    wait_for 10 native_notice_is "native pipeline — migration"
+check "native completion consumes its start marker" \
+    wait_for 10 test ! -f "$SESSIONS/$NATIVE_SID.start"
+check "native delivery spawns no shell watcher" test ! -f "$SESSIONS/$NATIVE_SID.watch-pid"
+
+jq -nc --arg s "$NATIVE_SID" '{session_id:$s,hook_event_name:"UserPromptSubmit"}' \
+    | native_policy 0 ghostty-round-reset.sh
+check "prompt opt-out is processed by the native lifecycle" \
+    wait_for 10 log_has "handled UserPromptSubmit $NATIVE_SID round=$(cat "$SESSIONS/$NATIVE_SID.round")"
+check "opt-out retained notification text" native_notice_is "native pipeline — migration"
+jq -nc --arg s "$NATIVE_SID" '{session_id:$s,hook_event_name:"UserPromptSubmit"}' \
+    | native_policy 1 ghostty-round-reset.sh
+check "next prompt withdraws through the new native event" wait_for 10 native_clear
+
+# Drive the Codex entry with a real native CLI parent and a private PTY. Each
+# invocation deliberately uses a new owner, exercising resume invalidation.
+# The TTY override prevents Apple Events or OSC writes to any live tab.
+mkdir -p "$SANDBOX/bin" "$SANDBOX/codex-sessions"
+/usr/bin/clang "$REPO/tests/fixtures/native-host.c" -o "$SANDBOX/codex" || exit 2
+GHOSTTY_PID=$(lsappinfo info -only pid com.mitchellh.ghostty 2>/dev/null | tr -dc '0-9')
+jq -nc --arg pid "$GHOSTTY_PID" '{tab_id:"native-codex-tab",ghostty_pid:$pid}' \
+    > "$SANDBOX/codex-sessions/$NATIVE_SID.json"
+codex_policy() {
+    PATH="$SANDBOX/bin:$PATH" TERM_PROGRAM=ghostty GHOSTTY_NOTIFY_AGENT_APP="$APP" \
+        GHOSTTY_NOTIFY_BACKEND="${2:-auto}" GHOSTTY_NOTIFY_CLEAR_ON_FOCUS="${3:-0}" \
+        GHOSTTY_NOTIFY_MIN_ELAPSED=10 GHOSTTY_NOTIFY_SOUND_ELAPSED=999999 \
+        GHOSTTY_NOTIFY_CODEX_SETTLE=0 GHOSTTY_NOTIFY_SESSION_DIR="$SANDBOX/codex-sessions" \
+        GHOSTTY_NOTIFY_TTY=/not-a-live-terminal-fixture \
+        GHOSTTY_NOTIFY_RATE_DIR="$SANDBOX/codex-rates" CODEX_HOME="$SANDBOX/codex-home" \
+        "$SANDBOX/codex" /bin/bash "$REPO/hooks/codex-hook.sh" "$1"
+}
+codex_title_ready() { [[ "$(cat "$SANDBOX/codex-sessions/$NATIVE_SID.title" 2>/dev/null)" == "Codex native title" ]]; }
+codex_notice_ready() {
+    [[ "$(jq -r --arg s "codex-$NATIVE_SID" '.sessions[$s].subtitle // ""' "$STATE" 2>/dev/null)" == "Codex native title — codex-fixture" ]]
+}
+jq -nc --arg s "$NATIVE_SID" '{session_id:$s,hook_event_name:"UserPromptSubmit",prompt:"Codex native title",cwd:"/work/codex-fixture"}' \
+    | codex_policy UserPromptSubmit
+check "Codex prompt title is stored by the real Swift processor" wait_for 10 codex_title_ready
+printf '%s\n' "$(( $(date +%s) - 30 ))" > "$SANDBOX/codex-sessions/$NATIVE_SID.start"
+jq -nc --arg s "$NATIVE_SID" '{session_id:$s,hook_event_name:"Stop",cwd:"/work/codex-fixture"}' \
+    | codex_policy Stop
+check "Codex native completion reaches the resident notifier" wait_for 10 codex_notice_ready
+check "Codex and Claude with the same UUID have separate records" \
+    test "$(state_outstanding "codex-$NATIVE_SID")" = "codex-$NATIVE_SID"
+check "Codex completion did not revive the Claude notification" native_clear
+check "Codex native completion removes the shared timer" \
+    wait_for 10 test ! -f "$SANDBOX/codex-sessions/$NATIVE_SID.start"
+check "Codex owner change invalidates both disk and resident cached tab" \
+    test "$(jq -r --arg s "codex-$NATIVE_SID" '.sessions[$s].tabID' "$STATE")" = null
+jq -nc --arg s "$NATIVE_SID" '{session_id:$s,hook_event_name:"UserPromptSubmit",prompt:"switch backend"}' \
+    | codex_policy UserPromptSubmit terminal-notifier 1
+check "switching Codex to the external backend still clears its native notice" \
+    wait_for 10 state_is "codex-$NATIVE_SID" ""
+# Simulate state produced by an older agent, before source-scoped identifiers.
+agent_queue "$(jq -nc --arg s "$NATIVE_SID" \
+    '{type:"notify",session_id:$s,title:"Codex ✅",subtitle:"legacy Codex fixture",clear_on_focus:false}')" "$APP"
+check "legacy Codex state can coexist with the new protocol" \
+    wait_for 10 native_notice_is "legacy Codex fixture"
+jq -nc --arg s "$NATIVE_SID" '{session_id:$s,hook_event_name:"UserPromptSubmit",prompt:"retire legacy"}' \
+    | codex_policy UserPromptSubmit terminal-notifier 1
+check "compatibility prompt also retires a pre-migration Codex identifier" \
+    wait_for 10 native_clear
+
+# ── 9. Stale replay is dropped, even when a hook file was just renamed ────
+# The native protocol carries event time; a fresh file must not refresh an
+# event that spent too long in an old queue. The v1 notify format still ages
+# by file mtime, so test both contracts.
+agent_queue "$(jq -nc --arg s "$NATIVE_SID" --arg sessions "$SESSIONS" \
+    --arg rates "$SANDBOX/stale-rates" --arg hooks "$REPO/hooks" \
+    --arg round "$(cat "$SESSIONS/$NATIVE_SID.round")" \
+    --argjson at "$(( $(date +%s) - 600 ))" \
+    '{type:"hook_event",version:1,source:"claude",round_id:$round,occurred_at:$at,
+      started_at:($at - 1000),session_dir:$sessions,rate_dir:$rates,hooks_dir:$hooks,
+      settings:{},payload:{session_id:$s,hook_event_name:"Stop",cwd:"/work/stale"}}')" "$APP"
+check "fresh spool file cannot resurrect an expired hook event" \
+    wait_for 10 log_has "dropped stale hook event"
+check "stale native replay leaves the notification withdrawn" native_clear
+
+# Build and backdate outside the spool; rename does not alter mtime.
 STALE="$SANDBOX/stale.json"
 jq -nc --arg s "$OTHER" '{type:"notify",session_id:$s,title:"ancient"}' > "$STALE"
 touch -t 200001010000 "$STALE"
 mv "$STALE" "$ROOT/spool/0000000000000001-stale.json"
 check "a stale notify is dropped, not replayed" wait_for 10 log_has "dropped stale notify"
 
-# ── 9. State survives a restart, keeping the identifier stable ──────────────
-kill "$AGENT_PID" 2>/dev/null
-wait "$AGENT_PID" 2>/dev/null || true
-AGENT_PID=""
+# ── 10. Shutdown completes, then state survives a restart ─────────────────
+check "SIGTERM completes asynchronous shutdown within 10 seconds" stop_agent
+check "shutdown calls the lifecycle cleanup" log_has "agent down"
+for marker in agent.pid ready capabilities native-hook-ready; do
+    check "shutdown removes $marker" test ! -f "$ROOT/$marker"
+done
 "$BIN" >/dev/null 2>&1 &
 AGENT_PID=$!
 check "restarted agent reloads its sessions" wait_for 15 log_has "restored "
@@ -269,7 +383,7 @@ agent_queue "$(jq -nc --arg s "$SID" '{type:"notify",session_id:$s,title:"after 
 # A changed identifier here would post a SECOND banner beside one that may still
 # be on screen from before the restart, instead of replacing it.
 check "the identifier is still stable after a restart" \
-    wait_for 10 test "$(state_outstanding "$SID")" = "claude-$SID"
+    wait_for 10 state_is "$SID" "claude-$SID"
 check "the tab resolved before the restart survived it" \
     test "$(jq -r --arg s "$SID" '.sessions[$s].tabID // ""' "$STATE")" = "BEEF-TAB"
 

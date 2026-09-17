@@ -12,6 +12,7 @@ import UserNotifications
 @MainActor
 final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     private let paths: AgentPaths
+    private let readiness: ResidentReadiness
     private let notifier: Notifier
     private var state = SessionState()
     private var spool: SpoolWatcher?
@@ -21,14 +22,43 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private var menuBar: MenuBar?
     private var permission: NotificationPermission = .unknown
     private var alertStyle = ""
+    private var shuttingDown = false
     /// Per-identifier expiry timers, so a replacement notification restarts the
     /// clock instead of inheriting the old one's deadline.
     private var expiryTimers: [String: DispatchSourceTimer] = [:]
+    private let terminalBinding: NativeTerminalBinding
+    private lazy var hookProcessor = HookProcessor(
+        binding: terminalBinding,
+        onPrompt: { [weak self] event, tab in
+            guard let self else { return }
+            self.state.captureOwner(sessionID: event.key, owner: event.owner)
+            self.state.anchor(sessionID: event.key, tabID: tab, now: event.occurredAt)
+            if event.options.clearOnFocus {
+                let identifiers = self.state.takePreviousRoundNotifications(
+                    sessionID: event.key, roundID: event.roundID)
+                self.cancelExpiry(identifiers)
+                self.notifier.withdraw(identifiers)
+                self.withdrawLegacyCodex(sessionID: event.sessionID, source: event.source)
+            }
+            self.stateChanged()
+        },
+        onNotify: { [weak self] _, notify in
+            self?.handle(.notify(notify))
+        },
+        log: { [weak self] in self?.log($0) })
 
     init(paths: AgentPaths) {
         self.paths = paths
+        self.readiness = ResidentReadiness(paths: paths)
         let logPath = paths.log
         self.notifier = Notifier(log: { AgentLog.append($0, to: logPath) })
+        let external = ExternalNotifications(
+            automation: MacTerminalAutomation(),
+            log: { AgentLog.append($0, to: logPath) })
+        self.terminalBinding = NativeTerminalBinding(
+            automation: MacTerminalAutomation(),
+            clear: { event in await external.clear(event) },
+            log: { AgentLog.append($0, to: logPath) })
         super.init()
     }
 
@@ -38,13 +68,14 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         try? FileManager.default.createDirectory(
             atPath: paths.root, withIntermediateDirectories: true)
         writePidFile()
+        try? readiness.publishCapabilities(pid: getpid())
         loadState()
         log("agent up pid=\(getpid()) bundle=\(Bundle.main.bundleIdentifier ?? "<none>")")
 
         notifier.setDelegate(self)
         notifier.registerCategories()
         notifier.requestAuthorization { [weak self] answer in
-            guard let self else { return }
+            guard let self, !self.shuttingDown else { return }
             // Publish the answer: until this file says "authorized", the hooks
             // must not treat a spooled request as a delivered notification, or a
             // user who clicked "Don't Allow" would silently get nothing at all.
@@ -70,7 +101,9 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             case .unavailable:
                 self.permission = .unavailable
                 self.publishReadiness(AgentConstants.readyError)
-                self.log("authorization request was not processed; no dialog was shown — a relaunch can succeed")
+                self.log(
+                    "authorization request was not processed; no dialog was shown — a relaunch can succeed"
+                )
             }
             // The answer is the difference between an icon that means "working"
             // and one that means "nothing will ever appear". It arrives
@@ -105,11 +138,34 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
         source.setEventHandler {
             MainActor.assumeIsolated {
-                NSApp.terminate(nil)
+                Agent.requestTermination()
             }
         }
         source.resume()
         terminationSource = source
+    }
+
+    /// `terminateLater` runs a nested AppKit loop. Enter it from the run loop,
+    /// not from a main-dispatch callback which would keep the queue occupied
+    /// and prevent the MainActor cleanup task from ever running.
+    static func requestTermination() {
+        NSApp.perform(
+            #selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0,
+            inModes: [.common])
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !shuttingDown else { return .terminateLater }
+        shuttingDown = true
+        // Redirect new hooks to the native worker before stopping consumption.
+        // Retain the PID until cleanup ends so a second resident cannot enter.
+        readiness.close()
+        spool?.stop()
+        Task {
+            await hookProcessor.shutdown()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -117,29 +173,48 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         try? FileManager.default.removeItem(atPath: paths.pidFile)
         // Readiness is about a live agent, so it must not outlive the process:
         // a stale "authorized" would keep hooks routing into a dead spool.
-        try? FileManager.default.removeItem(atPath: paths.readyFile)
+        readiness.close()
         log("agent down")
     }
 
     // MARK: - Requests
 
+    private func withdrawLegacyCodex(sessionID: String, source: HookSource) {
+        // Older agents keyed Codex notices by the raw UUID. Retire that old
+        // notice when its native replacement arrives, without touching Claude.
+        guard source == .codex,
+            state.sessions[sessionID]?.title.hasPrefix("Codex ") == true
+        else { return }
+        let ids = state.takeNotifications(sessionID: sessionID)
+        cancelExpiry(ids)
+        notifier.withdraw(ids)
+    }
+
     private func handle(_ request: AgentRequest) {
+        guard !shuttingDown else { return }
         switch request {
+        case .hookEvent(let event):
+            hookProcessor.receive(event)
         case .notify(let notify):
+            withdrawLegacyCodex(sessionID: notify.sessionID, source: notify.source)
+            state.captureOwner(sessionID: notify.stateKey, owner: notify.owner)
             // A tab id supplied by the hook is authoritative: it came from the
             // marker round-trip, which is correct regardless of what is focused
             // now. Record it before deciding anything.
-            state.anchor(sessionID: notify.sessionID, tabID: notify.tabID, now: Agent.now())
+            state.anchor(sessionID: notify.stateKey, tabID: notify.tabID, now: Agent.now())
             deliver(notify)
             shortenIfAlreadyWatching(notify)
 
-        case .dismiss(let sessionID):
-            let identifiers = state.takeNotifications(sessionID: sessionID)
+        case .dismiss(let sessionID, let source):
+            withdrawLegacyCodex(sessionID: sessionID, source: source)
+            let key = source == .claude ? sessionID : "codex-" + sessionID
+            let identifiers = state.takeNotifications(sessionID: key)
             cancelExpiry(identifiers)
             notifier.withdraw(identifiers)
             stateChanged()
 
-        case .anchor(let sessionID, let tabID):
+        case .anchor(let rawSessionID, let tabID, let source):
+            let sessionID = source == .claude ? rawSessionID : "codex-" + rawSessionID
             if let tabID {
                 state.anchor(sessionID: sessionID, tabID: tabID, now: Agent.now())
                 log("anchored \(sessionID) -> \(tabID)")
@@ -188,12 +263,15 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private func shortenIfAlreadyWatching(_ notify: NotifyRequest) {
         guard notify.clearOnFocus,
             frontmostIsGhostty,
-            let tabID = state.sessions[notify.sessionID]?.tabID
+            let tabID = state.sessions[notify.stateKey]?.tabID
         else { return }
 
-        let identifier = SessionState.notificationID(sessionID: notify.sessionID)
+        let identifier = SessionState.notificationID(sessionID: notify.stateKey)
+        let postedAt = state.sessions[notify.stateKey]?.postedAt
         Ghostty.selectedTabID { [weak self] selected in
-            guard let self, let selected, selected == tabID else { return }
+            guard let self, let selected, selected == tabID, self.frontmostIsGhostty,
+                self.state.sessions[notify.stateKey]?.postedAt == postedAt
+            else { return }
             self.log("\(notify.sessionID) is already on screen; clearing in short order")
             self.scheduleExpiry(identifier: identifier, after: Agent.watchedGraceSeconds)
         }
@@ -203,7 +281,7 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     private func deliver(_ notify: NotifyRequest) {
         let identifier = state.newNotification(
-            sessionID: notify.sessionID,
+            sessionID: notify.stateKey,
             clearOnFocus: notify.clearOnFocus,
             // Kept so the menu bar can name this session rather than counting
             // it. The hook already builds all three; nothing new crosses the
@@ -211,8 +289,8 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             title: notify.title,
             subtitle: notify.subtitle,
             body: notify.body,
-            now: Agent.now())
-        notifier.post(identifier: identifier, sessionID: notify.sessionID, request: notify)
+            now: Agent.now(), roundID: notify.roundID)
+        notifier.post(identifier: identifier, sessionID: notify.stateKey, request: notify)
         log("posted \(identifier)")
         scheduleExpiry(identifier: identifier, after: notify.timeout)
         stateChanged()
@@ -224,15 +302,20 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private func scheduleExpiry(identifier: String, after seconds: Double?) {
         expiryTimers.removeValue(forKey: identifier)?.cancel()
         guard let seconds, seconds > 0 else { return }
+        guard let owner = state.sessionID(forNotification: identifier),
+            let postedAt = state.sessions[owner]?.postedAt
+        else { return }
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + seconds, leeway: .seconds(1))
         timer.setEventHandler { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                self.expiryTimers.removeValue(forKey: identifier)
-                guard let sessionID = self.state.sessionID(forNotification: identifier) else {
+                guard let sessionID = self.state.sessionID(forNotification: identifier),
+                    self.state.sessions[sessionID]?.postedAt == postedAt
+                else {
                     return
                 }
+                self.expiryTimers.removeValue(forKey: identifier)
                 let identifiers = self.state.takeNotifications(sessionID: sessionID)
                 self.notifier.withdraw(identifiers)
                 self.log("expired \(identifier)")
@@ -323,14 +406,15 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         let identifier = response.notification.request.identifier
         let action = response.actionIdentifier
         let sessionID = response.notification.request.content.userInfo["session_id"] as? String
+        let tabID = response.notification.request.content.userInfo["tab_id"] as? String
         let finish = UncheckedBox(completionHandler)
         Task { @MainActor in
-            self.clicked(identifier: identifier, action: action, sessionID: sessionID)
+            self.clicked(identifier: identifier, action: action, sessionID: sessionID, tabID: tabID)
             finish.value()
         }
     }
 
-    private func clicked(identifier: String, action: String, sessionID: String?) {
+    private func clicked(identifier: String, action: String, sessionID: String?, tabID: String?) {
         // Fall back to the bookkeeping when userInfo is unavailable, so a click
         // still routes after an upgrade that changed the payload.
         let session = sessionID ?? state.sessionID(forNotification: identifier)
@@ -346,7 +430,7 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             // tests/test-alerter-dispatch.sh exists.
             log("dismissed \(identifier)")
         case UNNotificationDefaultActionIdentifier, AgentConstants.gotoActionID:
-            jump(sessionID: session)
+            jump(sessionID: session, fallbackTabID: tabID)
         default:
             log("ignored action \(action) on \(identifier)")
         }
@@ -358,45 +442,42 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
-        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) ->
+        withCompletionHandler completionHandler:
+            @escaping (UNNotificationPresentationOptions) ->
             Void
     ) {
         completionHandler([.banner, .sound])
     }
 
-    private func jump(sessionID: String?) {
+    private func jump(sessionID: String?, fallbackTabID: String? = nil) {
         // Prefer live bookkeeping, then the id ghostty-tab-save.sh persisted —
         // which survives an agent that lost its state file.
         var tabID = sessionID.flatMap { state.sessions[$0]?.tabID }
         if tabID == nil, let sessionID {
             tabID = Agent.persistedTabID(paths: paths, sessionID: sessionID)
         }
-        // Claim the activation the click just handed us before trying to move
-        // another app's windows. macOS only lets the active application hand
-        // activation on; from the background both the Apple Event and
-        // NSRunningApplication requests are dropped, which is exactly how a
-        // click could report success and yet leave Ghostty behind whatever the
-        // user was actually looking at.
-        NSApp.activate(ignoringOtherApps: true)
-
+        if tabID == nil { tabID = fallbackTabID }
         guard let tabID else {
             // No tab was ever resolved (tmux, unscriptable Ghostty). Front the
             // app so the user is one keystroke away instead of nowhere.
             log("jump: no tab for \(sessionID ?? "<none>"), activating Ghostty")
+            NSApp.activate(ignoringOtherApps: true)
             Ghostty.activate()
             return
         }
-        // Select the tab first, then bring the app forward — so what appears is
-        // already the right tab rather than whatever was last in front.
+        // Focusing the terminal raises its window and selects its tab together.
+        // Do not issue a second app-wide activation after success: it can put
+        // the previously active window back in front of the verified target.
         Ghostty.focus(tabID: tabID) { [weak self] selected in
             guard let self else { return }
-            Ghostty.activate()
             switch selected {
             case nil:
+                Ghostty.activate()
                 self.log("jump: \(tabID) not found, activated Ghostty only")
             case tabID:
                 self.log("jump: focused \(tabID), verified selected")
             case .some(let other):
+                Ghostty.activate()
                 // Selecting reported success but the selection did not stick.
                 // Worth its own line: it is the difference between "we asked"
                 // and "it happened", and the two look identical from outside.
@@ -582,7 +663,7 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     private func publishReadiness(_ value: String) {
-        try? (value + "\n").write(toFile: paths.readyFile, atomically: true, encoding: .utf8)
+        try? readiness.publishAuthorization(value)
     }
 
     private func loadState() {

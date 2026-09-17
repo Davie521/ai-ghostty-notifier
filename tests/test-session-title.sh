@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Historical compatibility fixture; this is NOT native runtime coverage.
 # Regression test for the session-title subtitle in ghostty-notify.sh.
 #
 # The notification must say WHICH session finished, not just which folder —
@@ -17,7 +18,7 @@ IFS=$'\n\t'
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
-HOOK="$REPO/hooks/ghostty-notify.sh"
+HOOK="$REPO/tests/fixtures/shell-baseline/hooks/ghostty-notify.sh"
 
 [[ -x "$HOOK" ]] || { echo "FATAL: $HOOK not executable" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || { echo "FATAL: jq required" >&2; exit 2; }

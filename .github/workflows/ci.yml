@@ -1,7 +1,6 @@
 name: CI
 
-# macOS-only plugin, so CI runs on macOS: the hooks target /bin/bash 3.2 and
-# BSD userland (stat -f, BSD date/find), which a Linux runner would not catch.
+# macOS native runtime, plus /bin/bash 3.2-compatible bootstrap/install glue.
 on:
   push:
     branches: [main]
@@ -17,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Ensure shellcheck and jq
+      - name: Ensure shellcheck and test-only jq
         run: |
           command -v shellcheck >/dev/null 2>&1 || brew install shellcheck
           command -v jq >/dev/null 2>&1 || brew install jq
@@ -27,7 +26,8 @@ jobs:
       - name: Bash syntax check
         run: |
           for f in hooks/*.sh install.sh tests/*.sh scripts/*.sh; do
-            bash -n "$f" && echo "  ok  $f"
+            bash -n "$f"
+            echo "  ok  $f"
           done
 
       - name: ShellCheck
@@ -39,10 +39,11 @@ jobs:
       - name: Validate JSON
         run: |
           for j in hooks/hooks.json example-settings.json .claude-plugin/*.json; do
-            jq empty "$j" && echo "  ok  $j"
+            jq empty "$j"
+            echo "  ok  $j"
           done
 
-      - name: Regression tests
+      - name: Historical shell behavior fixtures (not native runtime coverage)
         run: |
           bash tests/test-alerter-dispatch.sh
           bash tests/test-fallback-no-focus.sh
@@ -53,19 +54,29 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Codex hook adapter and installer tests
+      - name: Historical Codex fixtures and installer config regressions
         run: python3 -m unittest discover -s tests -p 'test_codex_hooks.py' -v
 
-      # The resident agent is optional at runtime — every step above pins the
-      # shell path, so a Swift failure here can never mask a shell regression.
+      # The native bundle is required. Swift failures fail the product gate;
+      # historical fixtures above are comparisons, never a runtime fallback.
       - name: Swift toolchain
         run: swift --version
 
       - name: NotifyCore unit tests
-        run: swift test --package-path agent
+        run: swift test --package-path agent --quiet
 
-      - name: Build resident agent bundle
-        run: bash scripts/build-agent.sh
+      - name: Build and verify required native bundle without installing it
+        run: |
+          bash scripts/build-agent.sh --build-only
+          codesign --verify --deep --strict build/ClaudeGhosttyNotify.app
+
+      - name: Native launchers and real process regressions
+        env:
+          NATIVE_TEST_BINARY: ${{ github.workspace }}/build/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent
+        run: python3 -m unittest discover -s tests -p 'test_native_hooks.py' -v
+
+      - name: Isolated first install and upgrade regressions
+        run: python3 -m unittest discover -s tests -p 'test_native_install.py' -v
 
       # Skips itself with a loud SKIP line when the runner has no Aqua session,
       # because the agent is an AppKit app. It never asserts that a banner

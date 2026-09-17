@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Historical compatibility fixture; this is NOT native runtime coverage.
 # Integration test for hooks/ghostty-notify-clear.sh (clear-on-focus).
 #
 # Covers the watcher's focus detection plus the shared-state invariants the
@@ -24,9 +25,9 @@ IFS=$'\n\t'
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
-HOOK="$REPO/hooks/ghostty-notify.sh"
-CLEAR="$REPO/hooks/ghostty-notify-clear.sh"
-RESET="$REPO/hooks/ghostty-round-reset.sh"
+HOOK="$REPO/tests/fixtures/shell-baseline/hooks/ghostty-notify.sh"
+CLEAR="$REPO/tests/fixtures/shell-baseline/hooks/ghostty-notify-clear.sh"
+RESET="$REPO/tests/fixtures/shell-baseline/hooks/ghostty-round-reset.sh"
 
 for f in "$HOOK" "$CLEAR" "$RESET"; do
     [[ -x "$f" ]] || { echo "FATAL: $f not executable" >&2; exit 2; }

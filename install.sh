@@ -10,9 +10,11 @@ if [[ "$(uname)" != "Darwin" ]]; then
     exit 1
 fi
 
-if ! command -v jq >/dev/null 2>&1; then
-    echo "❌ Missing dependency: jq"
-    echo "   Install:  brew install jq"
+NATIVE_APP="${GHOSTTY_NOTIFY_NATIVE_APP-$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app}"
+if [[ -z "$NATIVE_APP" || ! -f "$NATIVE_APP/Contents/Resources/native-hook-v1" \
+    || ! -x "$NATIVE_APP/Contents/MacOS/ghostty-notify-agent" ]]; then
+    echo "❌ Required native hook runtime missing or too old. Nothing was installed." >&2
+    echo "   Run: bash scripts/build-agent.sh --build-only && bash scripts/install-agent.sh" >&2
     exit 1
 fi
 
@@ -20,9 +22,9 @@ if ! command -v alerter >/dev/null 2>&1 \
     && [[ ! -x /opt/homebrew/bin/alerter ]] \
     && [[ ! -x /usr/local/bin/alerter ]] \
     && [[ ! -x "$HOME/.local/bin/alerter" ]]; then
-    echo "⚠️  Missing recommended dependency: alerter"
-    echo "   Install:  brew install alerter"
-    echo "   (hooks will still install, but notifications fall back to terminal-notifier)"
+    echo "Note: alerter is not installed (optional external notification backend)."
+    echo "      Use the authorized resident App, or install alerter / terminal-notifier"
+    echo "      for notifications while the resident is unavailable."
 fi
 
 # Resolve the source hooks dir.
@@ -33,27 +35,23 @@ LOCAL_HOOKS="$SCRIPT_DIR/hooks"
 
 HOOKS_DIR="$HOME/.claude/hooks"
 mkdir -p "$HOOKS_DIR"
+STAGING=$(mktemp -d "$HOOKS_DIR/.native-install.XXXXXX")
+trap 'rm -rf "$STAGING"' EXIT
+# The shared bootstrap must exist before any newly published launcher uses it.
+HOOK_FILES=(native-hook.sh ghostty-tab-save.sh ghostty-tab-focus.sh ghostty-notify.sh ghostty-round-reset.sh ghostty-notify-clear.sh ghostty-agent-anchor.sh)
 
 install_from_local() {
-    # agent-common.sh is sourced, not run, but ghostty-notify.sh and the anchor
-    # hook both need it beside them; a manual install that skipped it would
-    # silently lose the agent path.
-    for f in ghostty-tab-save.sh ghostty-tab-focus.sh ghostty-notify.sh ghostty-round-reset.sh ghostty-notify-clear.sh agent-common.sh ghostty-agent-anchor.sh; do
-        cp "$LOCAL_HOOKS/$f" "$HOOKS_DIR/$f"
-        chmod +x "$HOOKS_DIR/$f"
-        echo "  ✓ installed $f (local)"
+    # Stable launchers and their shared native-runtime bootstrap.
+    for f in "${HOOK_FILES[@]}"; do
+        cp "$LOCAL_HOOKS/$f" "$STAGING/$f"
     done
 }
 
 install_from_github() {
     local RAW="https://raw.githubusercontent.com/Davie521/claude-ghostty-notify/main/hooks"
-    # agent-common.sh is sourced, not run, but ghostty-notify.sh and the anchor
-    # hook both need it beside them; a manual install that skipped it would
-    # silently lose the agent path.
-    for f in ghostty-tab-save.sh ghostty-tab-focus.sh ghostty-notify.sh ghostty-round-reset.sh ghostty-notify-clear.sh agent-common.sh ghostty-agent-anchor.sh; do
-        curl -fsSL "$RAW/$f" -o "$HOOKS_DIR/$f"
-        chmod +x "$HOOKS_DIR/$f"
-        echo "  ✓ installed $f (remote)"
+    # Stable launchers and their shared native-runtime bootstrap.
+    for f in "${HOOK_FILES[@]}"; do
+        curl -fsSL "$RAW/$f" -o "$STAGING/$f"
     done
 }
 
@@ -64,6 +62,17 @@ else
     echo "Installing hooks (from GitHub)..."
     install_from_github
 fi
+
+# Validate every staged file before replacing any registered hook. Per-file
+# rename avoids exposing partially copied scripts during an upgrade.
+for f in "${HOOK_FILES[@]}"; do
+    /bin/bash -n "$STAGING/$f"
+    chmod +x "$STAGING/$f"
+done
+for f in "${HOOK_FILES[@]}"; do
+    mv -f "$STAGING/$f" "$HOOKS_DIR/$f"
+    echo "  ✓ installed $f"
+done
 
 echo
 echo "─────────────────────────────────────────────────────────"
@@ -84,8 +93,7 @@ cat <<'EOF'
       }],
       "UserPromptSubmit": [{
         "hooks": [
-          {"type": "command", "command": "/Users/$USER/.claude/hooks/ghostty-round-reset.sh"},
-          {"type": "command", "command": "/Users/$USER/.claude/hooks/ghostty-agent-anchor.sh"}
+          {"type": "command", "command": "/Users/$USER/.claude/hooks/ghostty-round-reset.sh"}
         ]
       }],
       "Notification": [{
@@ -101,9 +109,9 @@ EOF
 echo
 echo "   (Replace \$USER with your username — hooks require absolute paths.)"
 echo
-echo "2. System Settings → Notifications → Alert Style → Persistent, for BOTH"
-echo "   'Script Editor' (legacy alerter ≤1.x) and 'Terminal' (alerter 26.x,"
-echo "   whose default sender bundle is com.apple.Terminal)."
+echo "2. Allow notifications and Ghostty Automation for Claude Ghostty Notify."
+echo "   System Settings → Notifications → Claude Ghostty Notify → Persistent."
+echo "   External backends, if used, need their own notification permissions."
 echo
 echo "3. Restart Claude Code so the env vars take effect."
 echo "─────────────────────────────────────────────────────────"

@@ -191,7 +191,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
         }
 
         menu.addItem(
-            disabled(waiting.count == 1 ? "1 session waiting" : "\(waiting.count) sessions waiting"))
+            disabled(waiting.count == 1 ? "1 session waiting" : "\(waiting.count) sessions waiting")
+        )
         for session in waiting {
             let lines = session.notificationLines()
             let plain =
@@ -290,5 +291,5 @@ final class MenuBar: NSObject, NSMenuDelegate {
     @objc private func showGuidance() { onShowGuidance() }
     @objc private func openSettings() { onOpenSettings() }
     @objc private func openLog() { onOpenLog() }
-    @objc private func quit() { NSApp.terminate(nil) }
+    @objc private func quit() { Agent.requestTermination() }
 }

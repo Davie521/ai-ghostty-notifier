@@ -23,10 +23,6 @@
           {
             "type": "command",
             "command": "/Users/YOUR_USERNAME/.claude/hooks/ghostty-round-reset.sh"
-          },
-          {
-            "type": "command",
-            "command": "/Users/YOUR_USERNAME/.claude/hooks/ghostty-agent-anchor.sh"
           }
         ]
       }
