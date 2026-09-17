@@ -63,6 +63,7 @@ class NativeInstallTests(unittest.TestCase):
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith("GHOSTTY_NOTIFY_") and k not in ("CODEX_HOME", "CODEX_SQLITE_HOME")}
         self.env.update({"HOME": str(self.home), "PATH": str(self.bin), "TERM_PROGRAM": "",
+                         "GHOSTTY_RESOURCES_DIR": "",
                          "INSTALL_TEST_CALLS": str(self.root / "service-calls")})
         for command in ("launchctl", "pkill", "open", "sleep"):
             self.stub(command, 'printf "%s\\n" "$0" >> "$INSTALL_TEST_CALLS"\nexit 97\n')
@@ -109,8 +110,12 @@ class NativeInstallTests(unittest.TestCase):
             self.assertFalse((destination / "agent-common.sh").exists())
             self.assertFalse((destination / "legacy-notify.sh").exists())
         # Resolve the actual installed bundle (no override or checkout fallback).
+        # Explicitly enter Ghostty intake; otherwise non-Ghostty input is
+        # intentionally ignored before JSON parsing. Do not inherit this from
+        # the developer terminal: hosted CI has no GHOSTTY_RESOURCES_DIR.
         result = subprocess.run(["/bin/bash", str(self.home / ".claude/hooks/ghostty-notify.sh")],
-                                input="{", text=True, capture_output=True, env=self.env, timeout=5)
+                                input="{", text=True, capture_output=True,
+                                env={**self.env, "TERM_PROGRAM": "ghostty"}, timeout=5)
         self.assertEqual(result.returncode, 0)
         self.assertNotIn("runtime missing", result.stderr)
         self.assertIn("ghostty-notify", result.stderr)
