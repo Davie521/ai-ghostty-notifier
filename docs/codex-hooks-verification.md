@@ -22,10 +22,11 @@ The alert read `Codex ✅ · Run sleep 3 command — new-chat · Finished after
 the duration is measured from the prompt. Because the tab was frontmost the
 clear-on-focus watcher dismissed it right away, as designed.
 
-**`codex exec` in a Ghostty tab**: bound the tab the same way; running
-`ghostty-tab-focus.sh <session>` from another tab selected exactly the bound
-tab (`id of selected tab of front window` matched), which is what a click on
-**Go to tab** does.
+**`codex exec` in a Ghostty tab**: bound the tab the same way; running the
+focus script of the day from another tab selected exactly the bound tab
+(`id of selected tab of front window` matched), which is what a click on
+**Go to tab** does. (That script was retired with the alerter backend; the
+agent now performs the same `select tab` itself.)
 
 **Negative controls on the same machine**: a `codex exec` started from a
 process without a terminal left only a `-` owner mark and no alert; a run
@@ -111,7 +112,7 @@ Verified with Codex CLI 0.154.0 and the agent 0.4.0 (unchanged since
   claude-<session>` right after the prompt), through the anchor hook.
 - Ghostty had been restarted two days earlier: 18 of the 28 bindings from the
   previous week named tabs that no longer existed. `ghostty-tab-save.sh` now
-  records the Ghostty pid (from `lsappinfo`; `pgrep` cannot see the process)
+  records the Ghostty pid, read from LaunchServices by bundle identifier,
   and re-resolves after a restart — the Codex adapter calls it on every
   qualifying Stop and it returns at once while the binding is current.
 - A Focus mode ("Work", auto-activated) delivered the agent's alerts straight
@@ -124,3 +125,34 @@ Verified with Codex CLI 0.154.0 and the agent 0.4.0 (unchanged since
 `tests/test_codex_hooks.py` grew to 41 tests (agent delivery, the config
 pin, the unauthorized fallback, the anchor/dismiss pair, rebinding after a
 restart); each new guard was mutated in turn and its test went red.
+
+## Dropping the alerter backend, 2026-09-16
+
+The agent had been the delivery path for a day, on both assistants. `alerter`
+stayed only as a fallback that could not be trusted with a click, so it went:
+the backend, the click-dispatch subshell, the blocking process and its pidfile,
+the per-notification clear-on-focus watcher, `ghostty-tab-focus.sh` (its only
+caller was that dispatch) and `tests/test-alerter-dispatch.sh`.
+
+What the fallback is now: `terminal-notifier` posts the alert and nothing else
+runs. The next prompt in that session takes it down through
+`ghostty-notify-clear.sh`, guarded by a delivery stamp so a notification that
+arrives after the clear was requested survives. Clear-on-arrival and
+click-to-jump come from the agent alone.
+
+Verified locally before the change landed:
+
+- `tests/test-clear-on-prompt.sh` replaces the 44-assertion watcher suite with
+  16 assertions on what is left. Each guard was mutated in turn — the
+  clear-before window, the delivery stamp and its removal, the failed-delivery
+  path, the opt-out, the session-id shape check — and the matching assertion
+  went red every time.
+- Both suites assert that nothing outlives the hook. The negative control
+  restores a watcher (a background `--watch` invocation that sleeps) and both
+  assertions fail, so neither is vacuous.
+- `tests/test_codex_hooks.py` (40 tests) covers the Codex side of the fallback:
+  its own notification group, the delivery stamp, and the prompt that clears
+  it. Mutating the round-reset clear, the group prefix and the stamp each
+  turned it red.
+- Shell syntax, ShellCheck, the JSON checks, the remaining bash suites and the
+  66 Swift tests all pass.

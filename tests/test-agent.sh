@@ -391,6 +391,13 @@ echo
 echo "Results: $pass passed, $fail failed"
 if (( fail > 0 )); then
     echo "Failed: ${fail_list[*]}"
+    # Preserve diagnostics before the private sandbox is cleaned on exit.
+    echo "── agent.log (last 40 lines) ──"
+    tail -n 40 "$LOG" 2>/dev/null
+    echo "── spool ──"
+    ls -la "$ROOT/spool" 2>/dev/null
+    echo "pid=$(cat "$ROOT/agent.pid" 2>/dev/null) ready=$(cat "$ROOT/ready" 2>/dev/null)"
+    ps -axo pid,ppid,lstart,command | grep '[g]hostty-notify-agent'
     exit 1
 fi
 exit 0

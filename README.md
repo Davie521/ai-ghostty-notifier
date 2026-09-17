@@ -1,6 +1,6 @@
-# claude-ghostty-notify
+# ai-ghostty-notifier
 
-[![CI](https://github.com/Davie521/claude-ghostty-notify/actions/workflows/ci.yml/badge.svg)](https://github.com/Davie521/claude-ghostty-notify/actions/workflows/ci.yml)
+[![CI](https://github.com/Davie521/ai-ghostty-notifier/actions/workflows/ci.yml/badge.svg)](https://github.com/Davie521/ai-ghostty-notifier/actions/workflows/ci.yml)
 
 **Language / 语言** → [English](README.md) · [中文](README.zh-CN.md)
 
@@ -27,7 +27,7 @@ installed. No Node, telemetry or Accessibility permission is required.
 | 3–10 minutes | Silent notification |
 | 10 minutes or more | Notification with Glass sound |
 
-Defaults are configurable. Notifications expire after 20 minutes unless cleared
+Defaults are configurable. Resident notifications expire after 20 minutes unless cleared
 earlier. Focusing the session's tab or submitting another prompt withdraws its
 notification. Permission/input prompts are silent unless
 `GHOSTTY_NOTIFY_ON_PROMPT=1`.
@@ -88,7 +88,7 @@ the hooks through [hooks/hooks.json](hooks/hooks.json). Install the app first,
 then register the plugin in Claude Code:
 
 ```text
-/plugin marketplace add Davie521/claude-ghostty-notify
+/plugin marketplace add Davie521/ai-ghostty-notifier
 /plugin install claude-ghostty-notify
 ```
 
@@ -145,8 +145,9 @@ with LaunchServices or opening permission prompts. It refuses an existing
 LaunchAgent installation or a live resident (including a manually started app);
 use the normal installer to upgrade either safely.
 
-Install `alerter` or `terminal-notifier` if notifications must work without a
-ready, authorized resident. For example, `brew install alerter`. Set
+Install `terminal-notifier` for display-only fallback when the resident is not
+ready or authorized: `brew install terminal-notifier`. It has no click-to-jump,
+focus watcher or expiry timer; a new prompt clears its notification. Set
 `GHOSTTY_NOTIFY_AGENT_APP` to an empty string in hook settings to prevent
 automatic resident routing/launch. Hook processing and the temporary worker are
 still **Swift**, not a shell fallback. With neither an available resident nor an
@@ -181,10 +182,9 @@ paths and private helper controls are not copied.
 | `GHOSTTY_NOTIFY_MIN_ELAPSED` | `180` | Minimum duration for a completion alert, seconds |
 | `GHOSTTY_NOTIFY_SOUND_ELAPSED` | `600` | Minimum duration for Glass sound |
 | `GHOSTTY_NOTIFY_TIMEOUT` | `1200` | Expiry in seconds; `0` disables automatic expiry |
-| `GHOSTTY_NOTIFY_BACKEND` | `auto` | Ready resident first, then alerter, then terminal-notifier; explicit `alerter` or `terminal-notifier` selects external delivery |
+| `GHOSTTY_NOTIFY_BACKEND` | `auto` | Ready resident first, then display-only terminal-notifier; explicit `terminal-notifier` skips resident delivery |
 | `GHOSTTY_NOTIFY_ON_PROMPT` | `0` | Only `1` enables immediate Claude permission/input alerts |
 | `GHOSTTY_NOTIFY_CLEAR_ON_FOCUS` | `1` | `0`, `false`, `no`, `off` disable focus clearing |
-| `GHOSTTY_NOTIFY_FOCUS_POLL` | `1` | External monitor interval; resident delivery uses activation events |
 | `GHOSTTY_NOTIFY_AGENT_APP` | discovered | Resident bundle path; empty disables resident use, not the required native runtime |
 | `GHOSTTY_NOTIFY_NATIVE_APP` | installed app | Environment-only bootstrap override for the native executable's app; not read from Codex config |
 | `GHOSTTY_NOTIFY_MENU_BAR` | `1` | Resident-process setting; false-like values hide its menu bar item |
@@ -238,9 +238,8 @@ are historical comparisons, not an installed fallback.
 - **Resident stopped:** normally the hook attempts an app launch and handles the
   current event in a native worker. External delivery still needs an installed,
   authorized backend. Explicit empty `AGENT_APP` disables the launch attempt.
-- **Click only dismisses:** prefer resident delivery. External alerter instances
-  share their sender's identity; the native wrapper cannot remove that backend's
-  click-routing limitations. terminal-notifier deliberately has no click-to-jump
+- **Click only dismisses:** use resident delivery. alerter is retired, and
+  terminal-notifier deliberately has no click-to-jump
   action, since its execute action can also run on dismissal.
 - **Duplicate alerts:** check that manual and plugin hooks are not both
   registered, and disable other completion notifiers. For ECC's desktop notifier
@@ -250,9 +249,8 @@ are historical comparisons, not an installed fallback.
   binding degrades to activation only, with retry/backoff; a closed tab cannot
   be reopened by clicking. Title restoration is best effort during terminal or
   Automation failures, not an unconditional guarantee.
-- **Long-lived external process:** `TIMEOUT=0` explicitly means no automatic
-  expiry. A new prompt, focus clearing, action or cancellation can still end it.
-  Do not kill unrelated sessions' processes to clear one notification.
+- **Old notifications after an upgrade:** dismiss stale pre-upgrade notices and
+  test a freshly posted one; macOS may no longer route the old sender identity.
 - macOS/Ghostty only. Terminal CLI ownership is required for Codex notifications.
   Tests do not replace manual checks of visible banners, sound and real tab jumps.
 

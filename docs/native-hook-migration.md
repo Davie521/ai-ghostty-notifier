@@ -3,8 +3,14 @@
 > Update, 2026-09-17: the user authorized deployment. Fresh tests, a live focus
 > correction and local installation are recorded in
 > [the deployment report](native-hook-deployment-2026-09-17.md). The implementation
-> is still uncommitted and unpublished. The notes below record the earlier
-> September 16 verification and its then-outstanding deployment/acceptance work.
+> is being prepared for a PR. The notes below record the earlier September 16
+> verification and its then-outstanding deployment/acceptance work.
+>
+> Mainline integration preserves the later retirement of alerter: only the
+> resident handles clicks/focus/expiry; terminal-notifier is display-only and
+> cleared on the next prompt. Native fallback has no long-lived focus monitor.
+> Historical descriptions of alerter and its tests below describe the earlier
+> snapshot, not the final runtime contract; see [configuration](native-hook-configuration.md).
 
 Objective: minimize shell in the macOS hook runtime, not just hide it behind a
 Swift caller. Continue in `refactor-hook-agent`, preserving the first-stage work.

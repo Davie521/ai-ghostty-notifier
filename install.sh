@@ -1,5 +1,5 @@
 #!/bin/bash
-# Installer for claude-ghostty-notify.
+# Installer for ai-ghostty-notifier.
 # Copies the hook scripts into ~/.claude/hooks/ and prints the
 # settings.json snippet to merge into the user's config.
 
@@ -18,13 +18,9 @@ if [[ -z "$NATIVE_APP" || ! -f "$NATIVE_APP/Contents/Resources/native-hook-v1" \
     exit 1
 fi
 
-if ! command -v alerter >/dev/null 2>&1 \
-    && [[ ! -x /opt/homebrew/bin/alerter ]] \
-    && [[ ! -x /usr/local/bin/alerter ]] \
-    && [[ ! -x "$HOME/.local/bin/alerter" ]]; then
-    echo "Note: alerter is not installed (optional external notification backend)."
-    echo "      Use the authorized resident App, or install alerter / terminal-notifier"
-    echo "      for notifications while the resident is unavailable."
+if ! command -v terminal-notifier >/dev/null 2>&1; then
+    echo "Note: terminal-notifier is not installed (optional display-only fallback)."
+    echo "      The resident App must be running and authorized to deliver notifications."
 fi
 
 # Resolve the source hooks dir.
@@ -48,7 +44,7 @@ install_from_local() {
 }
 
 install_from_github() {
-    local RAW="https://raw.githubusercontent.com/Davie521/claude-ghostty-notify/main/hooks"
+    local RAW="https://raw.githubusercontent.com/Davie521/ai-ghostty-notifier/main/hooks"
     # Stable launchers and their shared native-runtime bootstrap.
     for f in "${HOOK_FILES[@]}"; do
         curl -fsSL "$RAW/$f" -o "$STAGING/$f"

@@ -258,25 +258,26 @@ class NativeHookTests(unittest.TestCase):
         self.assertFalse(record.exists())
         self.assertTrue(any("-remove" in args for args in self.calls()))
 
-    def test_alerter_dismiss_is_not_a_focus_action(self):
+    def test_retired_alerter_setting_uses_display_only_fallback(self):
         self.start()
         self.invoke("Stop", env={"GHOSTTY_NOTIFY_BACKEND": "alerter", "TEST_ACTION": "Dismiss"})
         self.wait(lambda: len(self.notices()) == 1)
-        self.wait(lambda: not (self.state() / (SID + ".native-notice.json")).exists())
         args = self.notices()[0]
-        self.assertIn("--close-label", args)
-        self.assertIn("Go to tab", args)
+        self.assertIn("-title", args)
+        self.assertNotIn("--close-label", args)
+        self.assertNotIn("Go to tab", args)
+        self.assertNotIn("-execute", args)
 
     def test_worker_sigterm_reaps_its_backend_and_removes_its_notice(self):
         self.check_worker_shutdown(clear_on_focus=False)
 
-    def test_worker_sigterm_also_stops_the_focus_monitor(self):
+    def test_worker_sigterm_with_clear_enabled_reaps_backend(self):
         self.check_worker_shutdown(clear_on_focus=True)
 
     def check_worker_shutdown(self, clear_on_focus):
         self.start()
         settings = {key: value for key, value in self.env.items() if key.startswith("GHOSTTY_NOTIFY_")}
-        settings.update({"GHOSTTY_NOTIFY_BACKEND": "alerter", "GHOSTTY_NOTIFY_TIMEOUT": "0",
+        settings.update({"GHOSTTY_NOTIFY_BACKEND": "terminal-notifier", "GHOSTTY_NOTIFY_TIMEOUT": "0",
                          "GHOSTTY_NOTIFY_CLEAR_ON_FOCUS": "1" if clear_on_focus else "0"})
         now = time.time()
         context = {

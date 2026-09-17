@@ -6,7 +6,7 @@
 # at that copy. The checkout is then free to move or disappear. launchd stores
 # absolute paths, and a LaunchAgent aimed into a repository stops working the
 # day the repository is renamed — exit 78, penalty box, no dialog — while the
-# hooks fall back to alerter without a word, which is the very failure the
+# hooks fall back to display-only terminal-notifier, which is the failure the
 # agent exists to fix. hooks/native-hook.sh looks in the same fixed place, so
 # a moved checkout does not lose the agent either.
 #
@@ -146,7 +146,7 @@ codesign --verify --deep --strict "$APP" 2>/dev/null ||
 if [[ "$START" == 0 ]]; then
     echo "==> Installed native runtime: $APP"
     echo "    No LaunchAgent, LaunchServices registration or permission prompt was started."
-    echo "    Install hooks next; alerter / terminal-notifier is needed for external delivery."
+    echo "    Install hooks next; terminal-notifier is needed for display-only fallback delivery."
     echo "    Set GHOSTTY_NOTIFY_AGENT_APP='' in hook settings to disable automatic resident launch."
     exit 0
 fi
@@ -247,7 +247,7 @@ case "$ANSWER" in
     authorized) echo "    granted" ;;
     denied)
         echo "    DENIED — the user declined, so the agent cannot display" >&2
-        echo "    notifications. Hooks will keep using the alerter/terminal-notifier path." >&2
+        echo "    notifications. Hooks will keep using the terminal-notifier display fallback." >&2
         ;;
     error)
         echo "    macOS refused the request twice (no dialog was shown)." >&2

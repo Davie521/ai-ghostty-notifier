@@ -66,11 +66,11 @@ private final class RecordingCommands: CommandLaunching, @unchecked Sendable {
         if arguments.first?.contains("remove") == true {
             return FinishedCommand(value: .init(status: 0))
         }
-        if name == "alerter", failLaunch { throw CocoaError(.executableNotLoadable) }
+        if failLaunch { throw CocoaError(.executableNotLoadable) }
         return FinishedCommand(
             value: .init(
                 status: name == "alerter" ? alerterStatus : terminalStatus,
-                output: name == "alerter" ? action : ""))
+                output: action))
     }
 }
 private final class ProcessAndSignalFixture: ProcessInspecting, ProcessSignalling,
@@ -115,7 +115,7 @@ struct ExternalNotificationTests {
         return event
     }
     @Test(arguments: ["Dismiss", "@CLOSED", "@TIMEOUT", "", "Go to tab", "@CONTENTCLICKED"])
-    func onlySuccessfulWhitelistedActionsCanFocus(_ action: String) async throws {
+    func displayOnlyFallbackNeverDispatchesActions(_ action: String) async throws {
         let sandbox = try HookSandbox()
         let event = try event(sandbox)
         let commands = RecordingCommands(action: action)
@@ -124,27 +124,26 @@ struct ExternalNotificationTests {
             automation: focus, launcher: commands, clock: TickClock())
         await external.deliver(
             NotificationPolicy.content(event, title: "中文", tabID: "tab-1"), event: event)
+        #expect(await focus.focusCalls.isEmpty)
+        #expect(await focus.queries == 0)
+        #expect(commands.recorded.count == 1)
+        #expect(commands.recorded.first?.0 == "terminal-notifier")
+        #expect(commands.recorded.first?.1.contains("-execute") == false)
         #expect(
-            await focus.focusCalls.count == (ExternalNotificationAction.shouldFocus(action) ? 1 : 0)
-        )
-        #expect(commands.recorded.contains { $0.1.first == "--remove" })
-        #expect(
-            !FileManager.default.fileExists(
+            FileManager.default.fileExists(
                 atPath: sandbox.root.path + "/abc-123.native-notice.json"))
     }
-    @Test(arguments: [true, false])
-    func unusableAlerterFallsBackAndCannotDispatchAnAction(_ launchFailure: Bool) async throws {
+    @Test func failedFallbackLaunchDoesNotStartAnotherBackend() async throws {
         let sandbox = try HookSandbox()
         let event = try event(sandbox)
-        let commands = RecordingCommands(
-            alerterStatus: 1, action: "Go to tab", failLaunch: launchFailure)
+        let commands = RecordingCommands(failLaunch: true)
         let focus = FocusFixture()
         let external = ExternalNotifications(
             automation: focus, launcher: commands, clock: TickClock())
         await external.deliver(
             NotificationPolicy.content(event, title: "", tabID: nil), event: event)
-        #expect(
-            commands.recorded.contains { $0.0 == "terminal-notifier" && $0.1.first == "-title" })
+        #expect(commands.recorded.count == 1)
+        #expect(commands.recorded.first?.0 == "terminal-notifier")
         #expect(await focus.focusCalls.isEmpty)
     }
     @Test func terminalNotifierFailureStartsNoFocusWatcher() async throws {
@@ -161,30 +160,22 @@ struct ExternalNotificationTests {
             !FileManager.default.fileExists(
                 atPath: sandbox.root.path + "/abc-123.native-notice.json"))
     }
-    @Test func unknownFrontmostDoesNotArmAnAppLevelReturn() async throws {
+    @Test func fallbackReturnsWithoutPollingEvenWhenClearingIsEnabled() async throws {
         let sandbox = try HookSandbox()
-        var event = try event(sandbox, backend: "terminal-notifier", clear: true)
-        event.settings["GHOSTTY_NOTIFY_FOCUS_POLL"] = "0"  // defaults to positive polling
-        let focus = FocusFixture(fronts: [true, nil, true, false, true])
+        var event = try event(sandbox, backend: "auto", clear: true)
+        event.settings["GHOSTTY_NOTIFY_TIMEOUT"] = "0"
+        let focus = FocusFixture(fronts: [true], selected: ["tab-1"])
         let commands = RecordingCommands()
         let external = ExternalNotifications(
             automation: focus, launcher: commands, clock: TickClock())
         await external.deliver(
-            NotificationPolicy.content(event, title: "", tabID: nil), event: event)
-        #expect(await focus.queries == 5)
-        #expect(await focus.focusCalls.isEmpty)
-        #expect(commands.recorded.contains { $0.1.first == "-remove" })
-    }
-    @Test func exactTabNeedsTheMatchingSurface() async throws {
-        let sandbox = try HookSandbox()
-        let event = try event(sandbox, backend: "terminal-notifier", clear: true)
-        let focus = FocusFixture(fronts: [true], selected: ["other", "tab-1"])
-        let external = ExternalNotifications(
-            automation: focus, launcher: RecordingCommands(), clock: TickClock())
-        await external.deliver(
             NotificationPolicy.content(event, title: "", tabID: "tab-1"), event: event)
-        #expect(await focus.queries == 3)  // initial state, other tab, matching tab
+        #expect(await focus.queries == 0)
         #expect(await focus.focusCalls.isEmpty)
+        #expect(commands.recorded.count == 1)
+        #expect(
+            FileManager.default.fileExists(
+                atPath: sandbox.root.path + "/abc-123.native-notice.json"))
     }
     @Test func latePromptCannotRemoveItsOwnRoundButExplicitClearCan() async throws {
         let sandbox = try HookSandbox()

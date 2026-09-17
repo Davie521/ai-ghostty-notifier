@@ -45,9 +45,9 @@ jobs:
 
       - name: Historical shell behavior fixtures (not native runtime coverage)
         run: |
-          bash tests/test-alerter-dispatch.sh
           bash tests/test-fallback-no-focus.sh
           bash tests/test-session-title.sh
+          bash tests/test-alerter-dispatch.sh
           bash tests/test-clear-on-focus.sh
 
       - uses: actions/setup-python@v5
@@ -74,6 +74,11 @@ jobs:
         env:
           NATIVE_TEST_BINARY: ${{ github.workspace }}/build/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent
         run: python3 -m unittest discover -s tests -p 'test_native_hooks.py' -v
+
+      - name: Native clear-on-prompt compatibility entrypoint
+        env:
+          NATIVE_TEST_BINARY: ${{ github.workspace }}/build/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent
+        run: bash tests/test-clear-on-prompt.sh
 
       - name: Isolated first install and upgrade regressions
         run: python3 -m unittest discover -s tests -p 'test_native_install.py' -v

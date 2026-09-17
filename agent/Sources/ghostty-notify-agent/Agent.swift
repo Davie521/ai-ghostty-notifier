@@ -424,10 +424,9 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
         switch action {
         case UNNotificationDismissActionIdentifier:
-            // Closing a notification is not a request to go anywhere. The shell
-            // version had exactly this bug — alerter's close-button label was
-            // matched as an action and phantom-activated Ghostty — which is why
-            // tests/test-alerter-dispatch.sh exists.
+            // Closing a notification is not a request to go anywhere. The
+            // retired alerter backend had exactly this bug: its close-button
+            // label was matched as an action and phantom-activated Ghostty.
             log("dismissed \(identifier)")
         case UNNotificationDefaultActionIdentifier, AgentConstants.gotoActionID:
             jump(sessionID: session, fallbackTabID: tabID)

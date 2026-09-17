@@ -1,6 +1,6 @@
-# claude-ghostty-notify
+# ai-ghostty-notifier
 
-[![CI](https://github.com/Davie521/claude-ghostty-notify/actions/workflows/ci.yml/badge.svg)](https://github.com/Davie521/claude-ghostty-notify/actions/workflows/ci.yml)
+[![CI](https://github.com/Davie521/ai-ghostty-notifier/actions/workflows/ci.yml/badge.svg)](https://github.com/Davie521/ai-ghostty-notifier/actions/workflows/ci.yml)
 
 **语言 / Language** → [English](README.md) · [中文](README.zh-CN.md)
 
@@ -78,7 +78,7 @@ bash install.sh
 [hooks/hooks.json](hooks/hooks.json) 自动注册。先安装 App，再在 Claude Code 中运行：
 
 ```text
-/plugin marketplace add Davie521/claude-ghostty-notify
+/plugin marketplace add Davie521/ai-ghostty-notifier
 /plugin install claude-ghostty-notify
 ```
 
@@ -129,8 +129,9 @@ bash scripts/install-agent.sh --no-start
 如果已经安装 LaunchAgent，或仍有常驻进程运行（包括手动启动的 App），它会拒绝
 这个选项；请运行普通安装命令完成升级。
 
-希望常驻进程不可用时仍能通知，需要安装 `alerter` 或 `terminal-notifier`，
-例如 `brew install alerter`。在 hook 设置中把 `GHOSTTY_NOTIFY_AGENT_APP`
+希望常驻进程不可用时仍能显示通知，可安装 `terminal-notifier`：
+`brew install terminal-notifier`。它没有点击跳转、聚焦监视或自动过期，下一次提问清除通知。
+在 hook 设置中把 `GHOSTTY_NOTIFY_AGENT_APP`
 设为空字符串，可以禁用自动使用/启动常驻进程。
 
 此时 hook 处理和临时后台进程仍是 **Swift**，不是 shell 兜底。
@@ -161,10 +162,9 @@ Codex 首次安装会从 Claude 设置中复制公开通知偏好，不复制来
 | `GHOSTTY_NOTIFY_MIN_ELAPSED` | `180` | 完成通知的最低耗时，秒 |
 | `GHOSTTY_NOTIFY_SOUND_ELAPSED` | `600` | 响 Glass 提示音的最低耗时 |
 | `GHOSTTY_NOTIFY_TIMEOUT` | `1200` | 自动过期秒数；`0` 表示不自动过期 |
-| `GHOSTTY_NOTIFY_BACKEND` | `auto` | 先用就绪的常驻进程，否则 alerter，再否则 terminal-notifier；可明确选择外部后端 |
+| `GHOSTTY_NOTIFY_BACKEND` | `auto` | 先用就绪的常驻进程，否则用只显示的 terminal-notifier；明确选择 terminal-notifier 可跳过常驻投递 |
 | `GHOSTTY_NOTIFY_ON_PROMPT` | `0` | 只有 `1` 开启 Claude 权限/输入提示通知 |
 | `GHOSTTY_NOTIFY_CLEAR_ON_FOCUS` | `1` | `0`、`false`、`no`、`off` 关闭聚焦清理 |
-| `GHOSTTY_NOTIFY_FOCUS_POLL` | `1` | 外部后端监视间隔；常驻投递使用激活事件 |
 | `GHOSTTY_NOTIFY_AGENT_APP` | 自动发现 | 常驻 App 路径；空值禁用常驻路径，不会取消必需的原生运行时 |
 | `GHOSTTY_NOTIFY_NATIVE_APP` | 已安装的 App | 仅环境变量可覆盖入口查找的原生 App，不读取 Codex config 中的此项 |
 | `GHOSTTY_NOTIFY_MENU_BAR` | `1` | 常驻进程自身的设置；false 类值隐藏菜单栏 |
@@ -214,8 +214,7 @@ SQLite 通过只读 C API 查询。构建和安装脚本仍可使用 shell。
   `~/.claude/notifications/ghostty-sessions/`，Codex 使用自己的 `notifications/` 目录。
 - **常驻进程停了：** 默认会尝试启动 App，并由临时 Swift worker 处理当前事件。
   外部投递仍需要已安装、已授权的后端；空的 `AGENT_APP` 会禁用启动尝试。
-- **点击只消失、不跳转：** 优先使用常驻投递。外部 alerter 多进程共用发送身份，
-  原生包装无法消除该后端本身的点击路由限制。terminal-notifier 不接点击跳转，
+- **点击只消失、不跳转：** 使用常驻投递。alerter 已退役；terminal-notifier 不接点击跳转，
   因为它的 execute 动作也可能在关闭通知时触发。
 - **重复通知：** 检查是否同时注册了手动和插件 hook，并停用其他完成提醒。
   ECC 桌面通知已有的关闭项是 `ECC_DISABLED_HOOKS=stop:desktop-notify`。
@@ -223,8 +222,7 @@ SQLite 通过只读 C API 查询。构建和安装脚本仍可使用 shell。
   tmux、标题动画可能使标记无法往返。失败或歧义绑定会退避/重试并降级为只激活应用；
   已关闭的标签页无法靠点击重新打开。终端或自动化异常时，标题恢复是尽力而为，
   不是无条件保证。
-- **外部进程一直存在：** `TIMEOUT=0` 明确表示不自动过期，但新提问、聚焦清理、
-  点击或取消仍可结束它。不要为了清一条通知而杀掉其他会话的进程。
+- **升级前的旧通知：** macOS 可能无法再路由旧发送身份；清掉旧通知，用新发出的通知复测。
 - 仅支持 macOS/Ghostty；Codex 通知要求存在终端 CLI 归属。
   自动化测试不能替代对真实横幅、声音、点击跳转的人工验收。
 

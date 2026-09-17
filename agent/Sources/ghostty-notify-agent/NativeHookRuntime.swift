@@ -6,8 +6,8 @@ import NotifyCore
 /// All hook modes live in the already-shipped app executable. Only work whose
 /// timing depends on the caller (intake, TTY, round capture, Claude binding)
 /// runs before the hook returns. Everything else goes to the resident app or
-/// a native worker; neither route invokes the old shell helpers. A worker has
-/// a bounded lifetime unless the user explicitly selects TIMEOUT=0.
+/// a bounded native worker; neither route invokes the old shell helpers.
+/// Display-only fallback never leaves a focus watcher, including TIMEOUT=0.
 @MainActor
 enum NativeHookRuntime {
     static func readInput() -> Data {

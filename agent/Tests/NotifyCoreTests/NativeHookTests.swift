@@ -251,16 +251,6 @@ struct NativeHookTests {
         if child.isRunning { kill(child.pid, SIGKILL) }
         _ = await result.value
     }
-    @Test(arguments: [
-        "Dismiss", "@CLOSED", "@TIMEOUT", "", "error", "go to tab", "Go to tab\nerror",
-    ])
-    func dismissalNeverFocuses(_ output: String) {
-        #expect(!ExternalNotificationAction.shouldFocus(output))
-    }
-    @Test func onlyExplicitActionsFocus() {
-        #expect(ExternalNotificationAction.shouldFocus("Go to tab\n"))
-        #expect(ExternalNotificationAction.shouldFocus("@CONTENTCLICKED"))
-    }
     @Test func resumedOwnerInvalidatesResidentBindingEvenAfterRestart() throws {
         var state = SessionState()
         state.captureOwner(sessionID: "codex-abc", owner: "old-process")

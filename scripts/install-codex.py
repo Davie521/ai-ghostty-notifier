@@ -50,8 +50,6 @@ LEGACY_COMMENT = "# Codex completion notifications in Ghostty (claude-ghostty-no
 # Codex's own TUI desktop alerts, minus agent-turn-complete (that is what
 # this project delivers, on its own threshold).
 TUI_ALERTS_KEPT = ["approval-requested", "plan-mode-prompt"]
-ALERTER_PATHS = ("/opt/homebrew/bin/alerter", "/usr/local/bin/alerter",
-                 str(Path.home() / ".local/bin/alerter"))
 
 
 def hook_command(destination, event):
@@ -322,13 +320,9 @@ def require_native_runtime():
 
 def install(codex_home, claude_settings):
     require_native_runtime()
-    if shutil.which("alerter") is None and not any(os.access(p, os.X_OK) for p in ALERTER_PATHS):
-        if shutil.which("terminal-notifier") is None:
-            print("Note: no external notification fallback is installed; "
-                  "the resident agent must be running and authorized.")
-        else:
-            print("Note: alerter is not installed; terminal-notifier will show the "
-                  "alerts but cannot offer the Go to tab button (brew install alerter).")
+    if shutil.which("terminal-notifier") is None:
+        print("Note: no display-only fallback is installed; "
+              "the resident agent must be running and authorized.")
 
     destination = codex_home / "ghostty-notify"
     hooks_path = codex_home / "hooks.json"
