@@ -5,8 +5,9 @@ import NotifyCore
 /// Apple Events to Ghostty, sent in-process — no `osascript` fork, which is the
 /// whole reason the polling loop moved into a resident app.
 ///
-/// Every send runs on one dedicated serial queue, never on the main actor.
-/// `NSAppleScript` is not thread-safe, hence serial; and
+/// Read-only sends run on a dedicated serial queue. Focus runs on the main
+/// queue with a bounded Apple Event timeout because it pumps WindowServer
+/// callbacks that assert main-queue affinity. Each send owns its script;
 /// `executeAndReturnError` blocks until the round-trip completes, which for the
 /// *first* event means blocking until the user answers the modal
 /// "wants to control Ghostty" consent prompt. On the main actor that would wedge
@@ -41,10 +42,10 @@ enum Ghostty {
 
     /// Raise the window owning `tabID` and select it.
     ///
-    /// `activate window` is required before `select tab`: selecting alone puts
-    /// the tab in front *inside a background window*, and the user sees nothing
-    /// change. Learned by ghostty-tab-focus.sh the hard way.
-    /// Selects `tabID` and reports which tab is selected afterwards.
+    /// Focus the tab's terminal to raise its window too. `activate window`
+    /// followed by `select tab` can leave that window behind the current one.
+    /// Report the front window's selection so a background selection cannot
+    /// masquerade as a successful jump.
     ///
     /// Returning the resulting selection rather than a bare "ok" is deliberate:
     /// the script can succeed while the selection does not stick, and a boolean
@@ -61,11 +62,8 @@ enum Ghostty {
             return
         }
         let literal = appleScriptLiteral(tabID)
-        // No `activate` here. An Apple Event asking another app to come forward
-        // is silently ignored when the sender is not the active app, so it
-        // reported success while nothing moved. App-level activation is done by
-        // the caller through NSRunningApplication instead; this script only has
-        // to put the right tab in front inside Ghostty.
+        // A single terminal-focus command keeps selection and window ordering
+        // together. Selecting first can change what a live tab reference names.
         run(
             """
             tell application "Ghostty"
@@ -73,17 +71,23 @@ enum Ghostty {
                     repeat with t in every tab of w
                         try
                             if (id of t as text) is \(literal) then
-                                activate window w
-                                select tab t
-                                return (id of selected tab of w as text)
+                                focus (focused terminal of t)
+                                return (id of selected tab of front window as text)
                             end if
                         end try
                     end repeat
                 end repeat
                 return ""
             end tell
-            """
-        ) { completion($0) }
+            """, onMainThread: true
+        ) { selected in
+            if let paths = try? AgentPaths(env: ProcessInfo.processInfo.environment) {
+                AgentLog.append(
+                    "focus result: requested=\(tabID) selected=\(selected ?? "<none>")",
+                    to: paths.log)
+            }
+            completion(selected)
+        }
     }
 
     /// Degraded fallback for a click we cannot localize: at least put Ghostty in
@@ -110,22 +114,32 @@ enum Ghostty {
     /// escaping in appleScriptLiteral is the second layer.
     static func isPlausibleTabID(_ id: String) -> Bool {
         !id.isEmpty && id.count <= 128
-            && id.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }
+            && id.allSatisfy {
+                $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_")
+            }
     }
 
     static func appleScriptLiteral(_ value: String) -> String {
-        let escaped = value
+        let escaped =
+            value
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         return "\"\(escaped)\""
     }
 
     private static func run(
-        _ source: String, _ completion: @escaping @MainActor (String?) -> Void
+        _ source: String, onMainThread: Bool = false,
+        _ completion: @escaping @MainActor (String?) -> Void
     ) {
-        queue.async {
+        // Focusing pumps WindowServer events, which require the main queue.
+        // Read-only queries stay off it so an Automation prompt cannot stall
+        // resident spool consumption.
+        let executionQueue = onMainThread ? DispatchQueue.main : queue
+        executionQueue.async {
             var result: String?
-            if let script = NSAppleScript(source: source) {
+            let bounded =
+                onMainThread ? "with timeout of 3 seconds\n\(source)\nend timeout" : source
+            if let script = NSAppleScript(source: bounded) {
                 var errorInfo: NSDictionary?
                 let descriptor = script.executeAndReturnError(&errorInfo)
                 if errorInfo == nil, let value = descriptor.stringValue, !value.isEmpty {

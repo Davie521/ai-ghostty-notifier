@@ -18,6 +18,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import sqlite3
 import subprocess
 import tempfile
@@ -38,6 +39,7 @@ def module(name, path):
 
 
 installer = module("install_codex", REPO / "scripts/install-codex.py")
+legacy_installer = module("legacy_install_codex", REPO / "tests/fixtures/shell-baseline/scripts/install-codex.py")
 SID = "019abcde-1111-2222-3333-444455556666"
 TURN = "019abcde-aaaa-bbbb-cccc-444455556666"
 OWNER = "1000:ttysNONE:Sun Sep 13 17:00:00 2026"
@@ -107,11 +109,6 @@ class CodexHookTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        # Runs before that cleanup (addCleanup is LIFO): Stop hands its work
-        # to a detached process, and deleting the sandbox while that process
-        # is still writing into it fails the test with "Directory not empty"
-        # — a teardown race reported as a failure of whichever test ran.
-        self.addCleanup(self.settle)
         self.root = Path(self.temp.name)
         self.bin = self.root / "bin"
         self.bin.mkdir()
@@ -122,7 +119,7 @@ class CodexHookTests(unittest.TestCase):
         claude = self.root / "claude-settings.json"
         claude.write_text(json.dumps({"env": {"GHOSTTY_NOTIFY_MIN_ELAPSED": "120", "OTHER": "private"}}))
         with patch("builtins.print"):
-            self.installed = installer.install(self.codex_home, claude)
+            self.installed = legacy_installer.install(self.codex_home, claude)
         self.state = self.codex_home / "notifications/ghostty-sessions"
         self.rollout = self.root / "rollout.jsonl"
         self.env = patch.dict(os.environ, {
@@ -154,29 +151,59 @@ class CodexHookTests(unittest.TestCase):
 
     def run_hook(self, event, argument=None, **extra):
         started = time.monotonic()
-        subprocess.run(
+        process = subprocess.Popen(
             ["/bin/bash", str(self.installed / "codex-hook.sh"), argument or event],
-            input=json.dumps(self.payload(event, **extra)), text=True,
-            env=os.environ, check=True, timeout=20,
+            stdin=subprocess.PIPE, text=True, start_new_session=True,
+            env=os.environ,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
+        self.last_hook_group = process.pid
+        self.addCleanup(self.stop_hook_group, process.pid)
+        process.communicate(json.dumps(self.payload(event, **extra)), timeout=20)
+        self.assertEqual(process.returncode, 0)
         return time.monotonic() - started
+
+    @staticmethod
+    def hook_group_gone(group):
+        # killpg(group, 0) can report EPERM during runner teardown. Inspect
+        # the exact group instead: zombies cannot write into the sandbox.
+        # Use the real ps, not the ancestry stub installed on this test's PATH.
+        snapshot = subprocess.check_output(
+            ["/bin/ps", "-axo", "pgid=,stat="], text=True)
+        return not any(fields[0] == str(group) and not fields[1].startswith("Z")
+                       for line in snapshot.splitlines()
+                       if len(fields := line.split()) == 2)
+
+    def stop_hook_group(self, group):
+        # Every hook gets its own session. Reap/stop only this test's workers
+        # before TemporaryDirectory removes the files they can still write.
+        if self.hook_group_gone(group):
+            return
+        try:
+            os.killpg(group, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        except PermissionError:
+            if self.hook_group_gone(group):
+                return
+            raise
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and not self.hook_group_gone(group):
+            time.sleep(0.01)
+        if not self.hook_group_gone(group):
+            try:
+                os.killpg(group, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                if not self.hook_group_gone(group):
+                    raise
 
     def notices(self):
         if not self.log.exists():
             return []
         return [dict(zip(args[::2], args[1::2]))
                 for args in map(json.loads, self.log.read_text().splitlines())]
-
-    def settle(self, seconds=10):
-        """Wait for the detached Stop work to leave the sandbox alone."""
-        deadline = time.monotonic() + seconds
-        while time.monotonic() < deadline:
-            alive = subprocess.run(["pgrep", "-f", str(self.root)],
-                                   capture_output=True, text=True).stdout.split()
-            if not alive:
-                return
-            time.sleep(0.05)
 
     def wait_until(self, predicate, seconds=5):
         deadline = time.monotonic() + seconds
@@ -253,8 +280,8 @@ class CodexHookTests(unittest.TestCase):
         """A fake agent bundle at the installed location, reported alive and
         authorized. This test process stands in for the agent (the liveness
         check is `kill -0` plus what ps says the pid runs), `open` is stubbed
-        so nothing is launched, and the only other way out is the recording
-        terminal-notifier."""
+        so nothing is launched, and alerter is made unavailable so the only
+        other way out is the recording terminal-notifier."""
         app = self.root / "Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app"
         (app / "Contents/MacOS").mkdir(parents=True)
         self.script(app / "Contents/MacOS/ghostty-notify-agent", "#!/bin/sh\nexit 0\n")
@@ -266,6 +293,7 @@ class CodexHookTests(unittest.TestCase):
         os.environ.update({
             "FAKE_AGENT_PID": str(os.getpid()),
             "GHOSTTY_NOTIFY_BACKEND": "auto",
+            "GHOSTTY_NOTIFY_ALERTER": str(self.root / "no-alerter"),
         })
         return agent_root / "spool"
 
@@ -281,8 +309,8 @@ class CodexHookTests(unittest.TestCase):
         self.run_hook("UserPromptSubmit", prompt="back again")
         # The tab comes from Codex's own binding, not Claude's session dir.
         self.assertEqual(self.requests(spool), [
-            {"type": "anchor", "session_id": SID, "tab_id": "codex-target-tab"},
-            {"type": "dismiss", "session_id": SID},
+            {"type": "anchor", "session_id": SID, "tab_id": "codex-target-tab", "source": "codex"},
+            {"type": "dismiss", "session_id": SID, "source": "codex"},
         ])
 
     def test_long_round_is_delivered_by_the_agent(self):
@@ -293,15 +321,18 @@ class CodexHookTests(unittest.TestCase):
         self.wait_until(lambda: list(spool.glob("*.json")))
         request, = self.requests(spool)
         self.assertEqual(request["type"], "notify")
+        self.assertEqual(request["source"], "codex")
         self.assertEqual(request["title"], "Codex ✅")
         self.assertEqual(request["subtitle"], "修复登录 — same-project")
         self.assertEqual(request["tab_id"], "codex-target-tab")
         self.assertEqual(request["timeout"], "1200")
         self.assertEqual(request["clear_on_focus"], "false")
-        self.wait_until(lambda: not (self.state / (SID + ".start")).exists())
+        time.sleep(0.5)
         # Nothing reached the shell backends, and no watcher was spawned: the
         # agent withdraws on focus by itself.
         self.assertEqual(self.notices(), [])
+        self.assertFalse((self.state / (SID + ".watch-pid")).exists())
+        self.assertFalse((self.state / (SID + ".start")).exists())
 
     def test_config_can_pin_the_shell_path(self):
         spool = self.install_agent()
@@ -333,9 +364,7 @@ class CodexHookTests(unittest.TestCase):
         self.assertIn(notice["-message"], ("Finished after 2m 1s", "Finished after 2m 2s"))
         self.assertEqual(notice["-group"], "codex-ghostty-notify-" + SID)
         self.assertNotIn("-sound", notice)
-        # The detached work clears the timer after delivering, so wait for it
-        # rather than racing it.
-        self.wait_until(lambda: not (self.state / (SID + ".start")).exists())
+        self.assertFalse((self.state / (SID + ".start")).exists())
 
     def test_sound_past_the_long_threshold(self):
         self.bind(started_ago=601)
@@ -361,13 +390,87 @@ class CodexHookTests(unittest.TestCase):
         self.bind()
         self.records(("older-turn", now - 900), (TURN, now - 121), ("next-turn", now))
         self.run_hook("Stop")
-        time.sleep(0.6)
+        self.wait_until(lambda: self.hook_group_gone(self.last_hook_group))
         self.assertEqual(self.notices(), [])
         self.assertTrue((self.state / (SID + ".start")).exists())
         # Control: the same rollout without the follow-up turn delivers.
         self.records(("older-turn", now - 900), (TURN, now - 121))
         self.run_hook("Stop")
         self.wait_until(self.notices)
+
+    def test_native_event_keeps_payload_and_returns_before_settling(self):
+        spool = self.install_agent()
+        (spool.parent / "capabilities").write_text("hook-event-v1:{}\n".format(os.getpid()))
+        self.bind()
+        os.environ["GHOSTTY_NOTIFY_CODEX_SETTLE"] = "20"
+        elapsed = self.run_hook("Stop", session_title="中文\t\\path\n", cwd="/tmp/空 格",
+                                prompt="中" * 500, tool_output="not needed by the notifier")
+        request, = self.requests(spool)
+        self.assertLess(elapsed, 2)
+        self.assertEqual(request["type"], "hook_event")
+        self.assertEqual(request["version"], 1)
+        self.assertEqual(request["source"], "codex")
+        self.assertEqual(request["payload"]["session_title"], "中文\t\\path\n")
+        self.assertEqual(request["payload"]["cwd"], "/tmp/空 格")
+        self.assertEqual(request["payload"]["prompt"], "中" * 200)
+        self.assertNotIn("tool_output", request["payload"])
+        self.assertEqual(request["settings"]["GHOSTTY_NOTIFY_CODEX_SETTLE"], "20")
+        self.assertEqual(request["owner"], OWNER)
+        self.assertTrue(request["tty"].startswith("/dev/"))
+        self.assertTrue((self.state / (SID + ".start")).exists())
+        self.assertEqual(self.notices(), [])
+        self.wait_until(lambda: self.hook_group_gone(self.last_hook_group))
+
+    def test_native_prompt_advances_generation_and_does_not_run_legacy_worker(self):
+        spool = self.install_agent()
+        (spool.parent / "capabilities").write_text("hook-event-v1:{}\n".format(os.getpid()))
+        self.run_hook("UserPromptSubmit", prompt="first")
+        first, = self.requests(spool)
+        self.assertEqual(first["payload"]["hook_event_name"], "UserPromptSubmit")
+        self.assertEqual(first["started_at"], first["occurred_at"])
+        self.assertFalse((self.state / (SID + ".title")).exists(), "title policy belongs to Swift")
+        self.run_hook("UserPromptSubmit", prompt="second")
+        second = next(r for r in self.requests(spool) if r["round_id"] != first["round_id"])
+        self.assertEqual((self.state / (SID + ".round")).read_text().strip(), second["round_id"])
+
+    def test_native_context_recovers_a_corrupt_round_marker(self):
+        spool = self.install_agent()
+        (spool.parent / "capabilities").write_text("hook-event-v1:{}\n".format(os.getpid()))
+        self.bind()
+        (self.state / (SID + ".round")).write_text("../invalid-round\n")
+        self.run_hook("Stop")
+        request, = self.requests(spool)
+        self.assertRegex(request["round_id"], r"^[A-Za-z0-9-]{1,160}$")
+        self.assertEqual((self.state / (SID + ".round")).read_text().strip(), request["round_id"])
+
+    def test_stale_capability_uses_legacy_protocol(self):
+        spool = self.install_agent()
+        (spool.parent / "capabilities").write_text("hook-event-v1:999999\n")
+        self.bind()
+        self.run_hook("Stop")
+        self.wait_until(lambda: list(spool.glob("*.json")))
+        self.assertEqual(self.requests(spool)[0]["type"], "notify")
+
+    def test_missing_jq_reports_to_stderr_and_does_not_block_cli(self):
+        minimal = self.root / "minimal-bin"
+        minimal.mkdir()
+        for name, source in (("dirname", "/usr/bin/dirname"), ("cat", "/bin/cat")):
+            (minimal / name).symlink_to(source)
+        result = subprocess.run(["/bin/bash", str(self.installed / "codex-hook.sh"), "Stop"],
+                                input=json.dumps(self.payload("Stop")), text=True, capture_output=True,
+                                env={**os.environ, "PATH": str(minimal)}, timeout=5)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("jq is missing", result.stderr)
+
+    def test_malformed_metadata_is_rejected_before_any_state_write(self):
+        for session in (None, [], "abc\u0000def"):
+            result = subprocess.run(["/bin/bash", str(self.installed / "codex-hook.sh"), "Stop"],
+                                    input=json.dumps(self.payload("Stop", session_id=session)),
+                                    text=True, capture_output=True, env=os.environ, timeout=5)
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("invalid hook JSON", result.stderr)
+        self.assertFalse(self.state.exists())
 
     def test_stale_task_started_in_the_tail_does_not_count_as_continuation(self):
         now = int(time.time())
@@ -531,46 +634,108 @@ class CodexHookTests(unittest.TestCase):
         self.wait_until(lambda: not (self.state / (SID + ".start")).exists())
         self.assertEqual(tty.read_text(), "")
 
-    # ── The fallback path for a Codex session ───────────────────────────────
-    def test_fallback_clears_on_the_next_prompt(self):
-        """Without the agent, terminal-notifier shows the alert and the next
-        prompt in that session takes it down — through Codex's own group, not
-        Claude's."""
+    # ── Click routing through the real focus/clear scripts ──────────────────
+    def install_action_backend(self, action):
         self.bind()
         (self.state / (SID + ".json")).write_text('{"tab_id":"codex-target-tab"}')
-        os.environ["GHOSTTY_NOTIFY_CLEAR_ON_FOCUS"] = "1"
-        # Recorder that also logs -remove, so the clear is observable.
-        self.script(self.bin / "terminal-notifier",
-            '#!/usr/bin/python3\nimport json, os, sys\nfrom pathlib import Path\n'
+        alerter = self.bin / "alerter"
+        self.script(alerter,
+            '#!/usr/bin/python3\nimport json, os, sys, time\nfrom pathlib import Path\n'
             'root = Path(os.environ["NOTIFY_TEST_LOG"]).parent\n'
-            'if sys.argv[1:2] == ["-remove"]: (root / "removed").write_text(sys.argv[2])\n'
+            'if "--help" in sys.argv: print("--close-label --remove")\n'
+            'elif "--remove" in sys.argv: (root / "removed").write_text(sys.argv[sys.argv.index("--remove") + 1])\n'
             'else:\n'
-            '    with open(os.environ["NOTIFY_TEST_LOG"], "a") as f:\n'
-            '        f.write(json.dumps(sys.argv[1:]) + "\\n")\n')
-        self.run_hook("Stop")
-        self.wait_until(self.notices)
-        self.assertEqual(self.notices()[0]["-group"], "codex-ghostty-notify-" + SID)
-        self.wait_until(lambda: (self.state / (SID + ".notified")).exists())
-        self.assertFalse((self.root / "removed").exists(), "cleared before the user came back")
-        self.run_hook("UserPromptSubmit", prompt="back")
-        self.wait_until(lambda: (self.root / "removed").exists())
-        self.assertEqual((self.root / "removed").read_text(), "codex-ghostty-notify-" + SID)
+            '    (root / "posted").touch()\n'
+            '    time.sleep(0.2 if os.environ["TEST_ACTION"] else 15)\n'
+            '    print(os.environ["TEST_ACTION"])\n')
+        self.script(self.bin / "osascript", OSASCRIPT)
+        self.script(self.bin / "lsappinfo", '#!/bin/sh\nprintf "com.mitchellh.ghostty\\n"\n')
+        # The owner is cached, so the adapter needs no ps; the watcher must
+        # see real processes to validate the PIDs it kills.
+        (self.bin / "ps").unlink()
+        os.environ.update({
+            "GHOSTTY_NOTIFY_ALERTER": str(alerter),
+            "GHOSTTY_NOTIFY_BACKEND": "alerter",
+            "GHOSTTY_NOTIFY_FOCUS_POLL": "0.1",
+            "TEST_ACTION": action,
+        })
+        self.addCleanup(lambda: subprocess.run(
+            ["/bin/bash", str(self.installed / "ghostty-notify-clear.sh"), SID],
+            env={**os.environ, "GHOSTTY_NOTIFY_SESSION_DIR": str(self.state),
+                 "GHOSTTY_NOTIFY_GROUP_PREFIX": "codex-ghostty-notify"},
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5))
 
-    def test_fallback_leaves_no_process_behind(self):
-        """The alerter backend used to leave a blocking process and a polling
-        watcher per notification. Neither exists any more."""
-        self.bind()
+    def alerter_gone(self):
+        pid_file = self.state / (SID + ".alerter-pid")
+        if not pid_file.exists():
+            return False
+        try:
+            os.kill(int(pid_file.read_text()), 0)
+            return False
+        except (ProcessLookupError, ValueError):
+            return True
+
+    def test_go_to_tab_focuses_the_codex_binding(self):
+        self.install_action_backend("Go to tab")
         self.run_hook("Stop")
-        self.wait_until(self.notices)
-        time.sleep(0.5)
-        self.assertFalse((self.state / (SID + ".watch-pid")).exists())
-        self.assertFalse((self.state / (SID + ".alerter-pid")).exists())
-        leftover = subprocess.run(["pgrep", "-f", "ghostty-notify-clear"],
-                                  capture_output=True, text=True).stdout.split()
-        self.assertEqual(leftover, [], "a watcher process outlived the hook")
+        focused = self.root / "focused"
+        self.wait_until(focused.exists)
+        self.assertEqual(focused.read_text(), "codex-target-tab")
+
+    def test_dismiss_never_focuses(self):
+        self.install_action_backend("Dismiss")
+        self.run_hook("Stop")
+        self.wait_until(self.alerter_gone)
+        # A wrongly dispatched focus lands about 0.5 s after the alerter
+        # exits (two osascript spawns); wait well past that before deciding.
+        time.sleep(2)
+        self.assertFalse((self.root / "focused").exists())
+
+    def test_alert_survives_other_tab_then_clears_on_return(self):
+        self.install_action_backend("")
+        os.environ["GHOSTTY_NOTIFY_CLEAR_ON_FOCUS"] = "1"
+        self.run_hook("Stop")
+        self.wait_until((self.root / "posted").exists)
+        # The watcher polls every 0.1 s; a wrong clear would land within
+        # two polls, so a full second is a comfortable margin.
+        time.sleep(1)
+        self.assertFalse((self.root / "removed").exists())
+        (self.root / "selected").touch()
+        self.wait_until((self.root / "removed").exists)
+        self.assertEqual((self.root / "removed").read_text(), "codex-ghostty-notify-" + SID)
+        self.wait_until(lambda: not (self.state / (SID + ".alerter-pid")).exists())
+        self.assertFalse((self.root / "focused").exists())
+
+
+class HookCleanupTests(unittest.TestCase):
+    def test_only_live_members_of_the_exact_group_prevent_cleanup(self):
+        for snapshot, gone in (("41 Z\n42 S\n", True), ("42 S\n", True),
+                               ("41 Z\n41 S\n", False), ("41 T\n", False)):
+            with self.subTest(snapshot=snapshot), \
+                    patch("os.killpg", side_effect=PermissionError), \
+                    patch("subprocess.check_output", return_value=snapshot):
+                self.assertEqual(CodexHookTests.hook_group_gone(41), gone)
+
+    def test_cleanup_tolerates_exit_between_probe_and_signal(self):
+        case = CodexHookTests()
+        with patch.object(case, "hook_group_gone", return_value=False), \
+                patch("os.killpg", side_effect=ProcessLookupError):
+            case.stop_hook_group(41)
+
+    def test_permission_error_is_not_silently_ignored_for_a_live_group(self):
+        case = CodexHookTests()
+        with patch.object(case, "hook_group_gone", return_value=False), \
+                patch("os.killpg", side_effect=PermissionError):
+            with self.assertRaises(PermissionError):
+                case.stop_hook_group(41)
 
 
 class InstallerTests(unittest.TestCase):
+    def setUp(self):
+        self.runtime_check = patch.object(installer, "require_native_runtime", return_value=Path("/fixture/native.app"))
+        self.runtime_check.start()
+        self.addCleanup(self.runtime_check.stop)
+
     destination = Path("/Users/me/.codex/ghostty-notify")
 
     def test_handler_definition_is_the_one_users_have_trusted(self):
@@ -664,6 +829,7 @@ class InstallerTests(unittest.TestCase):
         settings.write_text(json.dumps({"env": {
             "GHOSTTY_NOTIFY_MIN_ELAPSED": "120", "GHOSTTY_NOTIFY_BACKEND": "terminal-notifier",
             "GHOSTTY_NOTIFY_SESSION_DIR": "/Users/me/.claude/notifications/ghostty-sessions",
+            "GHOSTTY_NOTIFY_NATIVE_APP": "/private/checkout/fixture.app",
             "OTHER": "private",
         }}))
         return root, codex, settings
@@ -690,6 +856,7 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(config["GHOSTTY_NOTIFY_MIN_ELAPSED"], "120")
         self.assertEqual(config["GHOSTTY_NOTIFY_BACKEND"], "terminal-notifier")
         self.assertNotIn("GHOSTTY_NOTIFY_SESSION_DIR", config)
+        self.assertNotIn("GHOSTTY_NOTIFY_NATIVE_APP", config)
         self.assertNotIn("private", (installed / "config.json").read_text())
         hooks = json.loads((codex / "hooks.json").read_text())["hooks"]
         self.assertEqual(hooks["SessionStart"][0]["hooks"][0]["command"], "/my/start")
@@ -718,11 +885,49 @@ class InstallerTests(unittest.TestCase):
             installer.install(codex, settings)
         self.assertFalse((codex / "ghostty-notify").exists())
 
-    def test_missing_jq_aborts_before_anything_is_written(self):
+    def test_missing_native_runtime_aborts_before_anything_is_written(self):
         _, codex, settings = self.sandbox()
-        with patch.object(installer.shutil, "which", return_value=None), self.assertRaises(SystemExit):
+        with patch.object(installer, "require_native_runtime", side_effect=SystemExit("native runtime missing")), self.assertRaises(SystemExit):
             installer.install(codex, settings)
         self.assertEqual(list(codex.iterdir()), [])
+
+    def test_install_no_longer_depends_on_jq(self):
+        _, codex, settings = self.sandbox()
+        with patch.object(installer.shutil, "which", return_value=None), patch("builtins.print"):
+            installer.install(codex, settings)
+        self.assertTrue((codex / "ghostty-notify/native-hook.sh").is_file())
+        self.assertFalse((codex / "ghostty-notify/legacy-notify.sh").exists())
+
+    def test_failed_bootstrap_copy_preserves_registered_codex_hooks(self):
+        _, codex, settings = self.sandbox()
+        destination = codex / "ghostty-notify"
+        shutil.copytree(REPO / "tests/fixtures/shell-baseline/hooks", destination)
+        before = {p.name: p.read_bytes() for p in destination.iterdir()}
+        (codex / "hooks.json").write_text('{"hooks":{}}\n')
+        real_copy = shutil.copy2
+        def fail_bootstrap(source, target, *args, **kwargs):
+            if Path(source).name == "native-hook.sh":
+                raise OSError("injected bootstrap-copy failure")
+            return real_copy(source, target, *args, **kwargs)
+        with patch.object(shutil, "copy2", side_effect=fail_bootstrap), self.assertRaises(OSError):
+            installer.install(codex, settings)
+        self.assertEqual({p.name: p.read_bytes() for p in destination.iterdir()}, before)
+        self.assertEqual((codex / "hooks.json").read_text(), '{"hooks":{}}\n')
+        self.assertFalse((codex / "backups").exists())
+
+    def test_invalid_staged_script_preserves_registered_codex_hooks(self):
+        root, codex, settings = self.sandbox()
+        destination = codex / "ghostty-notify"
+        shutil.copytree(REPO / "tests/fixtures/shell-baseline/hooks", destination)
+        before = {p.name: p.read_bytes() for p in destination.iterdir()}
+        source = root / "source"
+        shutil.copytree(REPO / "hooks", source / "hooks")
+        (source / "hooks/ghostty-tab-save.sh").write_text("#!/bin/bash\nif\n")
+        with patch.object(installer, "REPO", source), self.assertRaises(subprocess.CalledProcessError):
+            installer.install(codex, settings)
+        self.assertEqual({p.name: p.read_bytes() for p in destination.iterdir()}, before)
+        self.assertFalse((codex / "hooks.json").exists())
+        self.assertFalse((codex / "backups").exists())
 
     def test_symlinked_files_stay_symlinks(self):
         root, codex, settings = self.sandbox()

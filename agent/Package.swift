@@ -3,8 +3,8 @@ import PackageDescription
 
 // Two halves, split so the decision-making half is testable without AppKit,
 // a notification-center authorization grant, or a running Ghostty:
-//   NotifyCore — pure logic: request codec, session bookkeeping, dismissal
-//                rules. Synchronous, no side effects, no frameworks.
+//   NotifyCore — request codec, policy and session bookkeeping, plus native
+//                I/O adapters behind testable process/terminal protocols.
 //   AgentApp   — the resident LSUIElement app: UNUserNotificationCenter,
 //                NSWorkspace activation events, in-process Apple Events,
 //                spool-directory watching.
@@ -20,7 +20,8 @@ let package = Package(
         .library(name: "NotifyCore", targets: ["NotifyCore"]),
     ],
     targets: [
-        .target(name: "NotifyCore"),
+        .systemLibrary(name: "CSQLite"),
+        .target(name: "NotifyCore", dependencies: ["CSQLite"]),
         .executableTarget(
             name: "AgentApp",
             dependencies: ["NotifyCore"],

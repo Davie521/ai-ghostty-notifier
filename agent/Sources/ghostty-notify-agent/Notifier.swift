@@ -129,6 +129,7 @@ final class Notifier {
         // Carried on the notification itself so a click can still be routed to a
         // session after the agent restarted and reloaded its bookkeeping.
         content.userInfo = ["session_id": sessionID]
+        if let tabID = request.tabID { content.userInfo["tab_id"] = tabID }
         if let sound = request.sound {
             content.sound = Self.sound(named: sound)
         }

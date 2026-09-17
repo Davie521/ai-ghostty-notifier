@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Historical compatibility fixture; this is NOT native runtime coverage.
 # Regression test for the session-title subtitle in ghostty-notify.sh.
 #
 # The notification must say WHICH session finished, not just which folder —
@@ -17,7 +18,7 @@ IFS=$'\n\t'
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
-HOOK="$REPO/hooks/ghostty-notify.sh"
+HOOK="$REPO/tests/fixtures/shell-baseline/hooks/ghostty-notify.sh"
 
 [[ -x "$HOOK" ]] || { echo "FATAL: $HOOK not executable" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || { echo "FATAL: jq required" >&2; exit 2; }
@@ -31,8 +32,9 @@ mkdir -p \
     "$HOME/.claude/notifications/ghostty-sessions" \
     "$SANDBOX/bin"
 
-# The synchronous terminal-notifier path is what this suite reads argv
-# from; the resident agent is disabled below so it is the one that fires.
+# Force the synchronous terminal-notifier path: point alerter at a
+# nonexistent binary so discovery can't find a real one on this machine.
+export GHOSTTY_NOTIFY_ALERTER="$SANDBOX/no-such-alerter"
 
 # Fake terminal-notifier: records argv, one arg per line.
 TN_LOG="$SANDBOX/tn-args.log"
@@ -159,9 +161,9 @@ run_case "multi-line title kept whole" \
     ",\"transcript_path\":$(printf '%s' "$T3" | jq -Rs .)"
 
 # 7. A title starting with '-' must not be parsed as the next flag. Both
-#    terminal-notifier reads argv NSUserDefaults-style, so "-wip" in value
-#    position used to swallow the flag and drop the notification entirely
-#    (usage dump, exit 0).
+#    the legacy single-dash alerter and terminal-notifier read argv
+#    NSUserDefaults-style, so "-wip" in value position used to swallow the
+#    flag and drop the notification entirely (usage dump, exit 0).
 run_case "dash-leading title does not break argv" \
     "wip auth fix — webapp" \
     ",\"session_title\":\"-wip auth fix\""

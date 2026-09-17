@@ -6,14 +6,14 @@
 # at that copy. The checkout is then free to move or disappear. launchd stores
 # absolute paths, and a LaunchAgent aimed into a repository stops working the
 # day the repository is renamed — exit 78, penalty box, no dialog — while the
-# hooks fall back to a notification you cannot click, without a word — the
-# very failure the agent exists to fix. hooks/agent-common.sh looks in the same fixed place, so
+# hooks fall back to display-only terminal-notifier, which is the failure the
+# agent exists to fix. hooks/native-hook.sh looks in the same fixed place, so
 # a moved checkout does not lose the agent either.
 #
 # Why launchd rather than "let the first hook start it": launchd restarts the
 # agent if it ever crashes, starts it at login without waiting for a hook, and
 # gives it a stable place to be stopped from. The hooks can still start it on
-# demand (see hooks/agent-common.sh) so a machine without the LaunchAgent
+# demand (see NativeHookRuntime.swift) so a machine without the LaunchAgent
 # installed still works — this just removes the cold-start latency on the first
 # notification after login.
 #
@@ -25,9 +25,20 @@
 #
 # Usage:
 #   bash scripts/install-agent.sh              install (or update) and start
+#   bash scripts/install-agent.sh --no-start   install the required runtime only
 #   bash scripts/install-agent.sh --uninstall  stop and remove
 
 set -euo pipefail
+
+START=1
+case "${1:-}" in
+    --no-start) START=0 ;;
+    --uninstall|"") ;;
+    *) echo "usage: install-agent.sh [--no-start|--uninstall]" >&2; exit 2 ;;
+esac
+[[ $# -le 1 ]] || { echo "FATAL: too many arguments" >&2; exit 2; }
+[[ "$(uname)" == Darwin ]] || { echo "FATAL: macOS only" >&2; exit 2; }
+[[ "${HOME:-}" == /* && "$HOME" != / ]] || { echo "FATAL: HOME must be an absolute non-root path" >&2; exit 2; }
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
@@ -51,13 +62,13 @@ unload() {
 
 # Stop every agent instance, wherever it was launched from. A running agent
 # keeps executing from the old inode after the bundle is replaced, and
-# agent_running in hooks/agent-common.sh would confirm that stale process as
+# readiness checks would confirm that stale process as
 # healthy — so nothing would ever start the new copy. The liveness markers go
 # too: a recycled pid is exactly what the ps check there defends against.
 stop_agents() {
     unload
     pkill -f "/$BUNDLE_NAME/Contents/MacOS/ghostty-notify-agent" 2>/dev/null || true
-    rm -f "$STATE/agent.pid" "$STATE/ready"
+    rm -f "$STATE/agent.pid" "$STATE/ready" "$STATE/capabilities" "$STATE/native-hook-ready"
     sleep 1
 }
 
@@ -71,31 +82,74 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     rmdir "$INSTALL_DIR" 2>/dev/null || true
     echo "==> Removed $LABEL and $APP"
     echo "    Session bookkeeping under $STATE is kept; remove it by hand if unwanted."
+    echo "    Hooks require this App; remove their registrations too. There is no shell fallback."
     exit 0
 fi
 
-[[ -x "$BUILT/Contents/MacOS/ghostty-notify-agent" ]] || {
-    echo "FATAL: $BUILT missing. Build it first:" >&2
-    echo "  bash scripts/build-agent.sh" >&2
+[[ -f "$BUILT/Contents/Resources/native-hook-v1" \
+    && -x "$BUILT/Contents/MacOS/ghostty-notify-agent" ]] || {
+    echo "FATAL: $BUILT missing or too old for native hooks. Build it first:" >&2
+    echo "  bash scripts/build-agent.sh --build-only" >&2
     exit 2
 }
+[[ "$("$BUILT/Contents/MacOS/ghostty-notify-agent" --hook-runtime-version)" == native-hook-v1 ]] || {
+    echo "FATAL: the built executable does not support native-hook-v1" >&2; exit 2;
+}
+
+# Runtime-only installation must not accidentally leave a configured service
+# executing an older inode. Use the normal upgrade path for a LaunchAgent.
+if [[ "$START" == 0 && -e "$PLIST" ]]; then
+    echo "FATAL: a LaunchAgent is already installed; rerun without --no-start to upgrade it." >&2
+    exit 2
+fi
+if [[ "$START" == 0 ]]; then
+    # Reuse native executable/argv identity checks; a hand-started resident may
+    # have no LaunchAgent plist. Do not signal anything in runtime-only mode.
+    LIVE_RESIDENT_PID=$("$BUILT/Contents/MacOS/ghostty-notify-agent" --resident-pid) || {
+        echo "FATAL: cannot inspect the resident; rebuild the native App before installing." >&2
+        exit 2
+    }
+    if [[ -n "$LIVE_RESIDENT_PID" ]]; then
+        echo "FATAL: resident $LIVE_RESIDENT_PID is running; rerun without --no-start to upgrade it." >&2
+        exit 2
+    fi
+fi
 
 echo "==> Installing $APP"
-stop_agents
 mkdir -p "$INSTALL_DIR"
 # Stage beside the target and rename into place, so a copy that fails halfway
 # leaves the previous install intact. ditto keeps the code signature, extended
 # attributes and permissions that TCC and LaunchServices key their records on.
-STAGED="$INSTALL_DIR/.$BUNDLE_NAME.new"
-rm -rf "$STAGED"
+STAGING=$(mktemp -d "$INSTALL_DIR/.native-install.XXXXXX")
+STAGED="$STAGING/$BUNDLE_NAME"
+PREVIOUS="$STAGING/previous.app"
+cleanup_stage() {
+    # If publication failed after moving the old bundle, put it back.
+    if [[ -e "$PREVIOUS" && ! -e "$APP" ]]; then
+        mv "$PREVIOUS" "$APP" || return
+    fi
+    rm -rf "$STAGING"
+}
+trap cleanup_stage EXIT
 ditto "$BUILT" "$STAGED"
-rm -rf "$APP"
+# Refuse an incomplete/unsigned copy before stopping any running service or
+# replacing the previous installation.
+codesign --verify --deep --strict "$STAGED"
+if [[ "$START" == 1 ]]; then stop_agents; fi
+if [[ -e "$APP" ]]; then mv "$APP" "$PREVIOUS"; fi
 mv "$STAGED" "$APP"
 # The copy must carry the build's signature: TCC keys the notification and
 # Automation grants to it, so a copy that lost it would be asked again — or,
 # for notifications, would silently display nothing.
 codesign --verify --deep --strict "$APP" 2>/dev/null ||
     echo "  warning: the installed copy failed signature verification; macOS may ask for permissions again" >&2
+if [[ "$START" == 0 ]]; then
+    echo "==> Installed native runtime: $APP"
+    echo "    No LaunchAgent, LaunchServices registration or permission prompt was started."
+    echo "    Install hooks next; terminal-notifier is needed for display-only fallback delivery."
+    echo "    Set GHOSTTY_NOTIFY_AGENT_APP='' in hook settings to disable automatic resident launch."
+    exit 0
+fi
 if [[ -x "$LSREGISTER" ]]; then
     # One registration per bundle identifier. A click on a notification while
     # the agent is down makes LaunchServices launch the app by identifier, and
@@ -193,8 +247,7 @@ case "$ANSWER" in
     authorized) echo "    granted" ;;
     denied)
         echo "    DENIED — the user declined, so the agent cannot display" >&2
-        echo "    notifications. Hooks will keep using terminal-notifier, which shows" >&2
-        echo "    the alert but cannot jump back to the tab." >&2
+        echo "    notifications. Hooks will keep using the terminal-notifier display fallback." >&2
         ;;
     error)
         echo "    macOS refused the request twice (no dialog was shown)." >&2
@@ -249,5 +302,5 @@ echo "  2. permission to control Ghostty (needed for click-to-jump)"
 echo "Both are one-time and both must be allowed."
 echo
 echo "If you use Focus modes, add Claude Ghostty Notify to their allowed apps:"
-echo "a Focus that already lets Terminal (the shell path's identity) through"
+echo "a Focus that already lets Terminal (an external backend's identity) through"
 echo "still sends this app's alerts straight to Notification Center."

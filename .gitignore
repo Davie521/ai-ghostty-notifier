@@ -5,8 +5,8 @@
 .vscode/
 
 # Resident agent build output. The .app bundle is assembled locally by
-# scripts/build-agent.sh; nothing signed or prebuilt is committed. Hooks fall
-# back to the shell delivery path wherever the bundle is absent.
+# scripts/build-agent.sh; nothing signed or prebuilt is committed. The native
+# bundle must be installed before the compatibility hook launchers can run.
 agent/.build/
 build/
 hooks/bin/
