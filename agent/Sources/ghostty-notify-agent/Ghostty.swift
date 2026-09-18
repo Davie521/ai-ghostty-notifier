@@ -6,8 +6,11 @@ import NotifyCore
 /// whole reason the polling loop moved into a resident app.
 ///
 /// Read-only sends run on a dedicated serial queue. Focus runs on the main
-/// queue with a bounded Apple Event timeout because it pumps WindowServer
-/// callbacks that assert main-queue affinity. Each send owns its script;
+/// queue because it pumps WindowServer callbacks that assert main-queue
+/// affinity. Every send carries a bounded Apple Event timeout, and none leaves
+/// the main thread before `AppleEventHost` has prepared the process: a
+/// background send in a process without NSApplication never sees its reply.
+/// Each send owns its script;
 /// `executeAndReturnError` blocks until the round-trip completes, which for the
 /// *first* event means blocking until the user answers the modal
 /// "wants to control Ghostty" consent prompt. On the main actor that would wedge
@@ -134,11 +137,9 @@ enum Ghostty {
         // Focusing pumps WindowServer events, which require the main queue.
         // Read-only queries stay off it so an Automation prompt cannot stall
         // resident spool consumption.
-        let executionQueue = onMainThread ? DispatchQueue.main : queue
-        executionQueue.async {
+        let bounded = "with timeout of 3 seconds\n\(source)\nend timeout"
+        let execute: @Sendable () -> Void = {
             var result: String?
-            let bounded =
-                onMainThread ? "with timeout of 3 seconds\n\(source)\nend timeout" : source
             if let script = NSAppleScript(source: bounded) {
                 var errorInfo: NSDictionary?
                 let descriptor = script.executeAndReturnError(&errorInfo)
@@ -147,6 +148,12 @@ enum Ghostty {
                 }
             }
             Task { @MainActor in completion(result) }
+        }
+        // Always through the main queue first, even for a background send: that
+        // hop is where a hook-mode process gets its NSApplication.
+        DispatchQueue.main.async {
+            AppleEventHost.prepare()
+            if onMainThread { execute() } else { queue.async(execute: execute) }
         }
     }
 }

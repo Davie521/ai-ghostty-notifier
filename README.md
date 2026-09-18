@@ -188,6 +188,14 @@ paths and private helper controls are not copied.
 | `GHOSTTY_NOTIFY_AGENT_APP` | discovered | Resident bundle path; empty disables resident use, not the required native runtime |
 | `GHOSTTY_NOTIFY_NATIVE_APP` | installed app | Environment-only bootstrap override for the native executable's app; not read from Codex config |
 | `GHOSTTY_NOTIFY_MENU_BAR` | `1` | Resident-process setting; false-like values hide its menu bar item |
+| `GHOSTTY_NOTIFY_HOOK_DEADLINE` | `12` | Seconds before a hook process gives up and exits successfully; clamped to 1–120 |
+
+A hook never holds the CLI for long: each terminal query is bounded, the hook
+process ends itself at `GHOSTTY_NOTIFY_HOOK_DEADLINE`, and the shipped hook
+entries set `"timeout": 15`. Keep that field if you write the entries by hand.
+Without it Claude Code waits up to 600 seconds for a command hook, which is how
+a stuck hook once looked like a hung session
+([incident](docs/incident-2026-09-17-pretooluse-hang.md)).
 
 Elapsed/timeout settings accept nonnegative integers; missing, empty or invalid
 values use their defaults. Empty values have different meanings for other

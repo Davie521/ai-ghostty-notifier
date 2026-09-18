@@ -69,22 +69,48 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
             case ghosttyPID = "ghostty_pid"
         }
     }
+    /// What a marker transaction needs in order to be undone by a later
+    /// process. Written before the marker, removed once the title is back.
+    private struct Outstanding: Codable {
+        struct Tab: Codable {
+            var id: String
+            var title: String
+        }
+        var marker: String
+        var tty: String
+        var ghosttyPID: String
+        var tabs: [Tab]
+    }
     private let automation: any TerminalAutomationProviding
     private let writer: any TerminalTitleWriting
     private let clock: any HookClockProviding
+    private let queryTimeout: Double
+    private let cancelledQueryTimeout: Double
     private let clear: @Sendable (HookEvent) async -> Void
     private let log: @Sendable (String) -> Void
+    /// When this process last abandoned a query. The thread that made it is
+    /// still blocked, so asking again can only cost another full timeout.
+    private var stalledAt: Double?
+
+    /// How long one abandoned query keeps every session away from the terminal.
+    /// Short on purpose: the causes seen so far (an unanswered Automation
+    /// prompt, a wedged Ghostty) clear on their own, unlike a denied permission.
+    public static let stallBackoff: Double = 60
 
     public init(
         automation: any TerminalAutomationProviding,
         writer: any TerminalTitleWriting = MacTerminalTitleWriter(),
         clock: any HookClockProviding = SystemHookClock(),
+        queryTimeout: Double = 5,
+        cancelledQueryTimeout: Double = 1,
         clear: @escaping @Sendable (HookEvent) async -> Void = { _ in },
         log: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.automation = automation
         self.writer = writer
         self.clock = clock
+        self.queryTimeout = queryTimeout
+        self.cancelledQueryTimeout = cancelledQueryTimeout
         self.clear = clear
         self.log = log
     }
@@ -95,6 +121,43 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
     private func current(_ event: HookEvent) -> Bool {
         DiskRoundJournal.read(path(event, "round")) == event.roundID
     }
+    private func stallStamp(_ event: HookEvent) -> String {
+        event.sessionDirectory + "/applescript-stalled"
+    }
+    private func recentlyStalled(_ since: Double?) -> Bool {
+        since.map { (0..<Self.stallBackoff).contains(clock.now() - $0) } ?? false
+    }
+
+    /// Every terminal query goes through here. The provider runs NSAppleScript
+    /// in-process, and a blocked send ignores both Task cancellation and the
+    /// script's own `with timeout`. On 2026-09-17 that held PreToolUse hooks for
+    /// the CLI's full 600-second hook timeout, and left workers hung for hours.
+    /// The wait is what gets bounded here; the blocked call itself is abandoned.
+    private func snapshot(_ event: HookEvent) async throws -> [TerminalTab] {
+        if recentlyStalled(stalledAt) { throw TerminalQueryAbandoned() }
+        let automation = self.automation
+        do {
+            // Restoration runs in cancelled tasks and must still get answers,
+            // so cancellation shortens this wait rather than ending it. Without
+            // the shorter limit a SIGTERM grace period expires behind a query
+            // that will never return, and the marker is left on the tab.
+            return try await QueryDeadline.run(
+                seconds: queryTimeout, cancelledSeconds: cancelledQueryTimeout
+            ) {
+                try await automation.tabs()
+            }
+        } catch let error as TerminalQueryAbandoned where error.cause == .deadline {
+            let now = clock.now()
+            stalledAt = now
+            // Other hook processes cannot see this actor. The stamp is how the
+            // next one avoids paying the same timeout for the same condition.
+            try? "\(now)\n".write(toFile: stallStamp(event), atomically: true, encoding: .utf8)
+            log(
+                "terminal query abandoned after \(queryTimeout)s; "
+                    + "skipping terminal binding for \(Int(Self.stallBackoff))s")
+            throw error
+        }
+    }
     private func cached(_ event: HookEvent, pid: pid_t?) -> Record? {
         guard let data = FileManager.default.contents(atPath: path(event, "json")),
             let record = try? JSONDecoder().decode(Record.self, from: data),
@@ -102,6 +165,50 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
         else { return nil }
         return record
     }
+    private func outstanding(_ event: HookEvent) -> String { path(event, "marker.json") }
+
+    /// Undo a marker an earlier attempt could not. That attempt may have been
+    /// abandoned mid-lookup, or ended by the process deadline or SIGKILL, with
+    /// several tabs open and therefore no way to tell which title was its own.
+    /// Must finish before a new baseline is captured: a leftover marker read as
+    /// an "original title" would be written back as the restoration.
+    ///
+    /// False means the terminal could not be asked, so the caller must not go on
+    /// to capture a baseline that may contain the marker.
+    private func recoverOutstanding(
+        _ event: HookEvent, marker: String, tty: String, pid: pid_t
+    ) async -> Bool {
+        guard let data = FileManager.default.contents(atPath: outstanding(event)) else {
+            return true
+        }
+        func discard() { try? FileManager.default.removeItem(atPath: outstanding(event)) }
+        // Tab ids belong to one Ghostty process and the title is written to one
+        // terminal. A record about any other pair describes nothing we can undo.
+        guard let record = try? JSONDecoder().decode(Outstanding.self, from: data),
+            record.marker == marker, record.tty == tty, record.ghosttyPID == String(pid)
+        else {
+            discard()
+            return true
+        }
+        let tabs: [TerminalTab]
+        // The record stays for an attempt that can ask.
+        do { tabs = try await snapshot(event) } catch { return false }
+        // No marker left means the TUI has retitled the tab since; leave that.
+        if let stuck = tabs.first(where: { $0.title == marker }),
+            let original = record.tabs.first(where: { $0.id == stuck.id })
+        {
+            do {
+                try writer.write(title: original.title, tty: tty)
+                log("restored a title left behind by an interrupted binding")
+            } catch {
+                log("terminal restoration failed: \(error)")
+                return false
+            }
+        }
+        discard()
+        return true
+    }
+
     public func existing(_ event: HookEvent) async -> String? {
         guard let pid = await automation.processID() else { return nil }
         let value = cached(event, pid: pid)?.tabID
@@ -126,6 +233,8 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
             return nil
         }
         try? FileManager.default.removeItem(atPath: sentinel)
+        if recentlyStalled(Double(DiskRoundJournal.read(stallStamp(event)))) { return nil }
+        let stallsBefore = stalledAt
         guard let lease = DirectoryLease.acquire(path(event, "lock"), timeout: 0, staleAfter: 120)
         else { return await existing(event) }
         defer { lease.release() }
@@ -134,6 +243,9 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
         }
 
         let marker = "__\(event.source.rawValue)_TAB_MARKER_\(event.sessionID)__"
+        guard await recoverOutstanding(event, marker: marker, tty: tty, pid: pid) else {
+            return nil
+        }
         let retries: [Double]
         if let value = event.settings["GHOSTTY_NOTIFY_MARKER_RETRY_DELAYS"] {
             let words = value.split(whereSeparator: \.isWhitespace)
@@ -152,7 +264,7 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
             }
             do { try await clock.sleep(seconds: delay) } catch { return nil }
             let before: [TerminalTab]
-            do { before = try await automation.tabs() } catch {
+            do { before = try await snapshot(event) } catch {
                 // Don't disable binding for a day after an ordinary timeout
                 // or an app restart. Only permission/unsupported-suite errors
                 // are evidence for the negative capability cache.
@@ -167,12 +279,35 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
                 return nil
             }
             guard !before.isEmpty, current(event), !Task.isCancelled else { return nil }
+            if let leftover = before.first(where: { $0.title == marker }) {
+                // Only this session writes this marker, and only to its own
+                // terminal, so the tab is identified. Its original title is not
+                // recoverable, and the marker must never be "restored" as one.
+                log("bound through a leftover marker; its original title is unknown")
+                result = leftover.id
+                break
+            }
+            let record = Outstanding(
+                marker: marker, tty: tty, ghosttyPID: String(pid),
+                tabs: before.map { .init(id: $0.id, title: $0.title) })
+            guard let journal = try? JSONEncoder().encode(record),
+                FileManager.default.createFile(
+                    atPath: outstanding(event), contents: journal,
+                    attributes: [.posixPermissions: 0o600])
+            else {
+                // No way to undo it later means no marker now.
+                log("cannot record the marker transaction; binding skipped")
+                return nil
+            }
             do { try writer.write(title: marker, tty: tty) } catch {
                 // A short write can fail after part of the OSC packet reached
                 // the terminal. Attempt recovery even on this path.
-                _ = await restore(
-                    before: before, marker: marker, target: nil, tty: tty,
+                if await restore(
+                    event, before: before, marker: marker, target: nil, tty: tty,
                     markerMayBePartial: true)
+                {
+                    try? FileManager.default.removeItem(atPath: outstanding(event))
+                }
                 log("cannot write terminal marker: \(error)")
                 return nil
             }
@@ -180,11 +315,17 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
             // cancels us. Never put a cancellation check ahead of restoration.
             do {
                 try await clock.sleep(seconds: 0.15)
-                result = try await automation.tabs().first(where: { $0.title == marker })?.id
+                result = try await snapshot(event).first(where: { $0.title == marker })?.id
             } catch { result = nil }
-            let restored = await restore(before: before, marker: marker, target: result, tty: tty)
+            let restored = await restore(
+                event, before: before, marker: marker, target: result, tty: tty)
+            if restored { try? FileManager.default.removeItem(atPath: outstanding(event)) }
             guard restored, current(event), !Task.isCancelled else { return nil }
             if result != nil { break }
+            // A stall says nothing about this session's marker. Counting it as
+            // a missed marker would let three machine-wide hiccups disable the
+            // binding for good.
+            if stalledAt != stallsBefore { return nil }
         }
         guard current(event), !Task.isCancelled, await automation.processID() == pid,
             let journalLease = DirectoryLease.acquire(path(event, "round-lock"))
@@ -209,13 +350,13 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
     }
 
     private func restore(
-        before: [TerminalTab], marker: String, target: String?, tty: String,
+        _ event: HookEvent, before: [TerminalTab], marker: String, target: String?, tty: String,
         markerMayBePartial: Bool = false
     ) async -> Bool {
         var target = target
         if target == nil {
             do {
-                target = try await automation.tabs().first(where: { $0.title == marker })?.id
+                target = try await snapshot(event).first(where: { $0.title == marker })?.id
                 // A successful query with no marker means the TUI replaced it
                 // already; do not overwrite that newer title during recovery.
                 // After a failed write, absence of the complete marker is not

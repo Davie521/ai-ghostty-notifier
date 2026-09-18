@@ -168,6 +168,13 @@ Codex 首次安装会从 Claude 设置中复制公开通知偏好，不复制来
 | `GHOSTTY_NOTIFY_AGENT_APP` | 自动发现 | 常驻 App 路径；空值禁用常驻路径，不会取消必需的原生运行时 |
 | `GHOSTTY_NOTIFY_NATIVE_APP` | 已安装的 App | 仅环境变量可覆盖入口查找的原生 App，不读取 Codex config 中的此项 |
 | `GHOSTTY_NOTIFY_MENU_BAR` | `1` | 常驻进程自身的设置；false 类值隐藏菜单栏 |
+| `GHOSTTY_NOTIFY_HOOK_DEADLINE` | `12` | hook 进程放弃并以成功状态退出前的秒数；限制在 1–120 |
+
+hook 不会长时间挡住 CLI：每次终端查询都有上限，hook 进程到
+`GHOSTTY_NOTIFY_HOOK_DEADLINE` 会自行退出，随附的 hook 条目也写了 `"timeout": 15`。
+手写条目时请保留这个字段，否则 Claude Code 对 command hook 默认最多等 600 秒，
+hook 一旦卡住，看起来就像会话卡死
+（[事故记录](docs/incident-2026-09-17-pretooluse-hang.md)）。
 
 耗时、超时接受非负整数，缺失、空或非法值使用默认值。
 其他设置的空值有各自的含义。所有路径、默认值、后端回退和退役项详见

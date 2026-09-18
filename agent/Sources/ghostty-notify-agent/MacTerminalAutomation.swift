@@ -14,7 +14,9 @@ struct MacTerminalAutomation: TerminalAutomationProviding {
         .first?.processIdentifier
     }
     func tabs() async throws -> [TerminalTab] {
-        try await withCheckedThrowingContinuation { continuation in
+        // Hook and worker modes have no NSApplication of their own.
+        await AppleEventHost.prepare()
+        return try await withCheckedThrowingContinuation { continuation in
             Self.queue.async {
                 let source = """
                     with timeout of 3 seconds

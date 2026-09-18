@@ -21,6 +21,7 @@ of reading the resident process's ambient environment during delivery.
 | `GHOSTTY_NOTIFY_TTY` | Empty falls back to native process inspection. A Codex session still needs a real terminal CLI ancestor even with an override. OSC writes only target a validated character device under `/dev/`. |
 | `GHOSTTY_NOTIFY_CODEX_SETTLE` | Decimal seconds, default 1.5 for empty/invalid input; work is bounded by event expiry and invalidated by a newer prompt. |
 | `GHOSTTY_NOTIFY_MARKER_RETRY_DELAYS` | Whitespace-separated finite nonnegative delays; explicit empty disables retries. Native binding caps the number of extra attempts and rejects a delay that exceeds its retry budget. |
+| `GHOSTTY_NOTIFY_HOOK_DEADLINE` | Decimal seconds, default 12 for missing, empty or invalid input, clamped to 1–120. Read from the hook process's own environment before stdin. When it passes, the hook logs the reason and exits with status 0 without waiting for anything. Workers use the event lifetime plus 30 seconds; focus and clear use 15. SIGTERM allows 4 seconds of cleanup for a hook and 10 for a worker; a terminal query still in flight when its caller is cancelled is given up after 1 second, so restoration fits inside that. |
 | `GHOSTTY_NOTIFY_FOCUS_POLL` | Retired and ignored. External delivery leaves no focus watcher; the resident uses activation events. |
 
 Codex `config.json` only contributes `GHOSTTY_NOTIFY_[A-Z0-9_]+` keys. An existing

@@ -6,7 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/ghostty-tab-save.sh\""
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/ghostty-tab-save.sh\"",
+            "timeout": 15
           }
         ]
       }
@@ -16,7 +17,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/ghostty-round-reset.sh\""
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/ghostty-round-reset.sh\"",
+            "timeout": 15
           }
         ]
       }
@@ -27,7 +29,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/ghostty-notify.sh\""
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/ghostty-notify.sh\"",
+            "timeout": 15
           }
         ]
       }
@@ -38,7 +41,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/ghostty-notify.sh\""
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/ghostty-notify.sh\"",
+            "timeout": 15
           }
         ]
       }

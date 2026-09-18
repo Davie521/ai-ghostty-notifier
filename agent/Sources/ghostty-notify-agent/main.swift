@@ -17,6 +17,19 @@ let arguments = CommandLine.arguments
 let isNativeHookMode =
     arguments.count >= 2 && ["--hook", "--worker", "--clear", "--focus"].contains(arguments[1])
 
+// Before anything that can block, including the stdin read just below.
+if isNativeHookMode {
+    let mode = arguments[1]
+    let logPath = (try? AgentPaths(env: environment))?.log
+    NativeLifecycle.arm(
+        seconds: NativeLifecycle.budget(mode: mode, environment: environment),
+        reason: "\(mode) outlived its budget", logPath: logPath)
+    if mode == "--hook" || mode == "--worker" {
+        // A worker reaps a notification backend through several bounded steps.
+        NativeLifecycle.installTermination(grace: mode == "--worker" ? 10 : 4, logPath: logPath)
+    }
+}
+
 guard let paths = try? AgentPaths(env: environment) else {
     if isNativeHookMode { _ = NativeHookRuntime.readInput() }
     FileHandle.standardError.write(Data("ghostty-notify-agent: HOME is unset\n".utf8))
@@ -41,16 +54,10 @@ if isNativeHookMode {
         }
         exit(0)  // A notification failure must never block the CLI's work.
     }
-    if mode == "--hook" || mode == "--worker" {
-        signal(SIGTERM, SIG_IGN)
-        let termination = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-        termination.setEventHandler { work.cancel() }
-        termination.resume()
-        // Keep the main thread's event loop alive for native Apple Events and
-        // focus work as well as dispatching cancellation to the MainActor.
-        withExtendedLifetime(termination) { CFRunLoopRun() }
-        exit(0)
-    }
+    NativeLifecycle.adopt(work)
+    // Keep the main thread's event loop alive: Apple Event replies, focus work
+    // and the MainActor all depend on it. Signals and deadlines deliberately do
+    // not; see NativeLifecycle.
     CFRunLoopRun()
     exit(0)
 }
