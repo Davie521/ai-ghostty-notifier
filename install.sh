@@ -85,20 +85,20 @@ cat <<'EOF'
     "hooks": {
       "PreToolUse": [{
         "matcher": "",
-        "hooks": [{"type": "command", "command": "/Users/$USER/.claude/hooks/ghostty-tab-save.sh"}]
+        "hooks": [{"type": "command", "command": "/Users/$USER/.claude/hooks/ghostty-tab-save.sh", "timeout": 15}]
       }],
       "UserPromptSubmit": [{
         "hooks": [
-          {"type": "command", "command": "/Users/$USER/.claude/hooks/ghostty-round-reset.sh"}
+          {"type": "command", "command": "/Users/$USER/.claude/hooks/ghostty-round-reset.sh", "timeout": 15}
         ]
       }],
       "Notification": [{
         "matcher": "",
-        "hooks": [{"type": "command", "command": "/Users/$USER/.claude/hooks/ghostty-notify.sh"}]
+        "hooks": [{"type": "command", "command": "/Users/$USER/.claude/hooks/ghostty-notify.sh", "timeout": 15}]
       }],
       "Stop": [{
         "matcher": "",
-        "hooks": [{"type": "command", "command": "/Users/$USER/.claude/hooks/ghostty-notify.sh"}]
+        "hooks": [{"type": "command", "command": "/Users/$USER/.claude/hooks/ghostty-notify.sh", "timeout": 15}]
       }]
     }
 EOF

@@ -56,6 +56,12 @@ remain on their background queue. Native modes maintain the main CFRunLoop,
 including signal-driven cancellation. Worker cancellation and resident shutdown
 regressions passed again on the final executable.
 
+> **Correction, 2026-09-18.** Leaving read-only queries on a background queue
+> was the defect behind the PreToolUse hang that began with this deployment:
+> native modes have no `NSApplication`, and a background `NSAppleScript` send in
+> such a process never sees its reply. The checks above did not reach that path.
+> See [the incident record](incident-2026-09-17-pretooluse-hang.md).
+
 The first live binding attempt, started approximately 300 ms after creating a
 new window, did not produce a binding. A second window allowed to settle for two
 seconds bound successfully and restored the exact title `Swift migration smoke

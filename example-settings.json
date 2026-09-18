@@ -12,7 +12,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/YOUR_USERNAME/.claude/hooks/ghostty-tab-save.sh"
+            "command": "/Users/YOUR_USERNAME/.claude/hooks/ghostty-tab-save.sh",
+            "timeout": 15
           }
         ]
       }
@@ -22,7 +23,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/YOUR_USERNAME/.claude/hooks/ghostty-round-reset.sh"
+            "command": "/Users/YOUR_USERNAME/.claude/hooks/ghostty-round-reset.sh",
+            "timeout": 15
           }
         ]
       }
@@ -33,7 +35,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/YOUR_USERNAME/.claude/hooks/ghostty-notify.sh"
+            "command": "/Users/YOUR_USERNAME/.claude/hooks/ghostty-notify.sh",
+            "timeout": 15
           }
         ]
       }
@@ -44,7 +47,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/YOUR_USERNAME/.claude/hooks/ghostty-notify.sh"
+            "command": "/Users/YOUR_USERNAME/.claude/hooks/ghostty-notify.sh",
+            "timeout": 15
           }
         ]
       }

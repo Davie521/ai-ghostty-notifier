@@ -4,6 +4,7 @@ Codex ancestry is a compiled process owning a private PTY, not a fake ps.
 Notification executables are recording native fixtures. Apple Events and real
 notifications are deliberately not used; terminal-binding state is unit-tested.
 """
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -267,6 +268,71 @@ class NativeHookTests(unittest.TestCase):
         self.assertNotIn("--close-label", args)
         self.assertNotIn("Go to tab", args)
         self.assertNotIn("-execute", args)
+
+    def stuck_hook(self, deadline, stderr=subprocess.PIPE):
+        # stdin is never closed, so the hook cannot even finish reading its
+        # payload. That stands in for every wait nothing in-process can end: on
+        # 2026-09-17 it was an Apple Event whose reply was never serviced, and
+        # Claude Code sat on "Running PreToolUse hook" for its 600-second limit.
+        hook = subprocess.Popen([str(self.binary), "--hook", "claude", "PreToolUse"],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr,
+                                env={**self.env, "GHOSTTY_NOTIFY_HOOK_DEADLINE": str(deadline)})
+
+        def cleanup():
+            if hook.poll() is None:
+                hook.kill()
+            hook.wait(timeout=5)
+            for stream in (hook.stdin, hook.stdout, hook.stderr):
+                if stream is not None:
+                    stream.close()
+
+        self.addCleanup(cleanup)
+        return hook
+
+    def test_hook_that_cannot_finish_exits_successfully_at_its_deadline(self):
+        started = time.monotonic()
+        hook = self.stuck_hook(deadline=1)
+        self.assertEqual(hook.wait(timeout=8), 0)
+        elapsed = time.monotonic() - started
+        self.assertGreaterEqual(elapsed, 0.9, "the deadline fired before its budget")
+        self.assertLess(elapsed, 5)
+        self.assertEqual(hook.stdout.read(), b"", "a hook's stdout is a decision the CLI parses")
+        self.assertIn(b"outlived its budget", hook.stderr.read())
+
+    def test_deadline_exit_does_not_wait_for_anyone_to_read_stderr(self):
+        # A full pipe nobody drains: the next write to it blocks for good. The
+        # deadline reports on stderr, and must not end up waiting on its report.
+        reader, writer = os.pipe()
+        self.addCleanup(os.close, reader)
+        flags = fcntl.fcntl(writer, fcntl.F_GETFL)
+        fcntl.fcntl(writer, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+        try:
+            while True:
+                os.write(writer, b"x" * 4096)
+        except BlockingIOError:
+            pass
+        # The flag lives on the open file description the child will share;
+        # left set, the child's write would fail fast instead of blocking.
+        fcntl.fcntl(writer, fcntl.F_SETFL, flags)
+        try:
+            hook = self.stuck_hook(deadline=1, stderr=writer)
+        finally:
+            os.close(writer)
+        self.assertEqual(hook.wait(timeout=8), 0)
+
+    def test_sigterm_ends_a_hook_whose_work_cannot_be_cancelled(self):
+        hook = self.stuck_hook(deadline=60)
+        # Readiness without a sleep: more than a pipe buffer can hold returns
+        # from write only once the hook is draining stdin, and it installs its
+        # SIGTERM handling before it reads. A signal that arrives earlier meets
+        # the default action, which is not the subject here.
+        hook.stdin.write(b" " * (1 << 18))
+        hook.stdin.flush()
+        started = time.monotonic()
+        hook.terminate()
+        self.assertEqual(hook.wait(timeout=8), 0)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertIn(b"cleanup outlived SIGTERM", hook.stderr.read())
 
     def test_worker_sigterm_reaps_its_backend_and_removes_its_notice(self):
         self.check_worker_shutdown(clear_on_focus=False)

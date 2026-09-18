@@ -19,6 +19,7 @@ private final class TerminalFixture: TerminalAutomationProviding, TerminalTitleW
     private var pid: pid_t = 123
     private var misses = 0
     private var queryFailures: [Int: Int] = [:]
+    private var hungQueries: Set<Int> = []
     private var partialWrite = false
     private var restorationFailure = false
     private var overwrittenMarkers = 0
@@ -29,6 +30,10 @@ private final class TerminalFixture: TerminalAutomationProviding, TerminalTitleW
     func failQueries(_ numbers: [Int], code: Int = -1712) {
         lock.withLock { for number in numbers { queryFailures[number] = code } }
     }
+    /// These queries never answer, like an NSAppleScript send whose reply is
+    /// never serviced. Cancellable only so an abandoned one does not outlive
+    /// its test; nothing under test may depend on that.
+    func hangQueries(_ numbers: [Int]) { lock.withLock { hungQueries.formUnion(numbers) } }
     func setTabs(_ value: [TerminalTab]) { lock.withLock { titles = value } }
     func failPartialMarkerWrite() { lock.withLock { partialWrite = true } }
     func failRestoration() { lock.withLock { restorationFailure = true } }
@@ -37,9 +42,13 @@ private final class TerminalFixture: TerminalAutomationProviding, TerminalTitleW
     func missMarkers(_ count: Int) { lock.withLock { misses = count } }
     func processID() async -> pid_t? { lock.withLock { pid } }
     func tabs() async throws -> [TerminalTab] {
-        try lock.withLock {
+        let (number, hangs) = lock.withLock { () -> (Int, Bool) in
             queries += 1
-            if let code = queryFailures[queries] {
+            return (queries, hungQueries.contains(queries))
+        }
+        if hangs { try await Task.sleep(for: .seconds(3600)) }
+        return try lock.withLock {
+            if let code = queryFailures[number] {
                 throw NSError(domain: "GhosttyAppleEvents", code: code)
             }
             if unavailable { throw CocoaError(.fileReadNoPermission) }
@@ -73,6 +82,14 @@ private final class TerminalFixture: TerminalAutomationProviding, TerminalTitleW
     func focus(tabID: String?) async {}
     func isFrontmost() async -> Bool? { false }
     func selectedTabID() async -> String? { nil }
+}
+
+private final class SteppedBindingClock: HookClockProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Double = 2000
+    func now() -> Double { lock.withLock { value } }
+    func advance(_ seconds: Double) { lock.withLock { value += seconds } }
+    func sleep(seconds: Double) async throws { try Task.checkCancellation() }
 }
 
 private actor PausedBindingClock: HookClockProviding {
@@ -308,6 +325,166 @@ struct NativeTerminalBindingTests {
         #expect(await binding.resolve(event) == nil)
         #expect(!FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.json"))
         #expect(!FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.lock"))
+    }
+
+    // The three below reproduce 2026-09-17: a terminal query that never returns.
+    // Before the deadline existed they did not fail, they hung; the time limit
+    // is what turns a regression into a red test instead of a stuck CI job.
+
+    @Test(.timeLimit(.minutes(1)))
+    func aQueryThatNeverReturnsIsAbandonedBeforeAnyMarkerIsWritten() async throws {
+        let sandbox = try HookSandbox()
+        var event = try sandbox.event()
+        event.tty = "/dev/fixture"
+        let terminal = TerminalFixture()
+        terminal.hangQueries([1])
+        let binding = NativeTerminalBinding(
+            automation: terminal, writer: terminal, clock: InstantBindingClock(),
+            queryTimeout: 0.05)
+        let started = ContinuousClock.now
+        #expect(await binding.resolve(event) == nil)
+        #expect(ContinuousClock.now - started < .seconds(5))
+        #expect(terminal.recorded.isEmpty)
+        #expect(
+            FileManager.default.fileExists(atPath: sandbox.root.path + "/applescript-stalled"))
+        // A stall is not a denied permission, and not this session's fault.
+        let absent = [
+            "applescript-unavailable", "abc-123.json", "abc-123.attempts", "abc-123.lock",
+        ]
+        for name in absent {
+            #expect(!FileManager.default.fileExists(atPath: sandbox.root.path + "/" + name))
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func aHungMarkerLookupRestoresTheTitleWithoutAskingAgain() async throws {
+        let sandbox = try HookSandbox()
+        var event = try sandbox.event()
+        event.tty = "/dev/fixture"
+        let terminal = TerminalFixture()
+        terminal.hangQueries([2])
+        let binding = NativeTerminalBinding(
+            automation: terminal, writer: terminal, clock: InstantBindingClock(),
+            queryTimeout: 0.05)
+        #expect(await binding.resolve(event) == nil)
+        #expect(terminal.recorded == ["__claude_TAB_MARKER_abc-123__", "中文\t完整\n标题"])
+        #expect(terminal.visible.first?.title == "中文\t完整\n标题")
+        // The blocked thread is still blocked: recovery must not queue behind it.
+        #expect(terminal.queryCount == 2)
+        #expect(!FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.attempts"))
+        #expect(!FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.lock"))
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func oneStallKeepsOtherProcessesAwayBrieflyAndThenBindingRecovers() async throws {
+        let sandbox = try HookSandbox()
+        var event = try sandbox.event()
+        event.tty = "/dev/fixture"
+        let terminal = TerminalFixture()
+        terminal.hangQueries([1])
+        let clock = SteppedBindingClock()
+        let stalled = NativeTerminalBinding(
+            automation: terminal, writer: terminal, clock: clock, queryTimeout: 0.05)
+        #expect(await stalled.resolve(event) == nil)
+        // A second instance stands in for the next hook process.
+        let next = NativeTerminalBinding(
+            automation: terminal, writer: terminal, clock: clock, queryTimeout: 0.05)
+        clock.advance(NativeTerminalBinding.stallBackoff - 1)
+        #expect(await next.resolve(event) == nil)
+        #expect(await stalled.resolve(event) == nil)
+        #expect(terminal.queryCount == 1)
+        clock.advance(2)
+        #expect(await next.resolve(event) == "tab-1")
+        #expect(await stalled.existing(event) == "tab-1")
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func cancellationDuringALookupThatNeverReturnsStillRestoresPromptly() async throws {
+        let sandbox = try HookSandbox()
+        var event = try sandbox.event()
+        event.tty = "/dev/fixture"
+        let terminal = TerminalFixture()
+        terminal.hangQueries([2])
+        let binding = NativeTerminalBinding(
+            automation: terminal, writer: terminal, clock: InstantBindingClock(),
+            queryTimeout: 20, cancelledQueryTimeout: 0.05)
+        let work = Task { await binding.resolve(event) }
+        for _ in 0..<2000 where terminal.queryCount < 2 {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        #expect(terminal.queryCount == 2)
+        // What SIGTERM does to a hook: its grace period is a few seconds, far
+        // short of the full query limit.
+        let cancelled = ContinuousClock.now
+        work.cancel()
+        #expect(await work.value == nil)
+        #expect(ContinuousClock.now - cancelled < .seconds(5))
+        #expect(terminal.visible.first?.title == "中文\t完整\n标题")
+        // Giving up on a cancelled wait is not evidence of a wedged terminal.
+        let absent = ["applescript-stalled", "abc-123.marker.json", "abc-123.lock"]
+        for name in absent {
+            #expect(!FileManager.default.fileExists(atPath: sandbox.root.path + "/" + name))
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func aMarkerLeftByAnAbandonedLookupIsUndoneBeforeTheNextBaseline() async throws {
+        let sandbox = try HookSandbox()
+        var event = try sandbox.event()
+        event.tty = "/dev/fixture"
+        let terminal = TerminalFixture()
+        terminal.setTabs([.init(id: "tab-1", title: "one"), .init(id: "tab-2", title: "two")])
+        terminal.hangQueries([2])
+        let clock = SteppedBindingClock()
+        let binding = NativeTerminalBinding(
+            automation: terminal, writer: terminal, clock: clock, queryTimeout: 0.05)
+        // Two tabs and no answer: nothing says which title was ours.
+        #expect(await binding.resolve(event) == nil)
+        #expect(terminal.visible[0].title == "__claude_TAB_MARKER_abc-123__")
+        let record = sandbox.root.path + "/abc-123.marker.json"
+        #expect(FileManager.default.fileExists(atPath: record))
+
+        clock.advance(NativeTerminalBinding.stallBackoff + 1)
+        #expect(await binding.resolve(event) == "tab-1")
+        // Never the marker written back as though it had been the title.
+        #expect(
+            terminal.recorded == [
+                "__claude_TAB_MARKER_abc-123__", "one", "__claude_TAB_MARKER_abc-123__", "one",
+            ])
+        #expect(terminal.visible.map(\.title) == ["one", "two"])
+        #expect(!FileManager.default.fileExists(atPath: record))
+    }
+
+    @Test func aRecordAboutAnotherGhosttyProcessIsDiscardedNotApplied() async throws {
+        let sandbox = try HookSandbox()
+        var event = try sandbox.event()
+        event.tty = "/dev/fixture"
+        try sandbox.write(
+            "abc-123.marker.json",
+            #"{"marker":"__claude_TAB_MARKER_abc-123__","tty":"/dev/fixture","#
+                + #""ghosttyPID":"999","tabs":[{"id":"tab-1","title":"someone else's title"}]}"#)
+        let terminal = TerminalFixture()
+        let binding = NativeTerminalBinding(
+            automation: terminal, writer: terminal, clock: InstantBindingClock())
+        #expect(await binding.resolve(event) == "tab-1")
+        #expect(terminal.recorded == ["__claude_TAB_MARKER_abc-123__", "中文\t完整\n标题"])
+        #expect(
+            !FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.marker.json"))
+    }
+
+    @Test func aLeftoverMarkerWithNoRecordIsNeverRestoredAsATitle() async throws {
+        let sandbox = try HookSandbox()
+        var event = try sandbox.event()
+        event.tty = "/dev/fixture"
+        let terminal = TerminalFixture()
+        terminal.setTabs([
+            .init(id: "tab-1", title: "__claude_TAB_MARKER_abc-123__"),
+            .init(id: "tab-2", title: "two"),
+        ])
+        let binding = NativeTerminalBinding(
+            automation: terminal, writer: terminal, clock: InstantBindingClock())
+        #expect(await binding.resolve(event) == "tab-1")
+        #expect(terminal.recorded.isEmpty)
     }
 
     @Test func aPartialMarkerWriteStillRestoresTheOnlyKnownTitle() async throws {
