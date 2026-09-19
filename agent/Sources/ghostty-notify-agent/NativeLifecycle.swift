@@ -18,10 +18,13 @@ enum NativeLifecycle {
     /// Diagnostics get their own queue. Writing them is I/O, and I/O can block:
     /// a CLI that is not draining the hook's stderr, a stalled volume under the
     /// log. The deadline must not end up waiting on the thing it reports.
+    /// Not a background priority: the exit below waits only a moment for the
+    /// report, and on a busy machine a utility queue may not run in that moment.
     private static let diagnostics = DispatchQueue(
-        label: "ghostty.native-lifecycle.diagnostics", qos: .utility)
+        label: "ghostty.native-lifecycle.diagnostics", qos: .userInitiated)
     private static let lock = NSLock()
     nonisolated(unsafe) private static var timer: DispatchSourceTimer?
+    nonisolated(unsafe) private static var due: DispatchTime?
     nonisolated(unsafe) private static var termination: DispatchSourceSignal?
     nonisolated(unsafe) private static var work: Task<Void, Never>?
     nonisolated(unsafe) private static var terminated = false
@@ -40,10 +43,22 @@ enum NativeLifecycle {
         }
     }
 
-    /// Replaces any earlier deadline: the latest caller decides when time is up.
+    /// The deadline only ever moves earlier. SIGTERM may shorten a budget to
+    /// its grace period, but nothing can push the end of the process back: a
+    /// supervisor that repeats its signal would otherwise renew the grace each
+    /// time and keep a stuck hook alive for as long as it kept asking.
     static func arm(seconds: Double, reason: String, logPath: String?) {
+        let wanted = DispatchTime.now() + seconds
+        // Decided before the source exists: an inactive source must not be
+        // released, so one is only made when it will be resumed.
+        let sooner = lock.withLock { () -> Bool in
+            if let due, due <= wanted { return false }
+            due = wanted
+            return true
+        }
+        guard sooner else { return }
         let source = DispatchSource.makeTimerSource(queue: queue)
-        source.schedule(deadline: .now() + seconds)
+        source.schedule(deadline: wanted)
         source.setEventHandler {
             let message = "native lifecycle: \(reason); exiting after \(seconds)s"
             let reported = DispatchSemaphore(value: 0)
@@ -80,10 +95,12 @@ enum NativeLifecycle {
         signal(SIGTERM, SIG_IGN)
         let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: queue)
         source.setEventHandler {
-            let task = lock.withLock { () -> Task<Void, Never>? in
-                terminated = true
-                return work
+            let (first, task) = lock.withLock { () -> (Bool, Task<Void, Never>?) in
+                defer { terminated = true }
+                return (!terminated, work)
             }
+            // One grace period, counted from the first signal.
+            guard first else { return }
             task?.cancel()
             arm(seconds: grace, reason: "cleanup outlived SIGTERM", logPath: logPath)
         }

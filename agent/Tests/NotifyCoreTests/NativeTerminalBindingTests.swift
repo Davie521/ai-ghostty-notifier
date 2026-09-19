@@ -14,6 +14,8 @@ private final class TerminalFixture: TerminalAutomationProviding, TerminalTitleW
     private let lock = NSLock()
     private var titles: [TerminalTab] = [TerminalTab(id: "tab-1", title: "中文\t完整\n标题")]
     private var writes: [String] = []
+    private var routedWrites: [String] = []
+    private var terminals: [String: Int] = [:]
     private var queries = 0
     private var unavailable = false
     private var pid: pid_t = 123
@@ -24,6 +26,10 @@ private final class TerminalFixture: TerminalAutomationProviding, TerminalTitleW
     private var restorationFailure = false
     private var overwrittenMarkers = 0
     var recorded: [String] { lock.withLock { writes } }
+    /// "terminal <- title", for tests where it matters which terminal was written.
+    var routed: [String] { lock.withLock { routedWrites } }
+    /// Titles go to the first tab unless a terminal is attached to another.
+    func attach(_ tty: String, toTab index: Int) { lock.withLock { terminals[tty] = index } }
     var queryCount: Int { lock.withLock { queries } }
     var visible: [TerminalTab] { lock.withLock { titles } }
     func failSnapshots() { lock.withLock { unavailable = true } }
@@ -62,10 +68,12 @@ private final class TerminalFixture: TerminalAutomationProviding, TerminalTitleW
     func write(title: String, tty: String) throws {
         try lock.withLock {
             writes.append(title)
+            routedWrites.append(tty + " <- " + title)
             guard !titles.isEmpty else { throw CocoaError(.fileWriteUnknown) }
+            let tab = terminals[tty] ?? 0
             if title.contains("TAB_MARKER"), partialWrite {
                 partialWrite = false
-                titles[0].title = String(title.prefix(12))
+                titles[tab].title = String(title.prefix(12))
                 throw CocoaError(.fileWriteUnknown)
             }
             if !title.contains("TAB_MARKER"), restorationFailure {
@@ -73,10 +81,10 @@ private final class TerminalFixture: TerminalAutomationProviding, TerminalTitleW
             }
             if title.contains("TAB_MARKER"), overwrittenMarkers > 0 {
                 overwrittenMarkers -= 1
-                titles[0].title = "new TUI title"
+                titles[tab].title = "new TUI title"
                 return
             }
-            titles[0].title = title
+            titles[tab].title = title
         }
     }
     func focus(tabID: String?) async {}
@@ -472,7 +480,54 @@ struct NativeTerminalBindingTests {
             !FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.marker.json"))
     }
 
-    @Test func aLeftoverMarkerWithNoRecordIsNeverRestoredAsATitle() async throws {
+    @Test(.timeLimit(.minutes(1)))
+    func aSessionResumedInAnotherTabRestoresTheOldTabAndBindsTheNewOne() async throws {
+        let sandbox = try HookSandbox()
+        var event = try sandbox.event()
+        event.tty = "/dev/old"
+        let terminal = TerminalFixture()
+        terminal.setTabs([.init(id: "tab-1", title: "one"), .init(id: "tab-2", title: "two")])
+        terminal.attach("/dev/old", toTab: 0)
+        terminal.attach("/dev/new", toTab: 1)
+        terminal.hangQueries([2])
+        let clock = SteppedBindingClock()
+        let binding = NativeTerminalBinding(
+            automation: terminal, writer: terminal, clock: clock, queryTimeout: 0.05)
+        #expect(await binding.resolve(event) == nil)
+        #expect(terminal.visible.map(\.title) == ["__claude_TAB_MARKER_abc-123__", "two"])
+
+        // The same session, resumed in the second tab.
+        clock.advance(NativeTerminalBinding.stallBackoff + 1)
+        event.tty = "/dev/new"
+        #expect(await binding.resolve(event) == "tab-2")
+        #expect(
+            terminal.routed == [
+                "/dev/old <- __claude_TAB_MARKER_abc-123__", "/dev/old <- one",
+                "/dev/new <- __claude_TAB_MARKER_abc-123__", "/dev/new <- two",
+            ])
+        #expect(terminal.visible.map(\.title) == ["one", "two"])
+        #expect(
+            !FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.marker.json"))
+    }
+
+    @Test func aLeftoverMarkerInAnotherTabIsNeitherBoundNorRestoredAsATitle() async throws {
+        let sandbox = try HookSandbox()
+        var event = try sandbox.event()
+        event.tty = "/dev/fixture"
+        let terminal = TerminalFixture()
+        terminal.setTabs([
+            .init(id: "tab-1", title: "__claude_TAB_MARKER_abc-123__"),
+            .init(id: "tab-2", title: "two"),
+        ])
+        terminal.attach("/dev/fixture", toTab: 1)
+        let binding = NativeTerminalBinding(
+            automation: terminal, writer: terminal, clock: InstantBindingClock())
+        #expect(await binding.resolve(event) == "tab-2")
+        #expect(terminal.recorded == ["__claude_TAB_MARKER_abc-123__", "two"])
+        #expect(terminal.visible.map(\.title) == ["__claude_TAB_MARKER_abc-123__", "two"])
+    }
+
+    @Test func aLeftoverMarkerOnThisTerminalWithNoRecordIsNotTakenAsProof() async throws {
         let sandbox = try HookSandbox()
         var event = try sandbox.event()
         event.tty = "/dev/fixture"
@@ -483,8 +538,13 @@ struct NativeTerminalBindingTests {
         ])
         let binding = NativeTerminalBinding(
             automation: terminal, writer: terminal, clock: InstantBindingClock())
-        #expect(await binding.resolve(event) == "tab-1")
-        #expect(terminal.recorded.isEmpty)
+        // Nothing tells this tab from one the session has left, so no binding,
+        // and no title is written: the only candidate would be the marker.
+        #expect(await binding.resolve(event) == nil)
+        #expect(terminal.recorded == ["__claude_TAB_MARKER_abc-123__"])
+        #expect(!FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.json"))
+        #expect(
+            !FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.marker.json"))
     }
 
     @Test func aPartialMarkerWriteStillRestoresTheOnlyKnownTitle() async throws {

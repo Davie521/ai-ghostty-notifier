@@ -175,17 +175,16 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
     ///
     /// False means the terminal could not be asked, so the caller must not go on
     /// to capture a baseline that may contain the marker.
-    private func recoverOutstanding(
-        _ event: HookEvent, marker: String, tty: String, pid: pid_t
-    ) async -> Bool {
+    private func recoverOutstanding(_ event: HookEvent, marker: String, pid: pid_t) async -> Bool {
         guard let data = FileManager.default.contents(atPath: outstanding(event)) else {
             return true
         }
         func discard() { try? FileManager.default.removeItem(atPath: outstanding(event)) }
-        // Tab ids belong to one Ghostty process and the title is written to one
-        // terminal. A record about any other pair describes nothing we can undo.
+        // Tab ids belong to one Ghostty process. A record about another one
+        // describes nothing we can undo.
         guard let record = try? JSONDecoder().decode(Outstanding.self, from: data),
-            record.marker == marker, record.tty == tty, record.ghosttyPID == String(pid)
+            record.marker == marker, record.ghosttyPID == String(pid),
+            record.tty.hasPrefix("/dev/"), !record.tty.contains("\0")
         else {
             discard()
             return true
@@ -194,11 +193,17 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
         // The record stays for an attempt that can ask.
         do { tabs = try await snapshot(event) } catch { return false }
         // No marker left means the TUI has retitled the tab since; leave that.
-        if let stuck = tabs.first(where: { $0.title == marker }),
-            let original = record.tabs.first(where: { $0.id == stuck.id })
-        {
+        // A tab that already showed the marker when the record was taken has no
+        // original title here, and the marker is never written back as one.
+        if let stuck = tabs.first(where: { tab in
+            tab.title == marker
+                && record.tabs.contains { $0.id == tab.id && $0.title != marker }
+        }), let original = record.tabs.first(where: { $0.id == stuck.id }) {
             do {
-                try writer.write(title: original.title, tty: tty)
+                // The marker went to the terminal the record names, which is not
+                // this one when the session was resumed in another tab. A tab
+                // still showing the marker is still attached to that terminal.
+                try writer.write(title: original.title, tty: record.tty)
                 log("restored a title left behind by an interrupted binding")
             } catch {
                 log("terminal restoration failed: \(error)")
@@ -243,9 +248,7 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
         }
 
         let marker = "__\(event.source.rawValue)_TAB_MARKER_\(event.sessionID)__"
-        guard await recoverOutstanding(event, marker: marker, tty: tty, pid: pid) else {
-            return nil
-        }
+        guard await recoverOutstanding(event, marker: marker, pid: pid) else { return nil }
         let retries: [Double]
         if let value = event.settings["GHOSTTY_NOTIFY_MARKER_RETRY_DELAYS"] {
             let words = value.split(whereSeparator: \.isWhitespace)
@@ -279,14 +282,13 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
                 return nil
             }
             guard !before.isEmpty, current(event), !Task.isCancelled else { return nil }
-            if let leftover = before.first(where: { $0.title == marker }) {
-                // Only this session writes this marker, and only to its own
-                // terminal, so the tab is identified. Its original title is not
-                // recoverable, and the marker must never be "restored" as one.
-                log("bound through a leftover marker; its original title is unknown")
-                result = leftover.id
-                break
-            }
+            // A marker already on show has lost its record. It may sit in a tab
+            // this session has since left, so it says nothing about this
+            // terminal: such a tab is neither bound nor accepted as the answer
+            // below. A live TUI retitles its own tab, so the one tab that does
+            // not shed a stale marker is the one the session is no longer in.
+            let stale = Set(before.filter { $0.title == marker }.map(\.id))
+            if !stale.isEmpty { log("ignoring a leftover marker on \(stale.count) tab(s)") }
             let record = Outstanding(
                 marker: marker, tty: tty, ghosttyPID: String(pid),
                 tabs: before.map { .init(id: $0.id, title: $0.title) })
@@ -315,7 +317,9 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
             // cancels us. Never put a cancellation check ahead of restoration.
             do {
                 try await clock.sleep(seconds: 0.15)
-                result = try await snapshot(event).first(where: { $0.title == marker })?.id
+                result = try await snapshot(event).first(where: {
+                    $0.title == marker && !stale.contains($0.id)
+                })?.id
             } catch { result = nil }
             let restored = await restore(
                 event, before: before, marker: marker, target: result, tty: tty)
@@ -354,9 +358,14 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
         markerMayBePartial: Bool = false
     ) async -> Bool {
         var target = target
+        // Tabs that showed the marker before it was written are not ours, and
+        // their captured "title" is the marker itself.
+        let stale = Set(before.filter { $0.title == marker }.map(\.id))
         if target == nil {
             do {
-                target = try await snapshot(event).first(where: { $0.title == marker })?.id
+                target = try await snapshot(event).first(where: {
+                    $0.title == marker && !stale.contains($0.id)
+                })?.id
                 // A successful query with no marker means the TUI replaced it
                 // already; do not overwrite that newer title during recovery.
                 // After a failed write, absence of the complete marker is not
@@ -369,7 +378,7 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
         guard let target else {
             // If only one title was captured there is no ambiguity, even when
             // the query failed. Otherwise don't guess and retitle another tab.
-            if before.count == 1 {
+            if before.count == 1, stale.isEmpty {
                 do {
                     try writer.write(title: before[0].title, tty: tty)
                     return true
