@@ -102,6 +102,9 @@ private final class NativeRunningCommand: RunningCommand, @unchecked Sendable {
                             defer { try? handle.close() }
                             return (try? handle.read(upToCount: 262144)) ?? Data()
                         } ?? Data()
+                    // deinit never runs in a worker that exits or is signalled
+                    // right after delivery, so the directory must not wait for it.
+                    try? FileManager.default.removeItem(at: root)
                     continuation.resume(
                         returning: CommandResult(
                             status: process.terminationStatus,

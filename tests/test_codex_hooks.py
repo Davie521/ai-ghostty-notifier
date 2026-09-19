@@ -241,8 +241,11 @@ class CodexHookTests(unittest.TestCase):
 
     def test_subagent_prompt_leaves_the_round_alone(self):
         self.bind(started_ago=900)
+        written = (self.state / (SID + ".start")).read_text()
         self.run_hook("UserPromptSubmit", prompt="child task", agent_id="agent-7")
-        self.assertEqual(int((self.state / (SID + ".start")).read_text()), int(time.time()) - 900)
+        # Compare with what bind() wrote. Recomputing it from a clock read one
+        # hook later is off by a second whenever the run straddles a tick.
+        self.assertEqual((self.state / (SID + ".start")).read_text(), written)
         self.assertEqual((self.state / (SID + ".title")).read_text(), "修复登录")
 
     def test_empty_first_prompt_does_not_block_a_later_title(self):
@@ -364,7 +367,9 @@ class CodexHookTests(unittest.TestCase):
         self.assertIn(notice["-message"], ("Finished after 2m 1s", "Finished after 2m 2s"))
         self.assertEqual(notice["-group"], "codex-ghostty-notify-" + SID)
         self.assertNotIn("-sound", notice)
-        self.assertFalse((self.state / (SID + ".start")).exists())
+        # The detached work fires the notice first and clears the timer after
+        # it. Asserting straight away lost that race in about one run in ten.
+        self.wait_until(lambda: not (self.state / (SID + ".start")).exists())
 
     def test_sound_past_the_long_threshold(self):
         self.bind(started_ago=601)
