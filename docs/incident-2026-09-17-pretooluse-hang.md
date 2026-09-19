@@ -79,16 +79,21 @@ at all; several stayed hung for one to two hours.
    removed once the title is back. With several tabs open, an abandoned lookup
    (or a process ended mid-transaction) cannot tell which title was its own, so
    the next attempt undoes the marker from that record before it captures a new
-   baseline, and only for the same Ghostty process, terminal and marker. A
-   leftover marker with no usable record identifies the tab but is never written
-   back as though it had been the title.
+   baseline, and only for the same Ghostty process and marker. The title goes
+   back to the terminal the record names, which is not the current one when the
+   session was resumed in another tab. A marker that is already showing with no
+   usable record proves nothing about the current terminal: that tab is neither
+   bound nor accepted as the lookup's answer, and the marker is never written
+   back as though it had been a title.
 5. **The process is bounded unconditionally.** `NativeLifecycle` arms a deadline
    on its own queue before stdin is read and ends the process with `_exit(0)`:
    12 s for a hook (`GHOSTTY_NOTIFY_HOOK_DEADLINE`), the event lifetime plus 30 s
    for a worker, 15 s otherwise. Its diagnostics are written from another queue
    and waited on for a quarter of a second at most, so a full stderr pipe or a
    stalled log cannot hold the exit. SIGTERM is handled off the main queue and
-   gets 4 s (hook) or 10 s (worker) for cleanup before the same exit.
+   gets 4 s (hook) or 10 s (worker) for cleanup before the same exit. The
+   deadline only ever moves earlier, so a supervisor that repeats its SIGTERM
+   cannot renew the grace period.
 6. **The harness is told too.** Shipped Claude hook entries now set
    `"timeout": 15`, matching what the Codex installer already wrote.
 
@@ -111,6 +116,17 @@ query. The unit fixture always answered at once. CI has no Ghostty.
   this fix, which reported before exiting: that defect, the SIGTERM grace that
   was shorter than the wait it had to cover, and the unrecorded marker were
   found by an independent review of that build.
+- A second independent review, of the merged fix, found four more. Repeated
+  SIGTERM renewed the grace period; `test_repeated_sigterm_cannot_postpone_the_exit`
+  fails against that build. The deadline tests required the report on stderr
+  although the exit waits a quarter of a second for it at most, so they now
+  accept its absence and one test retries until a report gets through. A
+  session resumed in another tab was bound to the tab it had left through a
+  leftover marker; three `NativeTerminalBindingTests` cover that and fail
+  against the earlier code. And `tests/test-live-binding.sh` deleted its
+  fixture, records included, while a tab could still show a marker: it now
+  restores the title from the earliest record first and keeps the fixture when
+  it cannot. That was checked by killing hooks mid-transaction.
 - `tests/test-live-binding.sh`: opt-in, needs a running Ghostty. Twenty unbound
   PreToolUse hooks must each bind a tab within seconds. The 2026-09-17 binary
   hangs on every run; this build bound 20 of 20, typically in 0.63 s. Run it

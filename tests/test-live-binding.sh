@@ -34,11 +34,87 @@ osascript -e 'tell application "System Events" to return exists (application pro
 now() { /usr/bin/perl -MTime::HiRes=time -e 'printf "%.3f\n", time'; }
 
 FIXTURE=$(mktemp -d /tmp/ghostty-live-binding.XXXXXX)
+# Hex and dashes only: intake silently ignores any other session id.
+SESSION_PREFIX=deadbeef-b19d
 HOOK_PID=""
+
+payload_for() {
+    jq -nc --arg id "$1" --arg cwd "$PWD" '{session_id:$id,hook_event_name:"PreToolUse",cwd:$cwd}'
+}
+
+outstanding_records() {
+    local record
+    for record in "$FIXTURE"/*.marker.json; do
+        [[ -e "$record" ]] && printf '%s\n' "$record"
+    done
+    return 0
+}
+
+# Ids of the tabs still titled with a marker from this run. Fails when Ghostty
+# cannot be asked, which is not the same as "none".
+marked_tabs() {
+    osascript <<APPLESCRIPT 2>/dev/null
+with timeout of 5 seconds
+    tell application "Ghostty"
+        set found to ""
+        repeat with w in windows
+            repeat with t in tabs of w
+                if (name of t as text) contains "_TAB_MARKER_${SESSION_PREFIX}-" then
+                    set found to found & (id of t as text) & linefeed
+                end if
+            end repeat
+        end repeat
+        return found
+    end tell
+end timeout
+APPLESCRIPT
+}
+
+# Every marker of this run went to TTY_PATH, so a tab showing one is that
+# terminal's tab and its title can be written back there.
+restore_titles() {
+    local tab record title
+    while IFS= read -r tab; do
+        [[ -n "$tab" ]] || continue
+        title=""
+        # Runs share a tab, so a later record may hold an earlier run's marker
+        # as the "title". The earliest record that knew the tab has the real one.
+        while IFS= read -r record; do
+            title=$(jq -r --arg id "$tab" \
+                '[.tabs[] | select(.id == $id) | .title | select(test("_TAB_MARKER_") | not)][0] // ""' \
+                "$record" 2>/dev/null || true)
+            if [[ -n "$title" ]]; then break; fi
+        done < <(outstanding_records)
+        [[ -n "$title" ]] || continue
+        # The runtime's packet: no control characters inside the OSC sequence.
+        title=$(printf '%s' "$title" | /usr/bin/perl -CSD -pe 's/[\x{00}-\x{1f}\x{7f}\x{9c}]//g')
+        printf '\033]2;%s\033\\' "$title" >"$TTY_PATH"
+    done
+}
+
 cleanup() {
+    local marked
     if [[ -n "$HOOK_PID" ]]; then
         kill -KILL "$HOOK_PID" 2>/dev/null || true
         wait "$HOOK_PID" 2>/dev/null || true
+    fi
+    # A hook that was killed or gave up mid-lookup can leave its marker on a
+    # real tab, and the only copy of that tab's title is a record in this
+    # fixture. Put the title back before anything is deleted. Asking the runtime
+    # to recover would not do: it honours a killed hook's lease for two minutes,
+    # and a record taken while an earlier marker was showing names that marker.
+    if [[ -n "$(outstanding_records)" ]]; then
+        marked=$(marked_tabs) || marked="unknown"
+        if [[ -n "$marked" && "$marked" != "unknown" ]]; then
+            restore_titles <<<"$marked"
+            sleep 0.3
+            marked=$(marked_tabs) || marked="unknown"
+        fi
+        if [[ -n "$marked" ]]; then
+            echo "A tab may still show a binding marker as its title." >&2
+            echo "The records holding its real title were kept in $FIXTURE" >&2
+            return
+        fi
     fi
     rm -rf "$FIXTURE"
 }
@@ -53,10 +129,8 @@ failures=0
 slowest=0
 bound_tab=""
 for ((run = 1; run <= RUNS; run++)); do
-    # Hex and dashes only: intake silently ignores any other session id.
-    session=$(printf 'deadbeef-b19d-%04d' "$run")
-    payload=$(jq -nc --arg id "$session" --arg cwd "$PWD" \
-        '{session_id:$id,hook_event_name:"PreToolUse",cwd:$cwd}')
+    session=$(printf '%s-%04d' "$SESSION_PREFIX" "$run")
+    payload=$(payload_for "$session")
     started=$(now)
     "$BIN" --hook claude PreToolUse <<<"$payload" >/dev/null 2>"$FIXTURE/stderr" &
     HOOK_PID=$!

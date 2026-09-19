@@ -327,6 +327,13 @@ class NativeHookTests(unittest.TestCase):
         self.addCleanup(cleanup)
         return hook
 
+    def assert_report_if_any(self, stream, expected):
+        # The exit never waits for its own report, so under load a process may
+        # rightly leave without one. Whatever it did write has to be the report.
+        report = stream.read()
+        if report:
+            self.assertIn(expected, report)
+
     def test_hook_that_cannot_finish_exits_successfully_at_its_deadline(self):
         started = time.monotonic()
         hook = self.stuck_hook(deadline=1)
@@ -335,7 +342,17 @@ class NativeHookTests(unittest.TestCase):
         self.assertGreaterEqual(elapsed, 0.9, "the deadline fired before its budget")
         self.assertLess(elapsed, 5)
         self.assertEqual(hook.stdout.read(), b"", "a hook's stdout is a decision the CLI parses")
-        self.assertIn(b"outlived its budget", hook.stderr.read())
+        self.assert_report_if_any(hook.stderr, b"outlived its budget")
+
+    def test_a_deadline_exit_reports_itself_when_the_report_can_be_delivered(self):
+        # Delivery is best effort, so one attempt proves nothing either way. A
+        # runtime that still reports gets through at least once in five.
+        for _ in range(5):
+            hook = self.stuck_hook(deadline=1)
+            self.assertEqual(hook.wait(timeout=8), 0)
+            if b"outlived its budget" in hook.stderr.read():
+                return
+        self.fail("five deadline exits in a row said nothing on stderr")
 
     def test_deadline_exit_does_not_wait_for_anyone_to_read_stderr(self):
         # A full pipe nobody drains: the next write to it blocks for good. The
@@ -370,7 +387,20 @@ class NativeHookTests(unittest.TestCase):
         hook.terminate()
         self.assertEqual(hook.wait(timeout=8), 0)
         self.assertLess(time.monotonic() - started, 5)
-        self.assertIn(b"cleanup outlived SIGTERM", hook.stderr.read())
+        self.assert_report_if_any(hook.stderr, b"cleanup outlived SIGTERM")
+
+    def test_repeated_sigterm_cannot_postpone_the_exit(self):
+        hook = self.stuck_hook(deadline=60)
+        hook.stdin.write(b" " * (1 << 18))
+        hook.stdin.flush()
+        started = time.monotonic()
+        # A supervisor that keeps asking. If every signal renewed the four-second
+        # grace, this hook would still be running when the loop gives up.
+        while hook.poll() is None and time.monotonic() - started < 10:
+            hook.terminate()
+            time.sleep(0.5)
+        self.assertEqual(hook.poll(), 0, "the hook outlived ten seconds of repeated SIGTERM")
+        self.assertLess(time.monotonic() - started, 8)
 
     def test_worker_sigterm_reaps_its_backend_and_removes_its_notice(self):
         self.check_worker_shutdown(clear_on_focus=False)
