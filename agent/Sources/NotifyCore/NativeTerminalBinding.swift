@@ -167,6 +167,44 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
     }
     private func outstanding(_ event: HookEvent) -> String { path(event, "marker.json") }
 
+    /// The session named by a binding marker, this runtime's (`__claude_…`) or
+    /// the retired shell hooks' (`__CLAUDE_…`). A title is whatever a program
+    /// in that tab chose to print, so the id is checked before it is used to
+    /// name a file.
+    static func markerSession(_ title: String) -> String? {
+        guard title.count <= 160, title.hasPrefix("__"), title.hasSuffix("__"),
+            let separator = title.range(of: "_TAB_MARKER_")
+        else { return nil }
+        let session = String(title[separator.upperBound...].dropLast(2))
+        return RequestCodec.isValidSessionID(session) ? session : nil
+    }
+
+    /// What may be written back for a tab whose captured title was `title`.
+    /// A marker is never a title, whoever wrote it: a session that died
+    /// mid-transaction leaves one behind, and the next session to start in that
+    /// tab captures it as its baseline. That session's record, if it is still
+    /// here and speaks of this Ghostty process, has the title the tab really
+    /// had. Otherwise the empty title: Ghostty then shows its default, and a
+    /// live TUI sets its own shortly.
+    private func restorable(_ title: String, tab: String, event: HookEvent, pid: pid_t) -> String {
+        var title = title
+        var followed: Set<String> = []
+        while let session = Self.markerSession(title) {
+            guard followed.insert(session).inserted, followed.count <= 4,
+                let data = FileManager.default.contents(
+                    atPath: event.sessionDirectory + "/" + session + ".marker.json"),
+                let record = try? JSONDecoder().decode(Outstanding.self, from: data),
+                record.ghosttyPID == String(pid),
+                let earlier = record.tabs.first(where: { $0.id == tab })
+            else {
+                log("a captured title was another binding's marker; restoring the default title")
+                return ""
+            }
+            title = earlier.title
+        }
+        return title
+    }
+
     /// Undo a marker an earlier attempt could not. That attempt may have been
     /// abandoned mid-lookup, or ended by the process deadline or SIGKILL, with
     /// several tabs open and therefore no way to tell which title was its own.
@@ -203,7 +241,9 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
                 // The marker went to the terminal the record names, which is not
                 // this one when the session was resumed in another tab. A tab
                 // still showing the marker is still attached to that terminal.
-                try writer.write(title: original.title, tty: record.tty)
+                try writer.write(
+                    title: restorable(original.title, tab: stuck.id, event: event, pid: pid),
+                    tty: record.tty)
                 log("restored a title left behind by an interrupted binding")
             } catch {
                 log("terminal restoration failed: \(error)")
@@ -305,7 +345,7 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
                 // A short write can fail after part of the OSC packet reached
                 // the terminal. Attempt recovery even on this path.
                 if await restore(
-                    event, before: before, marker: marker, target: nil, tty: tty,
+                    event, before: before, marker: marker, target: nil, tty: tty, pid: pid,
                     markerMayBePartial: true)
                 {
                     try? FileManager.default.removeItem(atPath: outstanding(event))
@@ -322,7 +362,7 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
                 })?.id
             } catch { result = nil }
             let restored = await restore(
-                event, before: before, marker: marker, target: result, tty: tty)
+                event, before: before, marker: marker, target: result, tty: tty, pid: pid)
             if restored { try? FileManager.default.removeItem(atPath: outstanding(event)) }
             guard restored, current(event), !Task.isCancelled else { return nil }
             if result != nil { break }
@@ -355,7 +395,7 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
 
     private func restore(
         _ event: HookEvent, before: [TerminalTab], marker: String, target: String?, tty: String,
-        markerMayBePartial: Bool = false
+        pid: pid_t, markerMayBePartial: Bool = false
     ) async -> Bool {
         var target = target
         // Tabs that showed the marker before it was written are not ours, and
@@ -380,7 +420,10 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
             // the query failed. Otherwise don't guess and retitle another tab.
             if before.count == 1, stale.isEmpty {
                 do {
-                    try writer.write(title: before[0].title, tty: tty)
+                    try writer.write(
+                        title: restorable(
+                            before[0].title, tab: before[0].id, event: event, pid: pid),
+                        tty: tty)
                     return true
                 } catch { log("terminal restoration failed: \(error)") }
             }
@@ -392,7 +435,9 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
             return false
         }
         do {
-            try writer.write(title: original.title, tty: tty)
+            try writer.write(
+                title: restorable(original.title, tab: original.id, event: event, pid: pid),
+                tty: tty)
             return true
         } catch {
             log("terminal restoration failed: \(error)")
