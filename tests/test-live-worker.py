@@ -11,7 +11,10 @@ posted to Notification Center.
 
     GHOSTTY_NOTIFY_TTY=/dev/ttys012 python3 tests/test-live-worker.py
 
-NATIVE_TEST_BINARY selects a build (default: the installed app). RUNS (5),
+A build is selected the same way as for tests/test-live-binding.sh, so that one
+setting cannot leave the two checks testing different things:
+NATIVE_TEST_BINARY names an executable, GHOSTTY_NOTIFY_NATIVE_APP an app bundle,
+the executable wins, and the default is the installed app. RUNS (5),
 MAX_SECONDS (3), LIMIT_SECONDS, after which a worker is declared hung (12), and
 STOP_GRACE_SECONDS, which a worker then gets to stop by itself (11), are
 overridable. The 2026-09-17 binary hangs on every run.
@@ -40,7 +43,10 @@ import uuid
 
 INSTALLED = Path.home() / ("Library/Application Support/claude-ghostty-notify/"
                            "ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent")
-os.environ.setdefault("NATIVE_TEST_BINARY", str(INSTALLED))
+BUNDLE = os.environ.get("GHOSTTY_NOTIFY_NATIVE_APP")
+os.environ.setdefault(
+    "NATIVE_TEST_BINARY",
+    str(Path(BUNDLE) / "Contents/MacOS/ghostty-notify-agent") if BUNDLE else str(INSTALLED))
 import test_native_hooks as suite  # noqa: E402  (reads NATIVE_TEST_BINARY in setUpClass)
 
 RUNS = int(os.environ.get("RUNS", "5"))
@@ -99,7 +105,27 @@ class LiveWorker(suite.NativeHookTests):
         finally:
             signal.pthread_sigmask(signal.SIG_SETMASK, held)
 
+    def stop_the_worker(self):
+        # Asked to stop first: a worker puts its own marker back on SIGTERM, and
+        # that beats killing it mid-lookup and repairing the tab afterwards.
+        # Ctrl-C never reaches it, since it left this process group with
+        # setsid(), and drain() does not see it either: it runs the binary under
+        # test, which lives outside the fixture.
+        worker = getattr(self, "worker", None)
+        if worker is None or worker.poll() is not None:
+            return
+        worker.terminate()
+        try:
+            worker.wait(timeout=STOP_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            worker.kill()
+            worker.wait()
+
     def recover(self):
+        # First, and inside the held signals: an interrupt during the grace
+        # period above would otherwise skip the kill and leave the worker
+        # running while its title is rewritten and its fixture deleted.
+        self.stop_the_worker()
         try:
             self.drain()  # nothing may still be writing to the terminal
         except AssertionError as error:
@@ -112,14 +138,18 @@ class LiveWorker(suite.NativeHookTests):
         # take the title with it. Failing to make one is no reason not to try.
         kept = None
         for place in ("/tmp", tempfile.gettempdir()):
+            candidate = None
             try:
-                kept = Path(tempfile.mkdtemp(prefix="ghostty-live-worker-", dir=place))
-                shutil.copy2(record, kept / record.name)
+                candidate = Path(tempfile.mkdtemp(prefix="ghostty-live-worker-", dir=place))
+                shutil.copy2(record, candidate / record.name)
+                kept = candidate
                 break
             except OSError as error:
                 print("could not keep a copy of the title record in {}: {}".format(place, error),
                       file=sys.stderr)
-                kept = None
+                # Only a complete copy is worth a directory.
+                if candidate is not None:
+                    shutil.rmtree(candidate, ignore_errors=True)
         clean = False
         try:
             marked = tabs_showing_marker()
@@ -179,25 +209,21 @@ class LiveWorker(suite.NativeHookTests):
         }
         started = time.monotonic()
         # The recording backend exits by itself, so the worker can finish too.
-        worker = subprocess.Popen([str(self.binary), "--worker"], stdin=subprocess.PIPE,
-                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                  env={**self.env, "GHOSTTY_NOTIFY_TTY": TTY, "TEST_DELAY_MS": "200"})
+        worker = self.worker = subprocess.Popen(
+            [str(self.binary), "--worker"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True,
+            env={**self.env, "GHOSTTY_NOTIFY_TTY": TTY, "TEST_DELAY_MS": "200"})
         try:
             stdout, _ = worker.communicate(json.dumps(context), timeout=LIMIT_SECONDS)
         except subprocess.TimeoutExpired:
             self.fail("the worker was still running after {:.0f}s".format(LIMIT_SECONDS))
         finally:
-            # Also on Ctrl-C, which does not reach a worker: it left this
-            # process group with setsid(). Asked to stop first, because a worker
-            # puts its own marker back on SIGTERM, and that beats killing it
-            # mid-lookup and repairing the tab afterwards.
-            if worker.poll() is None:
-                worker.terminate()
-                try:
-                    worker.communicate(timeout=STOP_GRACE_SECONDS)
-                except subprocess.TimeoutExpired:
-                    worker.kill()
-                    worker.communicate()
+            # Also on Ctrl-C. Should that land here as well, recover() stops the
+            # worker again with signals held.
+            self.stop_the_worker()
+            for stream in (worker.stdin, worker.stdout, worker.stderr):
+                if stream is not None and not stream.closed:
+                    stream.close()
         elapsed = time.monotonic() - started
         self.assertEqual(worker.returncode, 0)
         self.assertEqual(stdout, "")
@@ -224,6 +250,7 @@ def main():
     if not TTY.startswith("/dev/"):
         print("Set GHOSTTY_NOTIFY_TTY to the terminal device of a Ghostty tab", file=sys.stderr)
         return 2
+    print("Testing {}".format(os.environ["NATIVE_TEST_BINARY"]), flush=True)
     def interrupted(signum, frame):
         raise KeyboardInterrupt
 

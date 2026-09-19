@@ -293,8 +293,14 @@ GHOSTTY_NOTIFY_TTY=/dev/ttys012 python3 tests/test-live-worker.py
 `GHOSTTY_NOTIFY_TTY` is the terminal device of a Ghostty tab; inside one, `tty`
 prints it. The first check sends unbound `PreToolUse` hooks through the real tab
 lookup. The second does the same from a `--worker` process, with a recording
-notification backend, so nothing is posted. Both test the installed app unless
-`GHOSTTY_NOTIFY_NATIVE_APP` or `NATIVE_TEST_BINARY` selects a build.
+notification backend, so nothing is posted.
+
+Both test the installed app unless a build is selected, and both take the same
+two settings, so one setting cannot leave them testing different things.
+`GHOSTTY_NOTIFY_NATIVE_APP` names an app bundle, such as
+`"$PWD/build/ClaudeGhosttyNotify.app"`, and `NATIVE_TEST_BINARY` an executable;
+the executable wins when both are set. Each script starts by printing the binary
+it tests.
 
 Each check writes a marker into that tab's title for a moment and puts the title
 back. A lookup may miss when the TUI in that tab redraws its title at that

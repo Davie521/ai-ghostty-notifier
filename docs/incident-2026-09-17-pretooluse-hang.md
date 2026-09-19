@@ -178,6 +178,15 @@ query. The unit fixture always answered at once. CI has no Ghostty.
   only that it existed; the backend is now left to the fixture's own cleanup,
   which goes by ownership, and a test that dies with its backend up was checked
   to leave nothing behind.
+- A sixth review found three. The README said either of two settings selects a
+  build, but each script read only one of them, so one setting left the other
+  script testing the installed app without saying so; both scripts now take
+  both and print the binary they test. An interrupt during the grace period a
+  worker gets to stop skipped the kill, and that worker runs the binary under
+  test, outside the fixture, where cleanup does not look; recovery now stops it
+  first, with signals held. Without that, the worker was seen deleting its
+  record while the script was reading it. And a copy of the record that failed
+  halfway left its directory behind.
 - `tests/test-live-binding.sh`: opt-in, needs a running Ghostty. Twenty unbound
   PreToolUse hooks must each bind a tab within seconds. The 2026-09-17 binary
   hangs on every run; this build bound 20 of 20, typically in 0.63 s. Run it

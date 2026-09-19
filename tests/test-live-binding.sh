@@ -11,16 +11,19 @@
 #   bash tests/test-live-binding.sh
 #   GHOSTTY_NOTIFY_TTY=/dev/ttys012 bash tests/test-live-binding.sh
 # RUNS (20), MAX_SECONDS per hook (3) and LIMIT_SECONDS before a hook is
-# declared hung (8) are overridable. GHOSTTY_NOTIFY_NATIVE_APP may select a
-# built bundle before deployment.
+# declared hung (8) are overridable. A build is selected the same way as for
+# tests/test-live-worker.py, so that one setting cannot leave the two checks
+# testing different things: NATIVE_TEST_BINARY names an executable,
+# GHOSTTY_NOTIFY_NATIVE_APP an app bundle, and the executable wins.
 set -euo pipefail
 
 RUNS=${RUNS:-20}
 MAX_SECONDS=${MAX_SECONDS:-3}
 LIMIT_SECONDS=${LIMIT_SECONDS:-8}
 APP="${GHOSTTY_NOTIFY_NATIVE_APP:-$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app}"
-BIN="$APP/Contents/MacOS/ghostty-notify-agent"
+BIN="${NATIVE_TEST_BINARY:-$APP/Contents/MacOS/ghostty-notify-agent}"
 [[ -x "$BIN" ]] || { echo "native runtime missing: $BIN" >&2; exit 2; }
+echo "Testing $BIN"
 command -v jq >/dev/null 2>&1 || { echo "jq is required by this test" >&2; exit 2; }
 
 TTY_PATH=${GHOSTTY_NOTIFY_TTY:-$(tty 2>/dev/null || true)}
