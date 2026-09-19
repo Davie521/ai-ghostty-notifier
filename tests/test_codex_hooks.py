@@ -364,7 +364,9 @@ class CodexHookTests(unittest.TestCase):
         self.assertIn(notice["-message"], ("Finished after 2m 1s", "Finished after 2m 2s"))
         self.assertEqual(notice["-group"], "codex-ghostty-notify-" + SID)
         self.assertNotIn("-sound", notice)
-        self.assertFalse((self.state / (SID + ".start")).exists())
+        # The detached work fires the notice first and clears the timer after
+        # it. Asserting straight away lost that race in about one run in ten.
+        self.wait_until(lambda: not (self.state / (SID + ".start")).exists())
 
     def test_sound_past_the_long_threshold(self):
         self.bind(started_ago=601)

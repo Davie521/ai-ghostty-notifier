@@ -115,6 +115,20 @@ query. The unit fixture always answered at once. CI has no Ghostty.
   PreToolUse hooks must each bind a tab within seconds. The 2026-09-17 binary
   hangs on every run; this build bound 20 of 20, typically in 0.63 s. Run it
   before deploying a build that touches Apple Events or native process setup.
+- `tests/test-live-worker.py`: opt-in, needs a running Ghostty. It was added on
+  2026-09-19, after the fix shipped with the `--worker` fallback covered by unit
+  tests only. A worker gets a real terminal device but the recording
+  notification backend of `test_native_hooks.py`, so its tab lookup, marker and
+  restoration are real and nothing reaches Notification Center. Five workers
+  must each bind the tab, deliver once and exit 0 within seconds. The
+  2026-09-17 binary is still running when the script gives up on it; this build
+  passed 5 of 5 in about 0.9 s each.
+
+On 2026-09-19 the production path was also exercised end to end: a real
+`claude -p` session with one tool call, started with `GHOSTTY_NOTIFY_TTY` set
+because a headless process owns no terminal, ran the shipped `PreToolUse` entry
+from `settings.json` against the installed app and bound its tab with no stall
+stamp and no marker record left behind.
 
 ## If it happens again
 

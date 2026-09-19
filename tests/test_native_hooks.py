@@ -84,11 +84,49 @@ class NativeHookTests(unittest.TestCase):
         if source == "codex": command.append(event)
         command = [str(self.bin / source)] + ([] if owner else ["--without-tty"]) + command
         data = payload if payload is not None else {"session_id": SID, "hook_event_name": event, "cwd": "/work/中文项目"}
-        result = subprocess.run(command, input=data if isinstance(data, str) else json.dumps(data), text=True,
-                                capture_output=True, env={**self.env, **(env or {})}, timeout=10)
+        process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True, env={**self.env, **(env or {})})
+        # The fixture CLI calls setsid(), so its pid names the process group a
+        # detached worker inherits. Registered after the temporary directory's
+        # own cleanup, this runs before it: a worker that outlives the test
+        # would otherwise write agent.log back into a directory already removed.
+        self.addCleanup(self.stop_hook_group, process.pid)
+        try:
+            stdout, stderr = process.communicate(data if isinstance(data, str) else json.dumps(data), timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+            raise
+        result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "")
         return result
+
+    @staticmethod
+    def hook_group_gone(group):
+        # killpg(group, 0) can report EPERM during runner teardown, so inspect
+        # the exact group instead. Zombies cannot write into the sandbox.
+        snapshot = subprocess.check_output(["/bin/ps", "-axo", "pgid=,stat="], text=True)
+        return not any(fields[0] == str(group) and not fields[1].startswith("Z")
+                       for line in snapshot.splitlines() if len(fields := line.split()) == 2)
+
+    def stop_hook_group(self, group):
+        # Let a worker that is about to finish do so, then stop what is left.
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and not self.hook_group_gone(group):
+            time.sleep(0.02)
+        for sent in (signal.SIGTERM, signal.SIGKILL):
+            if self.hook_group_gone(group): return
+            try:
+                os.killpg(group, sent)
+            except ProcessLookupError:
+                return
+            except PermissionError:
+                if self.hook_group_gone(group): return
+                raise
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and not self.hook_group_gone(group):
+                time.sleep(0.02)
 
     def wait(self, predicate, timeout=5):
         deadline = time.monotonic() + timeout
@@ -387,12 +425,20 @@ class NativeHookTests(unittest.TestCase):
         # child necessarily reaches main(). Test shutdown during an established
         # delivery, not a race that kills the recorder before it logs anything.
         self.wait(lambda: len(self.notices()) == 1)
+        # Foundation ignores TMPDIR, so ask the backend where its output went
+        # instead of scanning a directory every other process also writes to.
+        listing = subprocess.check_output(
+            ["/usr/sbin/lsof", "-a", "-p", str(backend_pid), "-d", "1", "-Fn"], text=True)
+        output_dir = Path(next(line[1:] for line in listing.splitlines() if line.startswith("n"))).parent
+        self.assertTrue(output_dir.name.startswith("ghostty-command-") and output_dir.is_dir(), output_dir)
         worker.terminate()
         worker.wait(timeout=5)
         self.assertFalse(alive(backend_pid), "worker left its notification process running")
         self.assertEqual(worker.returncode, 0)
         self.assertFalse(record.exists())
         self.assertEqual(len(self.notices()), 1, "cancellation must not start a fallback notification")
+        # A signalled worker never runs deinit; the directory must already be gone.
+        self.assertFalse(output_dir.exists(), "worker left its backend output directory behind")
 
 
 if __name__ == "__main__":
