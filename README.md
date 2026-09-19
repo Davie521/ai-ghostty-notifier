@@ -281,6 +281,37 @@ bundle and service-command tripwires. They do not install a LaunchAgent or test
 the human permission flow. Historical shell fixture tests still require jq;
 this is not a production hook dependency.
 
+Two further checks are opt-in, because they need a running Ghostty and CI has
+none. Run them before deploying a build that touches Apple Events or native
+process setup:
+
+```bash
+GHOSTTY_NOTIFY_TTY=/dev/ttys012 bash tests/test-live-binding.sh
+GHOSTTY_NOTIFY_TTY=/dev/ttys012 python3 tests/test-live-worker.py
+```
+
+`GHOSTTY_NOTIFY_TTY` is the terminal device of a Ghostty tab; inside one, `tty`
+prints it. The first check sends unbound `PreToolUse` hooks through the real tab
+lookup. The second does the same from a `--worker` process, with a recording
+notification backend, so nothing is posted.
+
+Both test the installed app unless a build is selected, and both take the same
+two settings, so one setting cannot leave them testing different things.
+`GHOSTTY_NOTIFY_NATIVE_APP` names an app bundle, such as
+`"$PWD/build/ClaudeGhosttyNotify.app"`, and `NATIVE_TEST_BINARY` an executable;
+the executable wins when both are set. Each script starts by printing the binary
+it tests.
+
+Each check writes a marker into that tab's title for a moment and puts the title
+back. A lookup may miss when the TUI in that tab redraws its title at that
+moment, as Claude Code does while it works. The runtime retries on the next tool
+call, so the checks give a session the same three attempts and print how many
+lookups were retried. The title is also put back when a run fails or is stopped
+with Ctrl-C, SIGTERM or SIGHUP; if that cannot be confirmed, the script says
+where it kept the record that holds the title. A script killed with SIGKILL
+cannot clean up. Why these checks exist is in
+`docs/incident-2026-09-17-pretooluse-hang.md`.
+
 ## Uninstall
 
 Remove hook registrations first and restart open CLI sessions. For plugin

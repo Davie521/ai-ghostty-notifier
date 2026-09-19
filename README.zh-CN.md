@@ -251,6 +251,26 @@ bash tests/test-agent.sh
 不注册 LaunchAgent，也不测试需要人工应答的权限流程。
 历史 shell 样本测试仍需 jq，但生产 hook 不需要。
 
+另有两项检查需要手动运行：它们依赖正在运行的 Ghostty，而 CI 里没有。
+部署任何改动了 Apple Events 或原生进程启动流程的构建之前，先跑一遍：
+
+```bash
+GHOSTTY_NOTIFY_TTY=/dev/ttys012 bash tests/test-live-binding.sh
+GHOSTTY_NOTIFY_TTY=/dev/ttys012 python3 tests/test-live-worker.py
+```
+
+`GHOSTTY_NOTIFY_TTY` 是某个 Ghostty 标签页的终端设备，在标签页里运行 `tty` 即可得到。
+第一项让尚未绑定的 `PreToolUse` hook 走一遍真实的标签页查找。
+第二项在 `--worker` 进程里做同样的事，通知后端换成只记录调用的替身，不会弹出通知。
+两者默认测试已安装的 App。要测某个构建时，两个脚本认的是同一组设置，所以不会出现只设了一个、另一个脚本却还在测已安装版本的情况：
+`GHOSTTY_NOTIFY_NATIVE_APP` 指向 App 包，例如 `"$PWD/build/ClaudeGhosttyNotify.app"`；`NATIVE_TEST_BINARY` 指向可执行文件；两个都设时以可执行文件为准。
+每个脚本一开始都会打印它实际测试的二进制。
+运行时会短暂地把标记写进该标签页的标题，随后恢复原标题。
+如果该标签页里的 TUI 恰好在这一刻重绘标题，查找会落空，Claude Code 工作时就会这样；运行时会在下一次工具调用时重试，所以这两项检查同样给每个会话三次机会，并报告用掉了几次。
+运行失败，或被 Ctrl-C、SIGTERM、SIGHUP 中止时也一样；如果无法确认标题已恢复，脚本会说明保存着原标题的记录放在哪里。
+脚本被 SIGKILL 强杀时无法收尾。
+来龙去脉见 `docs/incident-2026-09-17-pretooluse-hang.md`。
+
 ## 卸载
 
 先移除 hook 注册并重启已打开的 CLI 会话。
