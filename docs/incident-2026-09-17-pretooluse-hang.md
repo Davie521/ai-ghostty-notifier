@@ -84,7 +84,10 @@ at all; several stayed hung for one to two hours.
    session was resumed in another tab. A marker that is already showing with no
    usable record proves nothing about the current terminal: that tab is neither
    bound nor accepted as the lookup's answer, and the marker is never written
-   back as though it had been a title.
+   back as though it had been a title. That holds for any session's marker: one
+   captured as a baseline is replaced by the title in that session's own record
+   when it is still there and speaks of this Ghostty process, and by the empty
+   title otherwise, for which Ghostty shows its default.
 5. **The process is bounded unconditionally.** `NativeLifecycle` arms a deadline
    on its own queue before stdin is read and ends the process with `_exit(0)`:
    12 s for a hook (`GHOSTTY_NOTIFY_HOOK_DEADLINE`), the event lifetime plus 30 s
@@ -127,6 +130,17 @@ query. The unit fixture always answered at once. CI has no Ghostty.
   fixture, records included, while a tab could still show a marker: it now
   restores the title from the earliest record first and keeps the fixture when
   it cannot. That was checked by killing hooks mid-transaction.
+- A third review, of those follow-ups, found four again. The cleanup added to
+  `test_native_hooks.py` watched the hook's process group, which a worker leaves
+  with `setsid()`: it only appeared to work, and under load half the runs still
+  leaked. Processes are now found by the fixture path in their command line,
+  and the suite leaks nothing at a load average above 30.
+  `tests/test-live-worker.py` lost the title record when its worker was killed
+  with the marker showing, which a kill at 0.28 s reproduces every time; it now
+  puts the title back first. Both live scripts use a marker unique to the
+  invocation, so overlapping runs cannot restore each other's tabs. And another
+  session's marker captured as a baseline was written back as a title; five
+  `NativeTerminalBindingTests` cover that and fail against the earlier code.
 - `tests/test-live-binding.sh`: opt-in, needs a running Ghostty. Twenty unbound
   PreToolUse hooks must each bind a tab within seconds. The 2026-09-17 binary
   hangs on every run; this build bound 20 of 20, typically in 0.63 s. Run it

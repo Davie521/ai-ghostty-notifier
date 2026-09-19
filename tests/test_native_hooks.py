@@ -46,6 +46,8 @@ class NativeHookTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="ghostty-native-test-")
         self.addCleanup(self.temp.cleanup)
+        # Registered after the directory's own cleanup, so it runs before it.
+        self.addCleanup(self.drain)
         self.root = Path(self.temp.name)
         self.hooks = self.root / "hooks"
         self.hooks.mkdir()
@@ -84,49 +86,42 @@ class NativeHookTests(unittest.TestCase):
         if source == "codex": command.append(event)
         command = [str(self.bin / source)] + ([] if owner else ["--without-tty"]) + command
         data = payload if payload is not None else {"session_id": SID, "hook_event_name": event, "cwd": "/work/中文项目"}
-        process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   text=True, env={**self.env, **(env or {})})
-        # The fixture CLI calls setsid(), so its pid names the process group a
-        # detached worker inherits. Registered after the temporary directory's
-        # own cleanup, this runs before it: a worker that outlives the test
-        # would otherwise write agent.log back into a directory already removed.
-        self.addCleanup(self.stop_hook_group, process.pid)
-        try:
-            stdout, stderr = process.communicate(data if isinstance(data, str) else json.dumps(data), timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.communicate()
-            raise
-        result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+        result = subprocess.run(command, input=data if isinstance(data, str) else json.dumps(data), text=True,
+                                capture_output=True, env={**self.env, **(env or {})}, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "")
         return result
 
-    @staticmethod
-    def hook_group_gone(group):
-        # killpg(group, 0) can report EPERM during runner teardown, so inspect
-        # the exact group instead. Zombies cannot write into the sandbox.
-        snapshot = subprocess.check_output(["/bin/ps", "-axo", "pgid=,stat="], text=True)
-        return not any(fields[0] == str(group) and not fields[1].startswith("Z")
-                       for line in snapshot.splitlines() if len(fields := line.split()) == 2)
+    def fixture_processes(self):
+        # A worker calls setsid() and its hook exits, so neither a process group
+        # nor a parent link leads to it. Its executable path does: everything
+        # this fixture starts, workers and notification backends alike, runs
+        # from under self.root, which no other process names.
+        listing = subprocess.check_output(["/bin/ps", "-axww", "-o", "pid=,stat=,args="], text=True)
+        found = []
+        for line in listing.splitlines():
+            fields = line.split(None, 2)
+            if len(fields) == 3 and not fields[1].startswith("Z") and str(self.root) in fields[2]:
+                found.append(int(fields[0]))
+        return found
 
-    def stop_hook_group(self, group):
-        # Let a worker that is about to finish do so, then stop what is left.
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline and not self.hook_group_gone(group):
-            time.sleep(0.02)
-        for sent in (signal.SIGTERM, signal.SIGKILL):
-            if self.hook_group_gone(group): return
-            try:
-                os.killpg(group, sent)
-            except ProcessLookupError:
+    def drain(self):
+        # A worker that outlives its test writes agent.log back into a directory
+        # TemporaryDirectory has already removed. Let one that is about to
+        # finish do so, then stop what is left, before anything is deleted.
+        for sent, patience in ((None, 3), (signal.SIGTERM, 5), (signal.SIGKILL, 5)):
+            remaining = self.fixture_processes()
+            if not remaining:
                 return
-            except PermissionError:
-                if self.hook_group_gone(group): return
-                raise
-            deadline = time.monotonic() + 5
-            while time.monotonic() < deadline and not self.hook_group_gone(group):
+            for pid in remaining if sent is not None else []:
+                try:
+                    os.kill(pid, sent)
+                except ProcessLookupError:
+                    pass
+            deadline = time.monotonic() + patience
+            while time.monotonic() < deadline and self.fixture_processes():
                 time.sleep(0.02)
+        self.assertEqual(self.fixture_processes(), [], "fixture processes survived cleanup")
 
     def wait(self, predicate, timeout=5):
         deadline = time.monotonic() + timeout
@@ -401,6 +396,17 @@ class NativeHookTests(unittest.TestCase):
             time.sleep(0.5)
         self.assertEqual(hook.poll(), 0, "the hook outlived ten seconds of repeated SIGTERM")
         self.assertLess(time.monotonic() - started, 8)
+
+    def test_cleanup_reaps_a_worker_that_left_its_hooks_process_group(self):
+        self.start()
+        # A backend that lingers keeps its worker waiting after the hook is gone.
+        self.invoke("Stop", env={"TEST_DELAY_MS": "30000", "GHOSTTY_NOTIFY_TIMEOUT": "0"})
+        self.wait(lambda: len(self.notices()) == 1)
+        self.assertTrue(self.fixture_processes(), "nothing outlived the hook, so this proves nothing")
+        started = time.monotonic()
+        self.drain()
+        self.assertEqual(self.fixture_processes(), [])
+        self.assertLess(time.monotonic() - started, 12)
 
     def test_worker_sigterm_reaps_its_backend_and_removes_its_notice(self):
         self.check_worker_shutdown(clear_on_focus=False)

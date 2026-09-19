@@ -34,8 +34,11 @@ osascript -e 'tell application "System Events" to return exists (application pro
 now() { /usr/bin/perl -MTime::HiRes=time -e 'printf "%.3f\n", time'; }
 
 FIXTURE=$(mktemp -d /tmp/ghostty-live-binding.XXXXXX)
-# Hex and dashes only: intake silently ignores any other session id.
-SESSION_PREFIX=deadbeef-b19d
+# Hex and dashes only: intake silently ignores any other session id. Unique per
+# invocation, so the cleanup below only ever acts on markers this run wrote: two
+# overlapping runs would otherwise restore each other's tabs into their own.
+SESSION_PREFIX=$(uuidgen | tr 'A-F' 'a-f' | cut -c1-13)
+[[ "$SESSION_PREFIX" =~ ^[0-9a-f]{8}-[0-9a-f]{4}$ ]] || { echo "uuidgen gave no usable prefix" >&2; exit 2; }
 HOOK_PID=""
 
 payload_for() {

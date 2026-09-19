@@ -14,15 +14,24 @@ posted to Notification Center.
 NATIVE_TEST_BINARY selects a build (default: the installed app). RUNS (5),
 MAX_SECONDS (3) and LIMIT_SECONDS, after which a worker is declared hung (12),
 are overridable. The 2026-09-17 binary hangs on every run.
+
+A worker that is killed or fails while its marker is showing would leave that
+marker on a real tab, with the tab's title recorded only inside the fixture.
+The title is therefore put back before the fixture is deleted, and the record
+is copied to /tmp when that cannot be confirmed.
 """
 import io
 import json
 import os
 from pathlib import Path
+import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
+import uuid
 
 INSTALLED = Path.home() / ("Library/Application Support/claude-ghostty-notify/"
                            "ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent")
@@ -33,13 +42,65 @@ RUNS = int(os.environ.get("RUNS", "5"))
 MAX_SECONDS = float(os.environ.get("MAX_SECONDS", "3"))
 LIMIT_SECONDS = float(os.environ.get("LIMIT_SECONDS", "12"))
 TTY = os.environ.get("GHOSTTY_NOTIFY_TTY", "")
-SID = suite.SID
+# Hex and dashes only, and unique per invocation: the marker carries it, and the
+# recovery below must never act on a marker another run of this script wrote.
+SID = suite.SID = "deadbeef-{}-{}".format(uuid.uuid4().hex[:4], uuid.uuid4().hex[:4])
+MARKER = "__claude_TAB_MARKER_{}__".format(SID)
+
+
+def tabs_showing_marker():
+    """Ids of the tabs titled with this run's marker; None if Ghostty cannot be asked."""
+    script = '''with timeout of 5 seconds
+    tell application "Ghostty"
+        set found to ""
+        repeat with w in windows
+            repeat with t in tabs of w
+                if (name of t as text) is "%s" then set found to found & (id of t as text) & linefeed
+            end repeat
+        end repeat
+        return found
+    end tell
+end timeout''' % MARKER
+    try:
+        asked = subprocess.run(["/usr/bin/osascript", "-e", script], capture_output=True, text=True, timeout=10)
+    except subprocess.TimeoutExpired:
+        return None
+    return asked.stdout.split() if asked.returncode == 0 else None
 
 
 class LiveWorker(suite.NativeHookTests):
     bound = []
 
+    def put_the_title_back(self):
+        # A worker killed or failing mid-lookup leaves its marker on a real tab,
+        # and the only copy of that tab's title is a record inside the fixture
+        # TemporaryDirectory is about to delete. Nothing may still be writing.
+        self.drain()
+        record = self.state() / (SID + ".marker.json")
+        if not record.exists():
+            return
+        marked = tabs_showing_marker()
+        if marked:
+            titles = {tab["id"]: tab["title"] for tab in json.loads(record.read_text())["tabs"]}
+            for tab in marked:
+                title = titles.get(tab, "")
+                if "_TAB_MARKER_" in title:
+                    title = ""  # never a marker; Ghostty shows its default for an empty title
+                # The runtime's packet: no control characters inside the OSC.
+                title = re.sub("[\\x00-\\x1f\\x7f\\x9c]", "", title)
+                with open(TTY, "w") as terminal:
+                    terminal.write("\033]2;" + title + "\033\\")
+            time.sleep(0.3)
+            marked = tabs_showing_marker()
+        if marked is None or marked:
+            kept = Path(tempfile.mkdtemp(prefix="ghostty-live-worker-", dir="/tmp"))
+            shutil.copy2(record, kept / record.name)
+            print("A tab may still show a binding marker as its title.", file=sys.stderr)
+            print("The record holding its real title was kept in {}".format(kept), file=sys.stderr)
+
     def test_worker_binds_delivers_and_exits(self):
+        # Registered after the fixture's own cleanups, so it runs before them.
+        self.addCleanup(self.put_the_title_back)
         self.start()
         settings = {k: v for k, v in self.env.items() if k.startswith("GHOSTTY_NOTIFY_")}
         settings.update({"GHOSTTY_NOTIFY_BACKEND": "terminal-notifier", "GHOSTTY_NOTIFY_TIMEOUT": "1",
