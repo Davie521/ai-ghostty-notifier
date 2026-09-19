@@ -87,19 +87,39 @@ class LiveWorker(suite.NativeHookTests):
     def put_the_title_back(self):
         # A worker killed or failing mid-lookup leaves its marker on a real tab,
         # and the only copy of that tab's title is a record inside a fixture
-        # that is about to be deleted. Nothing may still be writing by now.
+        # that is about to be deleted. An interrupt halfway through this would
+        # leave both the tab and a stray copy behind, so signals are held until
+        # it is done. They are deferred, not lost: a pending one is delivered
+        # when the mask is lifted, and main() then finds nothing left to do.
+        if getattr(self, "recovered", False):
+            return
+        held = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
         try:
-            self.drain()
+            self.recover()
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, held)
+
+    def recover(self):
+        try:
+            self.drain()  # nothing may still be writing to the terminal
         except AssertionError as error:
             print("fixture processes outlived the run: {}".format(error), file=sys.stderr)
         record = self.state() / (SID + ".marker.json")
         if not record.exists():
+            self.recovered = True
             return
-        # Kept first and dropped only once the tab is known to be clean, so that
-        # no failure below, a terminal that cannot be opened included, can take
-        # the title with it.
-        kept = Path(tempfile.mkdtemp(prefix="ghostty-live-worker-", dir="/tmp"))
-        shutil.copy2(record, kept / record.name)
+        # A copy outside the fixture comes first, so that no failure below can
+        # take the title with it. Failing to make one is no reason not to try.
+        kept = None
+        for place in ("/tmp", tempfile.gettempdir()):
+            try:
+                kept = Path(tempfile.mkdtemp(prefix="ghostty-live-worker-", dir=place))
+                shutil.copy2(record, kept / record.name)
+                break
+            except OSError as error:
+                print("could not keep a copy of the title record in {}: {}".format(place, error),
+                      file=sys.stderr)
+                kept = None
         clean = False
         try:
             marked = tabs_showing_marker()
@@ -116,13 +136,23 @@ class LiveWorker(suite.NativeHookTests):
                 time.sleep(0.3)
                 marked = tabs_showing_marker()
             clean = marked == []
-        except (OSError, ValueError, KeyError) as error:
+        except (OSError, ValueError, KeyError, TypeError) as error:
             print("putting the title back failed: {}".format(error), file=sys.stderr)
         if clean:
-            shutil.rmtree(kept, ignore_errors=True)
-        else:
-            print("A tab may still show a binding marker as its title.", file=sys.stderr)
+            self.recovered = True
+            if kept is not None:
+                shutil.rmtree(kept, ignore_errors=True)
+            return
+        print("A tab may still show a binding marker as its title.", file=sys.stderr)
+        if kept is not None:
             print("The record holding its real title was kept in {}".format(kept), file=sys.stderr)
+        else:
+            # Nowhere to keep it, and the fixture is about to go: say it here.
+            print("The record holding its real title could not be copied. It reads:", file=sys.stderr)
+            try:
+                print(record.read_text(), file=sys.stderr)
+            except OSError as error:
+                print("(unreadable: {})".format(error), file=sys.stderr)
 
     def test_worker_binds_delivers_and_exits(self):
         try:
@@ -223,16 +253,19 @@ def run_all():
         for attempt in range(1, 4):
             outcome = unittest.TextTestRunner(stream=io.StringIO(), verbosity=0).run(
                 unittest.TestSuite([LiveWorker("test_worker_binds_delivers_and_exits")]))
-            if not outcome.skipped:
+            # A result can hold a skip and an error at once: the lookup missed
+            # and a cleanup then failed. Only a miss with nothing else wrong is
+            # retried, or a later success would hide what went wrong.
+            if outcome.failures or outcome.errors or not outcome.skipped:
                 break
             LiveWorker.missed += 1
-        if outcome.skipped:
-            print("FAIL: run {} of {}: no tab was bound in three attempts".format(index, RUNS), file=sys.stderr)
-            return 1
-        if not outcome.wasSuccessful():
+        if outcome.failures or outcome.errors:
             for _, trace in outcome.failures + outcome.errors:
                 print(trace.strip().splitlines()[-1], file=sys.stderr)
             print("FAIL: run {} of {}".format(index, RUNS), file=sys.stderr)
+            return 1
+        if outcome.skipped:
+            print("FAIL: run {} of {}: no tab was bound in three attempts".format(index, RUNS), file=sys.stderr)
             return 1
         tab, elapsed = LiveWorker.bound[-1]
         print("  ok  run {}: {:.3f}s -> {}".format(index, elapsed, tab))

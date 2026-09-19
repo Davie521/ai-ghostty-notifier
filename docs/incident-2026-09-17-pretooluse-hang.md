@@ -166,6 +166,18 @@ query. The unit fixture always answered at once. CI has no Ghostty.
   give a session the three attempts the runtime gives it, print how many
   lookups were retried, and still fail when most of them miss, when a build
   hangs, or when the terminal is not a Ghostty tab.
+- A fifth review, of that change, found four in the test scripts. The worker
+  check retried a missed lookup before looking at errors, so a cleanup failure
+  in the same result could end in PASS; only a miss with nothing else wrong is
+  retried now. Its recovery could be interrupted halfway, leaving a stray copy
+  of the record, and failing to make that copy skipped the restoration. It now
+  holds signals until it is done, which defers them rather than dropping them,
+  restores the title whether or not a copy could be made, and prints the record
+  when there was nowhere to keep it. All three were exercised against a real
+  leftover record. And a shutdown test signalled a recorded pid after checking
+  only that it existed; the backend is now left to the fixture's own cleanup,
+  which goes by ownership, and a test that dies with its backend up was checked
+  to leave nothing behind.
 - `tests/test-live-binding.sh`: opt-in, needs a running Ghostty. Twenty unbound
   PreToolUse hooks must each bind a tab within seconds. The 2026-09-17 binary
   hangs on every run; this build bound 20 of 20, typically in 0.63 s. Run it

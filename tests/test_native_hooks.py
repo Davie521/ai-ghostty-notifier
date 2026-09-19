@@ -480,19 +480,18 @@ class NativeHookTests(unittest.TestCase):
         backend_pid = None
 
         def alive(pid):
-            try:
-                os.kill(pid, 0)
-                return True
-            except ProcessLookupError:
-                return False
+            # Existence is not identity: a pid can be reused, and a zombie still
+            # answers a signal. Only a live process running from this fixture is
+            # the backend this record names.
+            return pid in self.fixture_processes()
 
         def cleanup():
             if worker.poll() is None:
                 worker.kill()
             worker.wait(timeout=5)
-            # Failure cleanup targets only the backend in this private record.
-            if backend_pid is not None and alive(backend_pid):
-                os.kill(backend_pid, signal.SIGKILL)
+            # The backend is left to drain(), which runs after this and stops
+            # what the fixture owns. Signalling a recorded pid could hit whoever
+            # holds that number by now.
 
         self.addCleanup(cleanup)
         worker.stdin.write(json.dumps(context))
