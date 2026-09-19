@@ -281,6 +281,24 @@ bundle and service-command tripwires. They do not install a LaunchAgent or test
 the human permission flow. Historical shell fixture tests still require jq;
 this is not a production hook dependency.
 
+Two further checks are opt-in, because they need a running Ghostty and CI has
+none. Run them before deploying a build that touches Apple Events or native
+process setup:
+
+```bash
+GHOSTTY_NOTIFY_TTY=/dev/ttys012 bash tests/test-live-binding.sh
+GHOSTTY_NOTIFY_TTY=/dev/ttys012 python3 tests/test-live-worker.py
+```
+
+`GHOSTTY_NOTIFY_TTY` is the terminal device of a Ghostty tab; inside one, `tty`
+prints it. The first check sends unbound `PreToolUse` hooks through the real tab
+lookup. The second does the same from a `--worker` process, with a recording
+notification backend, so nothing is posted. Both test the installed app unless
+`GHOSTTY_NOTIFY_NATIVE_APP` or `NATIVE_TEST_BINARY` selects a build. Each writes
+a marker into that tab's title for a moment and puts the title back, also when a
+run is interrupted. Why they exist is in
+`docs/incident-2026-09-17-pretooluse-hang.md`.
+
 ## Uninstall
 
 Remove hook registrations first and restart open CLI sessions. For plugin

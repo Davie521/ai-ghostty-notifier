@@ -251,6 +251,21 @@ bash tests/test-agent.sh
 不注册 LaunchAgent，也不测试需要人工应答的权限流程。
 历史 shell 样本测试仍需 jq，但生产 hook 不需要。
 
+另有两项检查需要手动运行：它们依赖正在运行的 Ghostty，而 CI 里没有。
+部署任何改动了 Apple Events 或原生进程启动流程的构建之前，先跑一遍：
+
+```bash
+GHOSTTY_NOTIFY_TTY=/dev/ttys012 bash tests/test-live-binding.sh
+GHOSTTY_NOTIFY_TTY=/dev/ttys012 python3 tests/test-live-worker.py
+```
+
+`GHOSTTY_NOTIFY_TTY` 是某个 Ghostty 标签页的终端设备，在标签页里运行 `tty` 即可得到。
+第一项让尚未绑定的 `PreToolUse` hook 走一遍真实的标签页查找。
+第二项在 `--worker` 进程里做同样的事，通知后端换成只记录调用的替身，不会弹出通知。
+两者默认测试已安装的 App，也可以用 `GHOSTTY_NOTIFY_NATIVE_APP` 或 `NATIVE_TEST_BINARY` 指定某个构建。
+运行时会短暂地把标记写进该标签页的标题，随后恢复原标题，运行被中断时也一样。
+来龙去脉见 `docs/incident-2026-09-17-pretooluse-hang.md`。
+
 ## 卸载
 
 先移除 hook 注册并重启已打开的 CLI 会话。
