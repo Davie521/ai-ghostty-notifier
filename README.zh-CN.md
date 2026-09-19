@@ -263,7 +263,10 @@ GHOSTTY_NOTIFY_TTY=/dev/ttys012 python3 tests/test-live-worker.py
 第一项让尚未绑定的 `PreToolUse` hook 走一遍真实的标签页查找。
 第二项在 `--worker` 进程里做同样的事，通知后端换成只记录调用的替身，不会弹出通知。
 两者默认测试已安装的 App，也可以用 `GHOSTTY_NOTIFY_NATIVE_APP` 或 `NATIVE_TEST_BINARY` 指定某个构建。
-运行时会短暂地把标记写进该标签页的标题，随后恢复原标题，运行被中断时也一样。
+运行时会短暂地把标记写进该标签页的标题，随后恢复原标题。
+如果该标签页里的 TUI 恰好在这一刻重绘标题，查找会落空，Claude Code 工作时就会这样；运行时会在下一次工具调用时重试，所以这两项检查同样给每个会话三次机会，并报告用掉了几次。
+运行失败，或被 Ctrl-C、SIGTERM、SIGHUP 中止时也一样；如果无法确认标题已恢复，脚本会说明保存着原标题的记录放在哪里。
+脚本被 SIGKILL 强杀时无法收尾。
 来龙去脉见 `docs/incident-2026-09-17-pretooluse-hang.md`。
 
 ## 卸载

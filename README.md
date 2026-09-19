@@ -294,9 +294,16 @@ GHOSTTY_NOTIFY_TTY=/dev/ttys012 python3 tests/test-live-worker.py
 prints it. The first check sends unbound `PreToolUse` hooks through the real tab
 lookup. The second does the same from a `--worker` process, with a recording
 notification backend, so nothing is posted. Both test the installed app unless
-`GHOSTTY_NOTIFY_NATIVE_APP` or `NATIVE_TEST_BINARY` selects a build. Each writes
-a marker into that tab's title for a moment and puts the title back, also when a
-run is interrupted. Why they exist is in
+`GHOSTTY_NOTIFY_NATIVE_APP` or `NATIVE_TEST_BINARY` selects a build.
+
+Each check writes a marker into that tab's title for a moment and puts the title
+back. A lookup may miss when the TUI in that tab redraws its title at that
+moment, as Claude Code does while it works. The runtime retries on the next tool
+call, so the checks give a session the same three attempts and print how many
+lookups were retried. The title is also put back when a run fails or is stopped
+with Ctrl-C, SIGTERM or SIGHUP; if that cannot be confirmed, the script says
+where it kept the record that holds the title. A script killed with SIGKILL
+cannot clean up. Why these checks exist is in
 `docs/incident-2026-09-17-pretooluse-hang.md`.
 
 ## Uninstall

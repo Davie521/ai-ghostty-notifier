@@ -94,14 +94,17 @@ class NativeHookTests(unittest.TestCase):
 
     def fixture_processes(self):
         # A worker calls setsid() and its hook exits, so neither a process group
-        # nor a parent link leads to it. Its executable path does: everything
-        # this fixture starts, workers and notification backends alike, runs
-        # from under self.root, which no other process names.
-        listing = subprocess.check_output(["/bin/ps", "-axww", "-o", "pid=,stat=,args="], text=True)
+        # nor a parent link leads to it. What it runs does: workers and
+        # notification backends are executables under self.root, and only this
+        # fixture puts executables there. That is ownership. A process that
+        # merely names a fixture file, say someone's `tail -f` on the call log,
+        # runs from elsewhere and is left alone.
+        listing = subprocess.check_output(["/bin/ps", "-axww", "-o", "pid=,stat=,comm="], text=True)
         found = []
         for line in listing.splitlines():
             fields = line.split(None, 2)
-            if len(fields) == 3 and not fields[1].startswith("Z") and str(self.root) in fields[2]:
+            if (len(fields) == 3 and not fields[1].startswith("Z")
+                    and fields[2].startswith(str(self.root) + "/")):
                 found.append(int(fields[0]))
         return found
 
@@ -114,10 +117,13 @@ class NativeHookTests(unittest.TestCase):
             if not remaining:
                 return
             for pid in remaining if sent is not None else []:
-                try:
-                    os.kill(pid, sent)
-                except ProcessLookupError:
-                    pass
+                # Asked again right before the signal: the pid may have been
+                # reused since the listing a moment ago.
+                if pid in self.fixture_processes():
+                    try:
+                        os.kill(pid, sent)
+                    except ProcessLookupError:
+                        pass
             deadline = time.monotonic() + patience
             while time.monotonic() < deadline and self.fixture_processes():
                 time.sleep(0.02)
@@ -397,16 +403,54 @@ class NativeHookTests(unittest.TestCase):
         self.assertEqual(hook.poll(), 0, "the hook outlived ten seconds of repeated SIGTERM")
         self.assertLess(time.monotonic() - started, 8)
 
-    def test_cleanup_reaps_a_worker_that_left_its_hooks_process_group(self):
-        self.start()
-        # A backend that lingers keeps its worker waiting after the hook is gone.
-        self.invoke("Stop", env={"TEST_DELAY_MS": "30000", "GHOSTTY_NOTIFY_TIMEOUT": "0"})
-        self.wait(lambda: len(self.notices()) == 1)
-        self.assertTrue(self.fixture_processes(), "nothing outlived the hook, so this proves nothing")
-        started = time.monotonic()
+    def detached_fixture_process(self):
+        # The recording host idles for ever under this name. Its lifetime is the
+        # test's to end, unlike a real worker's, which is over within seconds.
+        idler = self.bin / "ghostty-notify-agent"
+        shutil.copy2(self.host, idler)
+        process = subprocess.Popen([str(idler)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, start_new_session=True)
+
+        def cleanup():
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5)
+
+        self.addCleanup(cleanup)
+        # exec() has happened once the listing shows it running from the fixture.
+        self.wait(lambda: process.pid in self.fixture_processes())
+        return process
+
+    def test_cleanup_reaps_a_process_that_left_the_tests_process_group(self):
+        process = self.detached_fixture_process()
+        self.assertNotEqual(os.getpgid(process.pid), os.getpgid(0), "still in this group: proves nothing")
         self.drain()
+        self.assertIsNotNone(process.poll(), "cleanup left a fixture process running")
         self.assertEqual(self.fixture_processes(), [])
-        self.assertLess(time.monotonic() - started, 12)
+
+    def test_cleanup_leaves_a_process_that_only_names_a_fixture_file(self):
+        self.log.touch()
+        bystander = subprocess.Popen(["/usr/bin/tail", "-f", str(self.log)], stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        def cleanup():
+            if bystander.poll() is None:
+                bystander.kill()
+            bystander.wait(timeout=5)
+
+        self.addCleanup(cleanup)
+
+        def named_in_a_command_line():
+            listing = subprocess.check_output(["/bin/ps", "-axww", "-o", "pid=,args="], text=True)
+            return any(fields[0] == str(bystander.pid) and str(self.root) in fields[1]
+                       for line in listing.splitlines() if len(fields := line.split(None, 1)) == 2)
+
+        # It does mention the fixture, which is what a looser rule would match.
+        self.wait(named_in_a_command_line)
+        self.detached_fixture_process()
+        self.assertNotIn(bystander.pid, self.fixture_processes())
+        self.drain()
+        self.assertIsNone(bystander.poll(), "cleanup signalled a process the fixture never started")
 
     def test_worker_sigterm_reaps_its_backend_and_removes_its_notice(self):
         self.check_worker_shutdown(clear_on_focus=False)

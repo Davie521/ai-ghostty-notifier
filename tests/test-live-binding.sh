@@ -122,6 +122,11 @@ cleanup() {
     rm -rf "$FIXTURE"
 }
 trap cleanup EXIT
+# Spelled out rather than left to the shell: bash ignores a SIGINT that arrives
+# while a foreground child survives it, and would then never reach the cleanup.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 # A private session directory: never the user's bindings, and no stall stamp or
 # permission sentinel left behind by this run can affect real sessions.
@@ -130,43 +135,59 @@ export GHOSTTY_NOTIFY_AGENT_APP="" TERM_PROGRAM=ghostty
 
 failures=0
 slowest=0
+missed=0
 bound_tab=""
 for ((run = 1; run <= RUNS; run++)); do
     session=$(printf '%s-%04d' "$SESSION_PREFIX" "$run")
     payload=$(payload_for "$session")
-    started=$(now)
-    "$BIN" --hook claude PreToolUse <<<"$payload" >/dev/null 2>"$FIXTURE/stderr" &
-    HOOK_PID=$!
-    hung=1
-    for ((tick = 0; tick < LIMIT_SECONDS * 20; tick++)); do
-        if ! kill -0 "$HOOK_PID" 2>/dev/null; then hung=0; break; fi
-        sleep 0.05
-    done
-    if [[ "$hung" == 1 ]]; then
-        echo "FAIL run $run: hook still running after ${LIMIT_SECONDS}s" >&2
-        kill -KILL "$HOOK_PID" 2>/dev/null || true
-        wait "$HOOK_PID" 2>/dev/null || true
-        HOOK_PID=""
-        failures=$((failures + 1))
-        continue
-    fi
-    status=0
-    wait "$HOOK_PID" || status=$?
-    HOOK_PID=""
-    elapsed=$(/usr/bin/perl -e 'printf "%.3f", $ARGV[1] - $ARGV[0]' "$started" "$(now)")
-    tab=$(jq -r '.tab_id // ""' "$FIXTURE/$session.json" 2>/dev/null || true)
-    slowest=$(/usr/bin/perl -e 'printf "%.3f", $ARGV[0] > $ARGV[1] ? $ARGV[0] : $ARGV[1]' "$elapsed" "$slowest")
     problem=""
-    [[ "$status" == 0 ]] || problem="exit status $status"
-    /usr/bin/perl -e 'exit($ARGV[0] <= $ARGV[1] ? 0 : 1)' "$elapsed" "$MAX_SECONDS" ||
-        problem="${problem:+$problem, }took ${elapsed}s (limit ${MAX_SECONDS}s)"
-    [[ -n "$tab" ]] || problem="${problem:+$problem, }no tab was bound: $(tr '\n' ' ' <"$FIXTURE/stderr")"
+    tab=""
+    # A lookup can miss without anything being wrong: a TUI that redraws its
+    # title in the 0.15 s between marker and lookup overwrites the marker, and
+    # Claude Code animates its title twice a second while it works. The runtime
+    # then restores nothing, counts an attempt and tries again on the next tool
+    # call, up to three times. One session therefore gets the same three tries.
+    for ((attempt = 1; attempt <= 3; attempt++)); do
+        started=$(now)
+        "$BIN" --hook claude PreToolUse <<<"$payload" >/dev/null 2>"$FIXTURE/stderr" &
+        HOOK_PID=$!
+        hung=1
+        for ((tick = 0; tick < LIMIT_SECONDS * 20; tick++)); do
+            if ! kill -0 "$HOOK_PID" 2>/dev/null; then hung=0; break; fi
+            sleep 0.05
+        done
+        if [[ "$hung" == 1 ]]; then
+            kill -KILL "$HOOK_PID" 2>/dev/null || true
+            wait "$HOOK_PID" 2>/dev/null || true
+            HOOK_PID=""
+            problem="hook still running after ${LIMIT_SECONDS}s"
+            break
+        fi
+        status=0
+        wait "$HOOK_PID" || status=$?
+        HOOK_PID=""
+        elapsed=$(/usr/bin/perl -e 'printf "%.3f", $ARGV[1] - $ARGV[0]' "$started" "$(now)")
+        slowest=$(/usr/bin/perl -e 'printf "%.3f", $ARGV[0] > $ARGV[1] ? $ARGV[0] : $ARGV[1]' "$elapsed" "$slowest")
+        [[ "$status" == 0 ]] || problem="exit status $status"
+        /usr/bin/perl -e 'exit($ARGV[0] <= $ARGV[1] ? 0 : 1)' "$elapsed" "$MAX_SECONDS" ||
+            problem="${problem:+$problem, }took ${elapsed}s (limit ${MAX_SECONDS}s)"
+        tab=$(jq -r '.tab_id // ""' "$FIXTURE/$session.json" 2>/dev/null || true)
+        if [[ -n "$problem" || -n "$tab" ]]; then break; fi
+        missed=$((missed + 1))
+    done
+    if [[ -z "$problem" && -z "$tab" ]]; then
+        problem="no tab was bound in three attempts: $(tr '\n' ' ' <"$FIXTURE/stderr")"
+    fi
     if [[ -n "$problem" ]]; then
         echo "FAIL run $run: $problem" >&2
         failures=$((failures + 1))
     else
         bound_tab=$tab
-        echo "  ok  run $run: ${elapsed}s -> $tab"
+        if ((attempt > 1)); then
+            echo "  ok  run $run: ${elapsed}s -> $tab (attempt $attempt)"
+        else
+            echo "  ok  run $run: ${elapsed}s -> $tab"
+        fi
     fi
 done
 
@@ -192,4 +213,9 @@ if [[ "$failures" != 0 ]]; then
     echo "FAIL: $failures of $RUNS hooks hung, were slow or did not bind" >&2
     exit 1
 fi
-echo "PASS: $RUNS unbound PreToolUse hooks bound $bound_tab, slowest ${slowest}s"
+# Retried misses are normal; a lookup that misses most of the time is not.
+if ((missed * 2 > RUNS)); then
+    echo "FAIL: $missed lookups missed their marker in $RUNS runs" >&2
+    exit 1
+fi
+echo "PASS: $RUNS unbound PreToolUse hooks bound $bound_tab, slowest ${slowest}s, $missed lookups retried"

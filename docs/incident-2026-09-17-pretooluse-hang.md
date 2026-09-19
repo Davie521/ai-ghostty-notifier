@@ -141,6 +141,31 @@ query. The unit fixture always answered at once. CI has no Ghostty.
   invocation, so overlapping runs cannot restore each other's tabs. And another
   session's marker captured as a baseline was written back as a title; five
   `NativeTerminalBindingTests` cover that and fail against the earlier code.
+- A fourth review found four in that round's own changes. Finding fixture
+  processes by any mention of the fixture path would also have signalled a
+  bystander such as `tail -f` on the call log; ownership is now the executable
+  living under the fixture, and a test keeps such a bystander alive through a
+  cleanup that does signal. The cleanup test relied on a worker surviving about
+  five seconds, so it now uses a process whose lifetime the test controls.
+  `tests/test-live-worker.py` could lose its record when writing the terminal
+  failed, so the record is kept first and dropped only once the tab is
+  confirmed clean. And the README promised recovery on interruption, which
+  `unittest` does not give: it skips cleanups on Ctrl-C. Both scripts now
+  handle SIGINT, SIGTERM and SIGHUP. Interrupting showed that Ctrl-C never
+  reaches a worker, which has left the process group; what strands a marker is
+  the script killing the worker, so an overstaying worker is asked to stop
+  first and restores its own title. Twelve interruptions at random moments
+  all ended with no worker, no leaked directory and the title intact.
+- The same session showed why a live check had once failed 1 run in 20 with no
+  trace. Claude Code animates its tab title twice a second while it works. A
+  frame that lands in the 0.15 s between marker and lookup overwrites the
+  marker, the lookup finds nothing, nothing needs restoring, and the runtime
+  counts an attempt and retries on the next tool call. Measured directly, 5 of
+  30 cold bindings missed that way and all 5 bound on the second attempt. The
+  unchanged script from `main` missed at the same rate, so the live checks now
+  give a session the three attempts the runtime gives it, print how many
+  lookups were retried, and still fail when most of them miss, when a build
+  hangs, or when the terminal is not a Ghostty tab.
 - `tests/test-live-binding.sh`: opt-in, needs a running Ghostty. Twenty unbound
   PreToolUse hooks must each bind a tab within seconds. The 2026-09-17 binary
   hangs on every run; this build bound 20 of 20, typically in 0.63 s. Run it
