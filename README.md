@@ -277,16 +277,27 @@ python3 -m unittest discover -s tests -p 'test_native_install.py'
 bash tests/test-agent.sh
 ```
 
-Starting the agent from a bundle registers that bundle with LaunchServices, and
-it stays registered. macOS resolves a click on a notification by bundle
-identifier, so a registered build can be started by the next click, with your
-real HOME, beside or instead of the installed app. `tests/test-agent.sh`
-unregisters the build it ran. After starting a build's binary by hand, do the
-same:
+### Builds and notification clicks
 
-```bash
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$PWD/build/ClaudeGhosttyNotify.app"
-```
+macOS resolves a click on a notification by bundle identifier, and
+LaunchServices may pick any copy of the app it knows, not the installed one. It
+gets to know a copy in two ways, both measured here: starting the agent from a
+bundle registers it, and the registration outlives the process; and a bundle
+that merely sits in a directory Spotlight indexes, a checkout on the Desktop
+for instance, is registered within a minute without ever having run.
+`lsregister -u` removes it for about that long. A copy inside a directory
+named `*.noindex` was not picked up.
+
+What a wrongly chosen copy does depends on the installed agent. Once the
+installed agent has the single-instance lock, the copy finds the lock taken and
+exits, and that click goes nowhere. An installed agent from before the lock
+holds none: on 2026-09-20 a click started a build next to it, and two residents
+drained one spool until the stray was stopped.
+
+So do not keep a build around on a machine you use: delete `build/` when you
+are done, or take the execute bit off its binary. `tests/test-agent.sh`
+unregisters the build it ran, which helps only until the bundle is found
+again.
 
 The resident integration suite requires Aqua and test-only jq; it explicitly
 reports SKIP without Aqua. Installation tests use private homes, the real signed

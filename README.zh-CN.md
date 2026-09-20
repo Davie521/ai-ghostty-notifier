@@ -246,13 +246,17 @@ python3 -m unittest discover -s tests -p 'test_native_install.py'
 bash tests/test-agent.sh
 ```
 
-从某个 App 包里启动过常驻进程，这个包就会登记进 LaunchServices，进程退出后登记仍在。
-macOS 按 bundle id 解析通知点击，所以下一次点击可能拉起的是这份构建，用的还是你真实的 HOME，与已安装的 App 并存甚至取而代之。
-`tests/test-agent.sh` 结束时会注销它用过的构建；手动启动过构建里的二进制之后，也要同样处理：
+**构建副本与通知点击。**
+macOS 按 bundle id 解析通知点击，LaunchServices 可能选中它知道的任何一份副本，不一定是已安装的那份。
+它认识一份副本有两条途径，都在本机实测过：从某个包里启动过常驻进程，这个包就会被登记，进程退出后登记仍在；
+包只要放在 Spotlight 会索引的目录里，例如桌面上的 checkout，哪怕从没运行过，一分钟内也会被登记。
+`lsregister -u` 只能管这么久。放在名字以 `.noindex` 结尾的目录里的副本没有被发现。
 
-```bash
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$PWD/build/ClaudeGhosttyNotify.app"
-```
+被错误选中的副本会怎样，取决于已安装的常驻进程。它带单实例锁时，副本发现锁被占就退出，那次点击落空。
+加锁之前的旧版常驻不持锁：2026-09-20 就有一次点击在它旁边拉起了一份构建，两个常驻进程同时处理一个队列，直到多出来的那个被停掉。
+
+所以日常使用的机器上不要留着构建：用完删掉 `build/`，或者去掉其中二进制的可执行位。
+`tests/test-agent.sh` 会注销它用过的构建，但这只在包被重新发现之前有效。
 
 常驻集成测试需要 Aqua 和仅供测试使用的 jq；没有 Aqua 时会明确输出 SKIP。
 安装测试使用私有 HOME、真实签名 App 和拦截服务命令的保护桩；

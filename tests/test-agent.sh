@@ -98,8 +98,11 @@ cleanup() {
     # and it stays registered after the process has gone. macOS resolves a click
     # on a notification by bundle identifier, so the next click could start
     # this build, with the user's real HOME, beside or instead of the installed
-    # app: on 2026-09-20 one did, and two residents drained the same spool. A
-    # build must not be left as a candidate. The installed copy is never touched.
+    # app: on 2026-09-20 one did, and two residents drained the same spool.
+    # Unregistering undoes what running it did, and no more than that: a bundle
+    # in a directory Spotlight indexes is found again within a minute, whether
+    # it ever ran or not. See "Builds and notification clicks" in the README.
+    # The installed copy is never touched.
     if [[ "$APP" != "$INSTALLED_APP" && -x "$LSREGISTER" ]]; then
         "$LSREGISTER" -u "$APP" >/dev/null 2>&1 || true
     fi
