@@ -27,6 +27,11 @@ public struct SessionRecord: Equatable, Sendable {
     /// When the outstanding notification was posted. Separate from `updatedAt`,
     /// which an anchor moves without anything new being on screen.
     public var postedAt: Double
+    /// When the outstanding notification is due to be withdrawn, or nil when it
+    /// stays until focus, a prompt or a click. Kept here, and so on disk, since
+    /// a timer alone dies with the process: an agent restarted by an upgrade or
+    /// a login left every surviving notification without its timeout.
+    public var expiresAt: Double?
 
     public init(
         tabID: String? = nil,
@@ -38,7 +43,8 @@ public struct SessionRecord: Equatable, Sendable {
         body: String = "",
         postedAt: Double = 0,
         roundID: String? = nil,
-        owner: String? = nil
+        owner: String? = nil,
+        expiresAt: Double? = nil
     ) {
         self.tabID = tabID
         self.notificationIDs = notificationIDs
@@ -50,6 +56,7 @@ public struct SessionRecord: Equatable, Sendable {
         self.postedAt = postedAt
         self.roundID = roundID
         self.owner = owner
+        self.expiresAt = expiresAt
     }
 
     /// Drop the notification's text once nothing is on screen for this session.
@@ -66,6 +73,7 @@ public struct SessionRecord: Equatable, Sendable {
         subtitle = ""
         body = ""
         postedAt = 0
+        expiresAt = nil
     }
 }
 
@@ -147,8 +155,34 @@ public struct SessionState: Equatable, Sendable {
         record.body = body
         record.postedAt = now
         record.roundID = roundID
+        // A replacement starts its own clock; the caller sets it.
+        record.expiresAt = nil
         sessions[sessionID] = record
         return id
+    }
+
+    /// When a session's outstanding notification is due to go, or nil for never.
+    public mutating func setExpiry(sessionID: String, at deadline: Double?) {
+        guard sessions[sessionID]?.notificationIDs.isEmpty == false else { return }
+        sessions[sessionID]?.expiresAt = deadline
+    }
+
+    /// Forget, and hand back, the notifications whose deadline passed while
+    /// nothing was there to act on it.
+    public mutating func takeExpired(now: Double) -> [String] {
+        sessions.filter {
+            !$0.value.notificationIDs.isEmpty && ($0.value.expiresAt ?? .infinity) <= now
+        }
+        .keys.sorted().flatMap { takeNotifications(sessionID: $0) }
+    }
+
+    /// The deadlines still ahead, as seconds from `now`, by notification.
+    public func pendingExpiries(now: Double) -> [(identifier: String, remaining: Double)] {
+        sessions.keys.sorted().flatMap { sessionID -> [(identifier: String, remaining: Double)] in
+            guard let record = sessions[sessionID], let deadline = record.expiresAt, deadline > now
+            else { return [] }
+            return record.notificationIDs.map { ($0, deadline - now) }
+        }
     }
 
     /// How many sessions are waiting on the user.

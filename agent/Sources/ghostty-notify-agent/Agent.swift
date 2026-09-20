@@ -279,6 +279,7 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             else { return }
             self.log("\(notify.sessionID) is already on screen; clearing in short order")
             self.scheduleExpiry(identifier: identifier, after: Agent.watchedGraceSeconds)
+            self.saveState()
         }
     }
 
@@ -308,9 +309,14 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     /// the 24h prune, rather than the documented GHOSTTY_NOTIFY_TIMEOUT.
     private func scheduleExpiry(identifier: String, after seconds: Double?) {
         expiryTimers.removeValue(forKey: identifier)?.cancel()
-        guard let seconds, seconds > 0 else { return }
-        guard let owner = state.sessionID(forNotification: identifier),
-            let postedAt = state.sessions[owner]?.postedAt
+        let owner = state.sessionID(forNotification: identifier)
+        let lasting = seconds.map { $0 > 0 } ?? false
+        // The deadline goes into the state, and with it to disk: the timer
+        // below does not outlive this process, the notification does.
+        if let owner {
+            state.setExpiry(sessionID: owner, at: lasting ? Agent.now() + (seconds ?? 0) : nil)
+        }
+        guard let seconds, lasting, let owner, let postedAt = state.sessions[owner]?.postedAt
         else { return }
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + seconds, leeway: .seconds(1))
@@ -684,6 +690,16 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         guard let data = FileManager.default.contents(atPath: paths.state) else { return }
         state = StateCodec.decode(data)
         log("restored \(state.sessions.count) sessions")
+        // Timeouts that ran out while no agent was running, then the rest.
+        let overdue = state.takeExpired(now: Agent.now())
+        if !overdue.isEmpty {
+            notifier.withdraw(overdue)
+            log("expired while the agent was down: \(overdue.joined(separator: ","))")
+        }
+        for pending in state.pendingExpiries(now: Agent.now()) {
+            scheduleExpiry(identifier: pending.identifier, after: pending.remaining)
+        }
+        if !overdue.isEmpty { saveState() }
     }
 
     /// Persist bookkeeping and let the menu bar catch up.

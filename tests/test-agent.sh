@@ -72,7 +72,7 @@ cleanup() {
     # inside cleanup.
     if [[ -n "$AGENT_PID" ]] && kill -0 "$AGENT_PID" 2>/dev/null &&
         command -v agent_queue >/dev/null 2>&1; then
-        for sid in "${SID:-}" "${OTHER:-}" "${NATIVE_SID:-}"; do
+        for sid in "${SID:-}" "${OTHER:-}" "${NATIVE_SID:-}" "${EXPIRING:-}" "${KEPT:-}"; do
             [[ -n "$sid" ]] || continue
             agent_queue "$(jq -nc --arg s "$sid" '{type:"dismiss",session_id:$s}')" \
                 2>/dev/null || true
@@ -149,6 +149,8 @@ echo "== resident agent integration test =="
 SID="deadbeef-1111-2222-3333-444455556666"
 OTHER="deadbeef-9999"
 NATIVE_SID="deadbeef-2222-3333"
+EXPIRING="deadbeef-4444"
+KEPT="deadbeef-5555"
 
 # ── 1. The agent starts and claims its pidfile ─────────────────────────────
 "$BIN" >/dev/null 2>&1 &
@@ -184,6 +186,9 @@ check "notify posts and records claude-<session>" \
     wait_for 10 log_has "posted claude-$SID"
 check "state.json lists the identifier as outstanding" \
     wait_for 10 state_is "$SID" "claude-$SID"
+# They hold notification text, and a home directory is usually traversable.
+check "state.json, the log and their directory are private to the user" \
+    test "$(stat -f '%Lp' "$STATE" "$LOG" "$ROOT" | tr '\n' ' ')" = "600 600 700 "
 
 # Posting again must reuse the identifier: that is what makes the notification
 # center REPLACE the banner instead of stacking a second one, which is the
@@ -338,14 +343,29 @@ mv "$STALE" "$ROOT/spool/0000000000000001-stale.json"
 check "a stale notify is dropped, not replayed" wait_for 10 log_has "dropped stale notify"
 
 # ── 10. Shutdown completes, then state survives a restart ─────────────────
+# Two timeouts are left running across the restart: one that runs out while no
+# agent is up, and one that has not. A timer dies with the process; the
+# notification does not, so the deadline has to come back from state.json.
+agent_queue "$(jq -nc --arg s "$EXPIRING" '{type:"notify",session_id:$s,title:"runs out while down",timeout:4}')"
+agent_queue "$(jq -nc --arg s "$KEPT" '{type:"notify",session_id:$s,title:"still has time",timeout:600}')"
+check "both timed notifications are posted before the shutdown" \
+    wait_for 10 state_is "$KEPT" "claude-$KEPT"
 check "SIGTERM completes asynchronous shutdown within 10 seconds" stop_agent
 check "shutdown calls the lifecycle cleanup" log_has "agent down"
 for marker in agent.pid ready capabilities native-hook-ready; do
     check "shutdown removes $marker" test ! -f "$ROOT/$marker"
 done
+check "the deadline was written to state.json" \
+    test "$(jq -r --arg s "$EXPIRING" '.sessions[$s].expiresAt // 0 | . > 0' "$STATE")" = "true"
+sleep 5
 "$BIN" >/dev/null 2>&1 &
 AGENT_PID=$!
 check "restarted agent reloads its sessions" wait_for 15 log_has "restored "
+check "a timeout that ran out while the agent was down is honoured at launch" \
+    wait_for 10 log_has "expired while the agent was down: claude-$EXPIRING"
+check "and its notification is no longer outstanding" state_is "$EXPIRING" ""
+check "a timeout still ahead keeps its notification and its deadline" \
+    test "$(jq -r --arg s "$KEPT" '.sessions[$s] | (.notificationIDs | length), (.expiresAt > 0)' "$STATE" | tr '\n' ' ')" = "1 true "
 # No assertion that readiness is republished: this file was written by hand
 # above, so it exists no matter what the restarted agent does — the check that
 # used to be here could never fail.

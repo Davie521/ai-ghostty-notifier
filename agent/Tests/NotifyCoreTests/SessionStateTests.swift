@@ -77,6 +77,44 @@ struct BookkeepingTests {
         #expect(state.sessionID(forNotification: "claude-nobody") == nil)
     }
 
+    @Test func aTimeoutSurvivesARestartAndAnOverdueOneIsCollected() throws {
+        var state = SessionState()
+        _ = state.newNotification(sessionID: "soon", now: 100)
+        state.setExpiry(sessionID: "soon", at: 160)
+        _ = state.newNotification(sessionID: "later", now: 100)
+        state.setExpiry(sessionID: "later", at: 400)
+        _ = state.newNotification(sessionID: "never", now: 100)
+        // TIMEOUT=0: stays until focus, a prompt or a click.
+        state.setExpiry(sessionID: "never", at: nil)
+        // Nothing on screen, nothing to expire.
+        state.anchor(sessionID: "idle", tabID: "TAB-1", now: 100)
+        state.setExpiry(sessionID: "idle", at: 160)
+        #expect(state.sessions["idle"]?.expiresAt == nil)
+
+        // The agent goes down at 120 and comes back at 200.
+        var restored = StateCodec.decode(try StateCodec.encode(state))
+        #expect(restored == state)
+        #expect(restored.takeExpired(now: 200) == ["claude-soon"])
+        #expect(restored.sessions["soon"]?.expiresAt == nil)
+        let pending = restored.pendingExpiries(now: 200)
+        #expect(pending.map(\.identifier) == ["claude-later"])
+        #expect(pending.first?.remaining == 200)
+        #expect(restored.sessions["never"]?.notificationIDs == ["claude-never"])
+
+        // A replacement notification does not inherit the old deadline.
+        _ = restored.newNotification(sessionID: "later", now: 210)
+        #expect(restored.pendingExpiries(now: 210).isEmpty)
+    }
+
+    @Test func stateWrittenBeforeDeadlinesExistedStillDecodes() {
+        let old = Data(
+            #"{"sessions":{"abc":{"notificationIDs":["claude-abc"],"updatedAt":5,"tabID":"T"}}}"#
+                .utf8)
+        let state = StateCodec.decode(old)
+        #expect(state.sessions["abc"]?.tabID == "T")
+        #expect(state.sessions["abc"]?.expiresAt == nil)
+    }
+
     @Test func aLateTabAnswerDoesNotWithdrawWhatArrivedWhileItWasPending() {
         var state = SessionState()
         state.anchor(sessionID: "old", tabID: "TAB-1", now: 1)

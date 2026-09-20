@@ -101,6 +101,7 @@ public enum StateCodec {
             var postedAt: Double?
             var roundID: String?
             var owner: String?
+            var expiresAt: Double?
         }
         var sessions: [String: Record]
     }
@@ -117,7 +118,7 @@ public enum StateCodec {
                     subtitle: $0.subtitle,
                     body: $0.body,
                     postedAt: $0.postedAt,
-                    roundID: $0.roundID, owner: $0.owner)
+                    roundID: $0.roundID, owner: $0.owner, expiresAt: $0.expiresAt)
             }
         )
         let encoder = JSONEncoder()
@@ -151,7 +152,7 @@ public enum StateCodec {
                     // reporting itself as "now" the moment the next prompt is
                     // submitted — the exact bug `postedAt` exists to prevent.
                     postedAt: $0.postedAt ?? $0.updatedAt,
-                    roundID: $0.roundID, owner: $0.owner)
+                    roundID: $0.roundID, owner: $0.owner, expiresAt: $0.expiresAt)
             }
         )
         return state
