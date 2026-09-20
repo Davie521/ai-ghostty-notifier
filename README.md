@@ -2,26 +2,34 @@
   <img src="docs/assets/ghost-bell.png" alt="AI Ghostty Notifier ghost bell logo" width="144" height="144">
 </p>
 
-# ai-ghostty-notifier
+<h1 align="center">ai-ghostty-notifier</h1>
 
-[![CI](https://github.com/Davie521/ai-ghostty-notifier/actions/workflows/ci.yml/badge.svg)](https://github.com/Davie521/ai-ghostty-notifier/actions/workflows/ci.yml)
+<p align="center">
+  <b>A long Claude Code or Codex CLI task just finished — macOS tells you, and one click takes you back to that exact Ghostty tab.</b>
+</p>
+
+<p align="center">
+  <a href="https://github.com/Davie521/ai-ghostty-notifier/actions/workflows/ci.yml"><img src="https://github.com/Davie521/ai-ghostty-notifier/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+</p>
 
 **Language / 语言** → [English](README.md) · [中文](README.zh-CN.md)
 
-Long Claude Code and Codex CLI tasks in Ghostty produce a macOS notification.
-Click **Go to tab** to return to the session's tab, even when several sessions
-share the same project directory.
+You start a long task, switch to the browser, and forget about it. When the task
+ends, a macOS notification tells you which session finished and how long it took.
+Click **Go to tab** and Ghostty brings that tab forward — even when several
+sessions are running in the same project directory.
 
-The companion **ClaudeGhosttyNotify.app is required**. Its Swift executable
-handles hook input, terminal binding, notification policy and fallback delivery.
-The shell files are only stable launchers; hooks need neither jq nor Python.
-The resident process does not have to stay running, but the app must remain
-installed. No Node, telemetry or Accessibility permission is required.
+- **It interrupts you only when that is worth it.** Under 3 minutes: nothing.
+  3–10 minutes: silent. 10 minutes or more: with sound.
+- **One click returns to the session**, found by the session's own identity
+  rather than by guessing from the project folder.
+- **Claude Code and Codex CLI**, each shown under its own session title.
+- **Quiet by design.** No Node, no telemetry, no Accessibility permission.
 
-> This worktree contains the native-hook migration, not a published release.
-> The required-app installation contract is accepted. Use the app and hooks
-> from this same revision; an older published plugin is not this worktree.
-> See [migration evidence and remaining manual checks](docs/native-hook-migration.md).
+**What you need:** macOS, [Ghostty](https://ghostty.org) with AppleScript
+support, a Swift 6 toolchain, and Claude Code or Codex CLI.
+
+[Install](#install) · [Configuration](#configuration) · [How it works](#how-it-works) · [Troubleshooting](#troubleshooting-and-limits)
 
 ## Behavior
 
@@ -53,6 +61,17 @@ notification. Permission/input prompts are silent unless
   External backends are optional alternatives; their limitations are below.
 
 ## Install
+
+The companion **ClaudeGhosttyNotify.app is required**. Its Swift executable
+handles hook input, terminal binding, notification policy and fallback delivery.
+The shell files are only stable launchers; hooks need neither jq nor Python.
+The resident process does not have to stay running, but the app must remain
+installed.
+
+> This worktree contains the native-hook migration, not a published release.
+> The required-app installation contract is accepted. Use the app and hooks
+> from this same revision; an older published plugin is not this worktree.
+> See [migration evidence and remaining manual checks](docs/native-hook-migration.md).
 
 ### 1. Build and install the required app
 

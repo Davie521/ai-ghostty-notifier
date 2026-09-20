@@ -2,23 +2,32 @@
   <img src="docs/assets/ghost-bell.png" alt="AI Ghostty Notifier 幽灵铃铛图标" width="144" height="144">
 </p>
 
-# ai-ghostty-notifier
+<h1 align="center">ai-ghostty-notifier</h1>
 
-[![CI](https://github.com/Davie521/ai-ghostty-notifier/actions/workflows/ci.yml/badge.svg)](https://github.com/Davie521/ai-ghostty-notifier/actions/workflows/ci.yml)
+<p align="center">
+  <b>Claude Code 或 Codex CLI 的长任务跑完了 —— macOS 弹一条通知，点一下就回到跑它的那个 Ghostty 标签页。</b>
+</p>
+
+<p align="center">
+  <a href="https://github.com/Davie521/ai-ghostty-notifier/actions/workflows/ci.yml"><img src="https://github.com/Davie521/ai-ghostty-notifier/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+</p>
 
 **语言 / Language** → [English](README.md) · [中文](README.zh-CN.md)
 
-Ghostty 中的 Claude Code 或 Codex CLI 长任务结束后，macOS 弹出通知。
-点 **Go to tab** 回到运行它的标签页，即使同一个项目目录里开着多个会话也能区分。
+丢一个长任务给它跑，切去浏览器，然后就忘了。任务结束时，macOS 弹出通知，
+告诉你是哪个会话跑完的、跑了多久。点 **Go to tab**，Ghostty 直接把那个标签页
+切到前面——即使同一个项目目录里同时开着好几个会话也不会认错。
 
-**配套 ClaudeGhosttyNotify.app 必须安装。** 它里面的 Swift 程序负责读取 hook、
-查找终端、判断通知和回退投递。shell 文件只是保留原名称的启动入口；
-每次 hook 不再依赖 jq 或 Python。App 的常驻进程可以不一直运行，但 App 文件必须保留。
-不需要 Node、遥测或辅助功能权限。
+- **只在值得打断你的时候才响。** 少于 3 分钟不通知，3–10 分钟静音通知，
+  10 分钟及以上带提示音。
+- **一次点击回到会话**：按会话自己的身份定位标签页，不靠项目目录去猜。
+- **Claude Code 和 Codex CLI 都支持**，各自显示自己的会话标题。
+- **安静。** 不需要 Node，没有遥测，不要辅助功能权限。
 
-> 当前 worktree 是原生 hook 迁移版本，尚未发布。“配套 App 必装”的安装方案已经确认。
-> App 和 hook 应来自同一版本；已发布的旧插件不等于这里的实现。
-> 测试证据和待人工验收项见[迁移状态](docs/native-hook-migration.md)。
+**需要：** macOS、支持 AppleScript 的 [Ghostty](https://ghostty.org)、Swift 6
+工具链，以及 Claude Code 或 Codex CLI。
+
+[安装](#安装) · [配置](#配置) · [原理](#原理) · [排查与局限](#排查与局限)
 
 ## 行为
 
@@ -43,6 +52,14 @@ Ghostty 中的 Claude Code 或 Codex CLI 长任务结束后，macOS 弹出通知
   外部通知后端是可选的替代路径，其限制见下文。
 
 ## 安装
+
+**配套 ClaudeGhosttyNotify.app 必须安装。** 它里面的 Swift 程序负责读取 hook、
+查找终端、判断通知和回退投递。shell 文件只是保留原名称的启动入口；
+每次 hook 不再依赖 jq 或 Python。App 的常驻进程可以不一直运行，但 App 文件必须保留。
+
+> 当前 worktree 是原生 hook 迁移版本，尚未发布。“配套 App 必装”的安装方案已经确认。
+> App 和 hook 应来自同一版本；已发布的旧插件不等于这里的实现。
+> 测试证据和待人工验收项见[迁移状态](docs/native-hook-migration.md)。
 
 ### 1. 先构建并安装必需的 App
 
