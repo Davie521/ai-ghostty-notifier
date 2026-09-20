@@ -5,6 +5,21 @@ import Testing
 
 @Suite("Menu bar state")
 struct MenuBarStateTests {
+    @Test func aChangeMadeInSystemSettingsReplacesTheLaunchTimeAnswer() {
+        // Switched off while the agent runs: the hooks must stop routing to it.
+        #expect(NotificationPermission.granted.updated(authorized: false) == .denied)
+        #expect(NotificationPermission.denied.updated(authorized: true) == .granted)
+        #expect(NotificationPermission.unknown.updated(authorized: true) == .granted)
+        // Nothing on record is not an answer: what launch found stands.
+        for known in [NotificationPermission.unknown, .granted, .denied, .unavailable] {
+            #expect(known.updated(authorized: nil) == known)
+        }
+        #expect(NotificationPermission.granted.readiness == AgentConstants.readyAuthorized)
+        #expect(NotificationPermission.denied.readiness == AgentConstants.readyDenied)
+        #expect(NotificationPermission.unknown.readiness == nil)
+        #expect(NotificationPermission.unavailable.readiness == nil)
+    }
+
     @Test func anIdleAgentShowsNoNumber() {
         let state = MenuBarState.resolve(permission: .granted, alertStyle: "alert", waiting: 0)
         #expect(state == .idle)

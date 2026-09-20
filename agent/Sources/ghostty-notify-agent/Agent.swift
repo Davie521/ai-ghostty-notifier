@@ -22,6 +22,7 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private var menuBar: MenuBar?
     private var permission: NotificationPermission = .unknown
     private var alertStyle = ""
+    private var lastActivatedBundleID: String?
     private var shuttingDown = false
     /// Per-identifier expiry timers, so a replacement notification restarts the
     /// clock instead of inheriting the old one's deadline.
@@ -284,6 +285,7 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     private static let watchedGraceSeconds: Double = 3
+    private static let systemSettingsBundleID = "com.apple.systempreferences"
     /// How long after posting a notification is left out of reconciliation.
     private static let deliverySettleSeconds: Double = 5
 
@@ -374,6 +376,12 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     private func activated(bundleID: String?) {
+        // Coming back from System Settings is when its answer may have changed.
+        if lastActivatedBundleID == Agent.systemSettingsBundleID, bundleID != lastActivatedBundleID
+        {
+            refreshSettings()
+        }
+        lastActivatedBundleID = bundleID
         guard bundleID == AgentConstants.ghosttyBundleID else { return }
         withdrawForGhostty(retriesLeft: 1)
     }
@@ -554,6 +562,7 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                 // Catches a notification cleared during a long idle stretch, so
                 // the count cannot drift for a whole day.
                 self.reconcileWithNotificationCenter()
+                self.refreshSettings()
             }
         }
         timer.resume()
@@ -590,6 +599,36 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                     + "System Settings › Notifications › \(Self.appName) › Alert Style › "
                     + "Persistent  (deep link: \(Self.notificationSettingsURL))")
             self.offerStyleGuidance(force: false)
+        }
+    }
+
+    /// Permission and style were read once, at launch, and then believed for
+    /// as long as the agent ran. Both can change under it: the menu's Settings
+    /// link exists to make the user change one. Until a restart the menu kept
+    /// its warning, and, worse, the readiness file kept telling the hooks that
+    /// the agent could display notifications after they had been switched off.
+    /// Looked at again when the user leaves System Settings, when the menu
+    /// opens, and hourly. This only reads: it never asks, and never reopens the
+    /// style guidance.
+    private func refreshSettings() {
+        notifier.currentSettings { [weak self] authorized, style in
+            guard let self, !self.shuttingDown else { return }
+            var changed = false
+            let permission = self.permission.updated(authorized: authorized)
+            if permission != self.permission {
+                self.permission = permission
+                if let readiness = permission.readiness { self.publishReadiness(readiness) }
+                self.log("notification permission is now \(permission)")
+                changed = true
+            }
+            if style != self.alertStyle {
+                self.alertStyle = style
+                try? (style + "\n").write(
+                    toFile: self.paths.alertStyleFile, atomically: true, encoding: .utf8)
+                self.log("alert style is now \(style)")
+                changed = true
+            }
+            if changed { self.menuBar?.refresh() }
         }
     }
 
@@ -671,7 +710,8 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             onOpenLog: { [weak self] in
                 guard let self else { return }
                 NSWorkspace.shared.open(URL(fileURLWithPath: self.paths.log))
-            }
+            },
+            onOpen: { [weak self] in self?.refreshSettings() }
         )
     }
 
