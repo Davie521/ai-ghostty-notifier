@@ -23,8 +23,6 @@ enum NativeLifecycle {
     private static let diagnostics = DispatchQueue(
         label: "ghostty.native-lifecycle.diagnostics", qos: .userInitiated)
     private static let lock = NSLock()
-    nonisolated(unsafe) private static var timer: DispatchSourceTimer?
-    nonisolated(unsafe) private static var due: DispatchTime?
     nonisolated(unsafe) private static var termination: DispatchSourceSignal?
     nonisolated(unsafe) private static var work: Task<Void, Never>?
     nonisolated(unsafe) private static var terminated = false
@@ -43,23 +41,11 @@ enum NativeLifecycle {
         }
     }
 
-    /// The deadline only ever moves earlier. SIGTERM may shorten a budget to
-    /// its grace period, but nothing can push the end of the process back: a
-    /// supervisor that repeats its signal would otherwise renew the grace each
-    /// time and keep a stuck hook alive for as long as it kept asking.
+    /// A deadline, once set, is never moved or withdrawn, and the first to
+    /// arrive ends the process. SIGTERM adds a second one for its grace period,
+    /// so it can bring the end forward and can never push it back.
     static func arm(seconds: Double, reason: String, logPath: String?) {
-        let wanted = DispatchTime.now() + seconds
-        // Decided before the source exists: an inactive source must not be
-        // released, so one is only made when it will be resumed.
-        let sooner = lock.withLock { () -> Bool in
-            if let due, due <= wanted { return false }
-            due = wanted
-            return true
-        }
-        guard sooner else { return }
-        let source = DispatchSource.makeTimerSource(queue: queue)
-        source.schedule(deadline: wanted)
-        source.setEventHandler {
+        queue.asyncAfter(deadline: .now() + seconds) {
             let message = "native lifecycle: \(reason); exiting after \(seconds)s"
             let reported = DispatchSemaphore(value: 0)
             diagnostics.async {
@@ -77,12 +63,6 @@ enum NativeLifecycle {
             // Success on purpose: a notification problem is not the CLI's error.
             _exit(0)
         }
-        let previous = lock.withLock { () -> DispatchSourceTimer? in
-            defer { timer = source }
-            return timer
-        }
-        previous?.cancel()
-        source.resume()
     }
 
     /// SIGTERM cancels the work and then allows `grace` seconds for cleanup
@@ -99,7 +79,8 @@ enum NativeLifecycle {
                 defer { terminated = true }
                 return (!terminated, work)
             }
-            // One grace period, counted from the first signal.
+            // One grace period, counted from the first signal: a supervisor
+            // that repeats its signal must not renew it each time.
             guard first else { return }
             task?.cancel()
             arm(seconds: grace, reason: "cleanup outlived SIGTERM", logPath: logPath)

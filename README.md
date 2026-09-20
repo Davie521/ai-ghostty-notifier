@@ -286,14 +286,16 @@ none. Run them before deploying a build that touches Apple Events or native
 process setup:
 
 ```bash
-GHOSTTY_NOTIFY_TTY=/dev/ttys012 bash tests/test-live-binding.sh
-GHOSTTY_NOTIFY_TTY=/dev/ttys012 python3 tests/test-live-worker.py
+bash tests/test-live-binding.sh
+python3 tests/test-live-worker.py
 ```
 
-`GHOSTTY_NOTIFY_TTY` is the terminal device of a Ghostty tab; inside one, `tty`
-prints it. The first check sends unbound `PreToolUse` hooks through the real tab
-lookup. The second does the same from a `--worker` process, with a recording
-notification backend, so nothing is posted.
+Open a new Ghostty tab for them, a plain shell with nothing drawing in it, and
+run them there. From elsewhere, name that tab's terminal device, which `tty`
+prints inside it: `GHOSTTY_NOTIFY_TTY=/dev/ttys012`. The first check sends
+unbound `PreToolUse` hooks through the real tab lookup. The second does the same
+from a `--worker` process, with a recording notification backend, so nothing is
+posted.
 
 Both test the installed app unless a build is selected, and both take the same
 two settings, so one setting cannot leave them testing different things.
@@ -302,15 +304,12 @@ two settings, so one setting cannot leave them testing different things.
 the executable wins when both are set. Each script starts by printing the binary
 it tests.
 
-Each check writes a marker into that tab's title for a moment and puts the title
-back. A lookup may miss when the TUI in that tab redraws its title at that
-moment, as Claude Code does while it works. The runtime retries on the next tool
-call, so the checks give a session the same three attempts and print how many
-lookups were retried. The title is also put back when a run fails or is stopped
-with Ctrl-C, SIGTERM or SIGHUP; if that cannot be confirmed, the script says
-where it kept the record that holds the title. A script killed with SIGKILL
-cannot clean up. Why these checks exist is in
-`docs/incident-2026-09-17-pretooluse-hang.md`.
+The tab is the fixture. Each check writes markers into its title, expects every
+lookup to find them, and leaves the tab with Ghostty's default title, whatever
+it said before. That is why the tab has to be idle: a program that sets the
+title while a check runs, as Claude Code does twice a second while it works,
+overwrites the markers, fails the runs and loses its own title. Why these checks
+exist is in `docs/incident-2026-09-17-pretooluse-hang.md`.
 
 ## Uninstall
 

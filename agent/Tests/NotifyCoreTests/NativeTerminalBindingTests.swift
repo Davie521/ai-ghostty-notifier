@@ -547,16 +547,11 @@ struct NativeTerminalBindingTests {
             !FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.marker.json"))
     }
 
-    @Test func aMarkerIsRecognisedWhoeverWroteItAndItsSessionIsCheckedBeforeUse() {
-        #expect(NativeTerminalBinding.markerSession("__claude_TAB_MARKER_abc-123__") == "abc-123")
-        #expect(NativeTerminalBinding.markerSession("__CODEX_TAB_MARKER_0F-9a__") == "0F-9a")
-        // A title is untrusted text; the id goes on to name a file.
-        #expect(NativeTerminalBinding.markerSession("__claude_TAB_MARKER_../../etc__") == nil)
-        #expect(NativeTerminalBinding.markerSession("__claude_TAB_MARKER___") == nil)
-        #expect(NativeTerminalBinding.markerSession("claude_TAB_MARKER_abc-123") == nil)
-        #expect(NativeTerminalBinding.markerSession("an ordinary title") == nil)
-        let long = "__claude_TAB_MARKER_" + String(repeating: "a", count: 200) + "__"
-        #expect(NativeTerminalBinding.markerSession(long) == nil)
+    @Test func aMarkerIsRecognisedWhoeverWroteIt() {
+        #expect(NativeTerminalBinding.isMarker("__claude_TAB_MARKER_abc-123__"))
+        #expect(NativeTerminalBinding.isMarker("__CODEX_TAB_MARKER_0F-9a__"))
+        #expect(!NativeTerminalBinding.isMarker("claude_TAB_MARKER_abc-123"))
+        #expect(!NativeTerminalBinding.isMarker("an ordinary title"))
     }
 
     @Test func anotherSessionsMarkerCapturedAsTheBaselineIsNeverWrittenBack() async throws {
@@ -571,44 +566,6 @@ struct NativeTerminalBindingTests {
         #expect(await binding.resolve(event) == "tab-1")
         #expect(terminal.recorded == ["__claude_TAB_MARKER_abc-123__", ""])
         #expect(terminal.visible.map(\.title) == [""])
-    }
-
-    @Test func theRecordOfTheSessionThatLeftAMarkerSuppliesTheRealTitle() async throws {
-        let sandbox = try HookSandbox()
-        var event = try sandbox.event()
-        event.tty = "/dev/fixture"
-        try sandbox.write(
-            "fee-456.marker.json",
-            #"{"marker":"__claude_TAB_MARKER_fee-456__","tty":"/dev/gone","ghosttyPID":"123","#
-                + #""tabs":[{"id":"tab-1","title":"the real title"},{"id":"tab-2","title":"two"}]}"#
-        )
-        let terminal = TerminalFixture()
-        terminal.setTabs([
-            .init(id: "tab-1", title: "__claude_TAB_MARKER_fee-456__"),
-            .init(id: "tab-2", title: "two"),
-        ])
-        let binding = NativeTerminalBinding(
-            automation: terminal, writer: terminal, clock: InstantBindingClock())
-        #expect(await binding.resolve(event) == "tab-1")
-        #expect(terminal.recorded == ["__claude_TAB_MARKER_abc-123__", "the real title"])
-        // The other session's record is its own to discard.
-        #expect(FileManager.default.fileExists(atPath: sandbox.root.path + "/fee-456.marker.json"))
-    }
-
-    @Test func aRecordFromAnotherGhosttyProcessIsNotTrustedForATitle() async throws {
-        let sandbox = try HookSandbox()
-        var event = try sandbox.event()
-        event.tty = "/dev/fixture"
-        try sandbox.write(
-            "fee-456.marker.json",
-            #"{"marker":"__claude_TAB_MARKER_fee-456__","tty":"/dev/gone","ghosttyPID":"999","#
-                + #""tabs":[{"id":"tab-1","title":"a title from another Ghostty"}]}"#)
-        let terminal = TerminalFixture()
-        terminal.setTabs([.init(id: "tab-1", title: "__claude_TAB_MARKER_fee-456__")])
-        let binding = NativeTerminalBinding(
-            automation: terminal, writer: terminal, clock: InstantBindingClock())
-        #expect(await binding.resolve(event) == "tab-1")
-        #expect(terminal.recorded == ["__claude_TAB_MARKER_abc-123__", ""])
     }
 
     @Test func recoveryDoesNotWriteBackAMarkerItsOwnRecordCaptured() async throws {

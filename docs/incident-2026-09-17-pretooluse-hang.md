@@ -85,18 +85,17 @@ at all; several stayed hung for one to two hours.
    usable record proves nothing about the current terminal: that tab is neither
    bound nor accepted as the lookup's answer, and the marker is never written
    back as though it had been a title. That holds for any session's marker: one
-   captured as a baseline is replaced by the title in that session's own record
-   when it is still there and speaks of this Ghostty process, and by the empty
-   title otherwise, for which Ghostty shows its default.
+   captured as a baseline is replaced by the empty title, for which Ghostty
+   shows its default until the program in that tab sets its own.
 5. **The process is bounded unconditionally.** `NativeLifecycle` arms a deadline
    on its own queue before stdin is read and ends the process with `_exit(0)`:
    12 s for a hook (`GHOSTTY_NOTIFY_HOOK_DEADLINE`), the event lifetime plus 30 s
    for a worker, 15 s otherwise. Its diagnostics are written from another queue
    and waited on for a quarter of a second at most, so a full stderr pipe or a
    stalled log cannot hold the exit. SIGTERM is handled off the main queue and
-   gets 4 s (hook) or 10 s (worker) for cleanup before the same exit. The
-   deadline only ever moves earlier, so a supervisor that repeats its SIGTERM
-   cannot renew the grace period.
+   gets 4 s (hook) or 10 s (worker) for cleanup before the same exit. Only the
+   first SIGTERM counts and no deadline is ever withdrawn, so a supervisor that
+   repeats its signal cannot renew the grace period.
 6. **The harness is told too.** Shipped Claude hook entries now set
    `"timeout": 15`, matching what the Codex installer already wrote.
 
@@ -106,99 +105,57 @@ The real-process suite uses a fixture TTY, so PreToolUse returned before any
 query. The unit fixture always answered at once. CI has no Ghostty.
 
 - `NativeTerminalBindingTests`: a query that never returns, before and after the
-  marker; cancellation during such a lookup; a marker left behind with two tabs
-  open and undone by the next attempt; a record about another Ghostty process;
-  a leftover marker with no record. Each fails with its part of the fix removed.
+  marker; cancellation during such a lookup; a marker left behind with several
+  tabs open and undone by the next attempt; a record about another Ghostty
+  process; a session resumed in another tab, whose old tab gets its title back
+  while the new one is bound; a leftover marker, or another session's, which is
+  neither bound nor written back as a title. Each fails with its part of the
+  fix removed.
 - `QueryDeadlineTests`: work that ignores cancellation is abandoned, not
   awaited; a cancelled caller waits only the shorter limit, and still receives
   an answer that arrives inside it.
 - `test_native_hooks.py`: a hook whose stdin never closes exits 0 at its
   deadline, also when nobody drains its stderr; SIGTERM ends a hook whose work
-  cannot be cancelled. The first and third fail against the 2026-09-17 binary
-  (timeout; killed by signal 15). The second fails against the first build of
-  this fix, which reported before exiting: that defect, the SIGTERM grace that
-  was shorter than the wait it had to cover, and the unrecorded marker were
-  found by an independent review of that build.
-- A second independent review, of the merged fix, found four more. Repeated
-  SIGTERM renewed the grace period; `test_repeated_sigterm_cannot_postpone_the_exit`
-  fails against that build. The deadline tests required the report on stderr
-  although the exit waits a quarter of a second for it at most, so they now
-  accept its absence and one test retries until a report gets through. A
-  session resumed in another tab was bound to the tab it had left through a
-  leftover marker; three `NativeTerminalBindingTests` cover that and fail
-  against the earlier code. And `tests/test-live-binding.sh` deleted its
-  fixture, records included, while a tab could still show a marker: it now
-  restores the title from the earliest record first and keeps the fixture when
-  it cannot. That was checked by killing hooks mid-transaction.
-- A third review, of those follow-ups, found four again. The cleanup added to
-  `test_native_hooks.py` watched the hook's process group, which a worker leaves
-  with `setsid()`: it only appeared to work, and under load half the runs still
-  leaked. Processes are now found by the fixture path in their command line,
-  and the suite leaks nothing at a load average above 30.
-  `tests/test-live-worker.py` lost the title record when its worker was killed
-  with the marker showing, which a kill at 0.28 s reproduces every time; it now
-  puts the title back first. Both live scripts use a marker unique to the
-  invocation, so overlapping runs cannot restore each other's tabs. And another
-  session's marker captured as a baseline was written back as a title; five
-  `NativeTerminalBindingTests` cover that and fail against the earlier code.
-- A fourth review found four in that round's own changes. Finding fixture
-  processes by any mention of the fixture path would also have signalled a
-  bystander such as `tail -f` on the call log; ownership is now the executable
-  living under the fixture, and a test keeps such a bystander alive through a
-  cleanup that does signal. The cleanup test relied on a worker surviving about
-  five seconds, so it now uses a process whose lifetime the test controls.
-  `tests/test-live-worker.py` could lose its record when writing the terminal
-  failed, so the record is kept first and dropped only once the tab is
-  confirmed clean. And the README promised recovery on interruption, which
-  `unittest` does not give: it skips cleanups on Ctrl-C. Both scripts now
-  handle SIGINT, SIGTERM and SIGHUP. Interrupting showed that Ctrl-C never
-  reaches a worker, which has left the process group; what strands a marker is
-  the script killing the worker, so an overstaying worker is asked to stop
-  first and restores its own title. Twelve interruptions at random moments
-  all ended with no worker, no leaked directory and the title intact.
-- The same session showed why a live check had once failed 1 run in 20 with no
-  trace. Claude Code animates its tab title twice a second while it works. A
-  frame that lands in the 0.15 s between marker and lookup overwrites the
-  marker, the lookup finds nothing, nothing needs restoring, and the runtime
-  counts an attempt and retries on the next tool call. Measured directly, 5 of
-  30 cold bindings missed that way and all 5 bound on the second attempt. The
-  unchanged script from `main` missed at the same rate, so the live checks now
-  give a session the three attempts the runtime gives it, print how many
-  lookups were retried, and still fail when most of them miss, when a build
-  hangs, or when the terminal is not a Ghostty tab.
-- A fifth review, of that change, found four in the test scripts. The worker
-  check retried a missed lookup before looking at errors, so a cleanup failure
-  in the same result could end in PASS; only a miss with nothing else wrong is
-  retried now. Its recovery could be interrupted halfway, leaving a stray copy
-  of the record, and failing to make that copy skipped the restoration. It now
-  holds signals until it is done, which defers them rather than dropping them,
-  restores the title whether or not a copy could be made, and prints the record
-  when there was nowhere to keep it. All three were exercised against a real
-  leftover record. And a shutdown test signalled a recorded pid after checking
-  only that it existed; the backend is now left to the fixture's own cleanup,
-  which goes by ownership, and a test that dies with its backend up was checked
-  to leave nothing behind.
-- A sixth review found three. The README said either of two settings selects a
-  build, but each script read only one of them, so one setting left the other
-  script testing the installed app without saying so; both scripts now take
-  both and print the binary they test. An interrupt during the grace period a
-  worker gets to stop skipped the kill, and that worker runs the binary under
-  test, outside the fixture, where cleanup does not look; recovery now stops it
-  first, with signals held. Without that, the worker was seen deleting its
-  record while the script was reading it. And a copy of the record that failed
-  halfway left its directory behind.
+  cannot be cancelled, and repeating it cannot postpone the exit. Each fails
+  against the 2026-09-17 binary or against the intermediate build that had the
+  defect. The exit waits a quarter of a second at most for its report, so the
+  tests accept its absence and one retries until a report gets through. The
+  suite finds what a test started by the executable living under the fixture:
+  a worker leaves its process group with `setsid()`, and a cleanup that watched
+  the group leaked half its runs under load while passing when idle. It now
+  leaks nothing at a load average above 30 and leaves alone a bystander that
+  merely names a fixture file.
 - `tests/test-live-binding.sh`: opt-in, needs a running Ghostty. Twenty unbound
-  PreToolUse hooks must each bind a tab within seconds. The 2026-09-17 binary
-  hangs on every run; this build bound 20 of 20, typically in 0.63 s. Run it
-  before deploying a build that touches Apple Events or native process setup.
-- `tests/test-live-worker.py`: opt-in, needs a running Ghostty. It was added on
-  2026-09-19, after the fix shipped with the `--worker` fallback covered by unit
-  tests only. A worker gets a real terminal device but the recording
-  notification backend of `test_native_hooks.py`, so its tab lookup, marker and
-  restoration are real and nothing reaches Notification Center. Five workers
-  must each bind the tab, deliver once and exit 0 within seconds. The
-  2026-09-17 binary is still running when the script gives up on it; this build
-  passed 5 of 5 in about 0.9 s each.
+  PreToolUse hooks must each bind the tab within seconds and leave its title as
+  it was. The 2026-09-17 binary hangs on every run; this build binds 20 of 20,
+  typically in 0.63 s.
+- `tests/test-live-worker.py`: opt-in, needs a running Ghostty. A worker gets a
+  real terminal device but the recording notification backend of
+  `test_native_hooks.py`, so its tab lookup, marker and restoration are real
+  and nothing reaches Notification Center. Five workers must each bind the tab,
+  deliver once and exit 0 within seconds. The 2026-09-17 binary is still
+  running when the script gives up on it.
+
+Run both live checks before deploying a build that touches Apple Events or
+native process setup, in a new Ghostty tab with nothing but a shell in it. That
+tab is the fixture: the checks expect every lookup to find its marker and reset
+the title to Ghostty's default when they end. Two things measured along the way
+are why. Claude Code animates its tab title twice a second while it works, and
+a frame that lands in the 0.15 s between marker and lookup overwrites the
+marker: 5 of 30 cold bindings missed that way, and all 5 bound on the retry the
+runtime makes at the next tool call. That is designed behaviour, covered by the
+unit tests, and only noise in a live check. And Ctrl-C never reaches a worker,
+which has left the process group; what strands a marker on a tab is killing a
+worker mid-lookup, so the worker check asks an overstaying worker to stop
+before it kills it.
+
+Six independent reviews of the fix and its follow-ups found most of the defects
+these tests now pin down. A seventh asked whether the result was over-built.
+After it the live checks stopped preserving the title of whatever tab they were
+pointed at and require an idle one instead, the watchdog schedules its two
+deadlines rather than keeping one replaceable timer, and another session's
+marker is no longer traced to that session's record for a title. The
+round-by-round account is in the history of this file.
 
 On 2026-09-19 the production path was also exercised end to end: a real
 `claude -p` session with one tool call, started with `GHOSTTY_NOTIFY_TTY` set
