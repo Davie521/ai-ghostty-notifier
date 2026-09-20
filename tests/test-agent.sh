@@ -160,6 +160,17 @@ check "agent starts and writes a pidfile" \
 check "agent logs its bundle identity (proves it is bundled, not a bare binary)" \
     wait_for 15 log_has "bundle=io.github.davie521.cgnotify"
 
+# One agent per HOME. launchd and `open -a` can start it at the same moment, and
+# two of them split the spool and overwrite each other's state.json.
+"$BIN" >/dev/null 2>&1 &
+SECOND_PID=$!
+second_gone() { ! kill -0 "$SECOND_PID" 2>/dev/null; }
+check "a second agent leaves by itself" wait_for 10 second_gone
+wait "$SECOND_PID" 2>/dev/null; SECOND_STATUS=$?
+check "and leaves with status 0, so launchd does not restart it" test "$SECOND_STATUS" = 0
+check "and says why" log_has "another agent is already running as $AGENT_PID"
+kill -KILL "$SECOND_PID" 2>/dev/null || true
+
 # Everything below is meaningless if the agent is not actually draining, so
 # establish that first with a request whose only effect is a log line.
 agent_queue '{"type":"ping"}'

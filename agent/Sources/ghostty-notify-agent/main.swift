@@ -84,7 +84,8 @@ if arguments.dropFirst().contains(where: { $0.hasPrefix("--") }) {
 // One agent per machine. See Singleton for why two are easy to get and what
 // they break. Checked here, before NSApplication exists, so nothing from
 // UserNotifications is touched on a launch that is about to bail out.
-if let incumbent = Singleton.incumbent(paths: paths) {
+guard Singleton.claim(paths: paths) else {
+    let incumbent = DiskRoundJournal.read(paths.pidFile)
     AgentLog.append("another agent is already running as \(incumbent); exiting", to: paths.log)
     exit(0)
 }

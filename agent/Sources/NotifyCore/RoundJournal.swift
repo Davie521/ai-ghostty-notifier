@@ -8,9 +8,9 @@ public protocol RoundJournalProviding: Sendable {
     func claimRate(_ event: HookEvent, now: Double) async -> Bool
 }
 
-/// Same directory locks and plain-text records as hook-common.sh. Keeping one
-/// journal lets cold starts, downgrades and permission failures switch backends
-/// without losing the start time or opening a second rate-limit bucket.
+/// The plain-text records hook-common.sh kept, so that a cold start or a
+/// permission failure can switch backends without losing the start time or
+/// opening a second rate-limit bucket.
 public actor DiskRoundJournal: RoundJournalProviding {
     public init() {}
 
@@ -21,7 +21,7 @@ public actor DiskRoundJournal: RoundJournalProviding {
             input.sessionDirectory.hasPrefix("/"), input.sessionDirectory != "/"
         else { throw CocoaError(.fileWriteInvalidFileName) }
         try PrivateFile.createDirectory(input.sessionDirectory)
-        guard let lease = DirectoryLease.acquire(path(input, "round-lock")) else {
+        guard let lease = FileLease.acquire(path(input, "round-lock")) else {
             throw CocoaError(.fileLocking)
         }
         defer { lease.release() }
@@ -155,7 +155,7 @@ public actor DiskRoundJournal: RoundJournalProviding {
     private func remove(_ path: String) { try? FileManager.default.removeItem(atPath: path) }
 
     private func withLock(_ directory: String, _ body: () -> Bool) -> Bool {
-        guard let lease = DirectoryLease.acquire(directory) else { return false }
+        guard let lease = FileLease.acquire(directory) else { return false }
         defer { lease.release() }
         return body()
     }
@@ -169,6 +169,7 @@ public actor DiskRoundJournal: RoundJournalProviding {
             "json", "start", "attempts", "alerter-pid", "watch-pid", "callback-lock", "codex-owner",
             "claude-owner",
             "title", "round", "native-notice.json", "legacy-cleared", "marker.json",
+            "lock.flock", "round-lock.flock", "delivery-lock.flock",
         ]
         for directory in Set([event.sessionDirectory, event.rateDirectory]) {
             let stamp = directory + "/.pruned"
@@ -197,7 +198,12 @@ public actor DiskRoundJournal: RoundJournalProviding {
                     name.hasPrefix("ghostty-notify-")
                         || ownSessionFile
                 else { continue }
-                remove(file)
+                // A lock file goes only while nobody holds it.
+                if name.hasSuffix(".flock") {
+                    FileLease.discard(lockFile: file)
+                } else {
+                    remove(file)
+                }
             }
         }
     }

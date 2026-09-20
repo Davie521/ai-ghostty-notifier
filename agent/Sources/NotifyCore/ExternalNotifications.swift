@@ -74,7 +74,7 @@ public actor ExternalNotifications {
 
     public func clear(_ event: HookEvent, force: Bool = false) async {
         guard force || event.options.clearOnFocus, current(event),
-            let lease = DirectoryLease.acquire(path(event, "delivery-lock"), timeout: 5)
+            let lease = FileLease.acquire(path(event, "delivery-lock"), timeout: 5)
         else { return }
         defer { lease.release() }
         guard current(event) else { return }
@@ -96,7 +96,7 @@ public actor ExternalNotifications {
             log("no usable notification backend; install/authorize the native agent")
             return
         }
-        guard let lease = DirectoryLease.acquire(path(event, "delivery-lock"), timeout: 5) else {
+        guard let lease = FileLease.acquire(path(event, "delivery-lock"), timeout: 5) else {
             return
         }
         guard !Task.isCancelled, current(event), clock.now() < event.expiresAt else {
@@ -145,7 +145,7 @@ public actor ExternalNotifications {
     }
 
     private func withdraw(_ event: HookEvent, record: ExternalNotice) async {
-        guard let lease = DirectoryLease.acquire(path(event, "delivery-lock"), timeout: 5) else {
+        guard let lease = FileLease.acquire(path(event, "delivery-lock"), timeout: 5) else {
             return
         }
         defer { lease.release() }

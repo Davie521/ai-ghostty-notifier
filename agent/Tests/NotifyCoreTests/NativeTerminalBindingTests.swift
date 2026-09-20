@@ -25,6 +25,8 @@ private final class TerminalFixture: TerminalAutomationProviding, TerminalTitleW
     private var partialWrite = false
     private var restorationFailure = false
     private var overwrittenMarkers = 0
+    private var lagging = false
+    private var pending: [(Int, String)] = []
     var recorded: [String] { lock.withLock { writes } }
     /// "terminal <- title", for tests where it matters which terminal was written.
     var routed: [String] { lock.withLock { routedWrites } }
@@ -45,6 +47,15 @@ private final class TerminalFixture: TerminalAutomationProviding, TerminalTitleW
     func failRestoration() { lock.withLock { restorationFailure = true } }
     func overwriteMarkers(_ count: Int) { lock.withLock { overwrittenMarkers = count } }
     func restart() { lock.withLock { pid += 1 } }
+    /// A real terminal shows a title a moment after it was written, not at
+    /// once: a query sent straight after a write still sees the old one.
+    func lagTitles() { lock.withLock { lagging = true } }
+    func settle() {
+        lock.withLock {
+            for (tab, title) in pending { titles[tab].title = title }
+            pending = []
+        }
+    }
     func missMarkers(_ count: Int) { lock.withLock { misses = count } }
     func processID() async -> pid_t? { lock.withLock { pid } }
     func tabs() async throws -> [TerminalTab] {
@@ -84,12 +95,22 @@ private final class TerminalFixture: TerminalAutomationProviding, TerminalTitleW
                 titles[tab].title = "new TUI title"
                 return
             }
-            titles[tab].title = title
+            if lagging { pending.append((tab, title)) } else { titles[tab].title = title }
         }
     }
     func focus(tabID: String?) async {}
     func isFrontmost() async -> Bool? { false }
     func selectedTabID() async -> String? { nil }
+}
+
+/// Time passing is what lets a lagging terminal catch up.
+private struct SettlingBindingClock: HookClockProviding {
+    let terminal: TerminalFixture
+    func now() -> Double { 2000 }
+    func sleep(seconds: Double) async throws {
+        if seconds > 0 { terminal.settle() }
+        try Task.checkCancellation()
+    }
 }
 
 private final class SteppedBindingClock: HookClockProviding, @unchecked Sendable {
@@ -118,6 +139,16 @@ private actor PausedBindingClock: HookClockProviding {
         continuation?.resume()
         continuation = nil
     }
+}
+
+/// The lock file stays when the lock is released, so "released" is asked of
+/// the kernel: a second taker gets in at once.
+private func lockIsFree(_ sandbox: HookSandbox) -> Bool {
+    guard let lease = FileLease.acquire(sandbox.root.path + "/abc-123.lock", timeout: 0) else {
+        return false
+    }
+    lease.release()
+    return true
 }
 
 @Suite("Native terminal binding, without shell helpers")
@@ -180,14 +211,14 @@ struct NativeTerminalBindingTests {
         #expect(await work.value == nil)
         #expect(terminal.recorded.last == "中文\t完整\n标题")
         #expect(!FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.json"))
-        #expect(!FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.lock"))
+        #expect(lockIsFree(sandbox))
     }
 
     @Test func anotherProcessHoldingTheMarkerLeasePreventsAnyOSC() async throws {
         let sandbox = try HookSandbox()
         var event = try sandbox.event(source: .codex)
         event.tty = "/dev/fixture"
-        let lease = try #require(DirectoryLease.acquire(sandbox.root.path + "/abc-123.lock"))
+        let lease = try #require(FileLease.acquire(sandbox.root.path + "/abc-123.lock"))
         defer { lease.release() }
         let terminal = TerminalFixture()
         let binding = NativeTerminalBinding(
@@ -319,7 +350,7 @@ struct NativeTerminalBindingTests {
         #expect(terminal.recorded == ["__claude_TAB_MARKER_abc-123__"])
         #expect(terminal.visible[1].title == "two")
         #expect(!FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.json"))
-        #expect(!FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.lock"))
+        #expect(lockIsFree(sandbox))
     }
 
     @Test func restorationFailureCannotPublishASuccessfulBinding() async throws {
@@ -332,7 +363,7 @@ struct NativeTerminalBindingTests {
             automation: terminal, writer: terminal, clock: InstantBindingClock())
         #expect(await binding.resolve(event) == nil)
         #expect(!FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.json"))
-        #expect(!FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.lock"))
+        #expect(lockIsFree(sandbox))
     }
 
     // The three below reproduce 2026-09-17: a terminal query that never returns.
@@ -357,8 +388,9 @@ struct NativeTerminalBindingTests {
             FileManager.default.fileExists(atPath: sandbox.root.path + "/applescript-stalled"))
         // A stall is not a denied permission, and not this session's fault.
         let absent = [
-            "applescript-unavailable", "abc-123.json", "abc-123.attempts", "abc-123.lock",
+            "applescript-unavailable", "abc-123.json", "abc-123.attempts",
         ]
+        #expect(lockIsFree(sandbox))
         for name in absent {
             #expect(!FileManager.default.fileExists(atPath: sandbox.root.path + "/" + name))
         }
@@ -380,7 +412,7 @@ struct NativeTerminalBindingTests {
         // The blocked thread is still blocked: recovery must not queue behind it.
         #expect(terminal.queryCount == 2)
         #expect(!FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.attempts"))
-        #expect(!FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.lock"))
+        #expect(lockIsFree(sandbox))
     }
 
     @Test(.timeLimit(.minutes(1)))
@@ -429,7 +461,8 @@ struct NativeTerminalBindingTests {
         #expect(ContinuousClock.now - cancelled < .seconds(5))
         #expect(terminal.visible.first?.title == "中文\t完整\n标题")
         // Giving up on a cancelled wait is not evidence of a wedged terminal.
-        let absent = ["applescript-stalled", "abc-123.marker.json", "abc-123.lock"]
+        #expect(lockIsFree(sandbox))
+        let absent = ["applescript-stalled", "abc-123.marker.json"]
         for name in absent {
             #expect(!FileManager.default.fileExists(atPath: sandbox.root.path + "/" + name))
         }
@@ -461,6 +494,33 @@ struct NativeTerminalBindingTests {
             ])
         #expect(terminal.visible.map(\.title) == ["one", "two"])
         #expect(!FileManager.default.fileExists(atPath: record))
+    }
+
+    @Test func recoveryWaitsForTheTerminalBeforeItTakesANewBaseline() async throws {
+        // Found against a real Ghostty: a hook killed with its marker showing,
+        // and the next hook run at once. Its recovery wrote the title back and
+        // took the new baseline before the terminal had caught up. The old
+        // marker was then set aside as a leftover, this run's identical marker
+        // landed on the same tab and was ignored, and the tab kept it with the
+        // record already gone.
+        let sandbox = try HookSandbox()
+        var event = try sandbox.event()
+        event.tty = "/dev/fixture"
+        try sandbox.write(
+            "abc-123.marker.json",
+            #"{"marker":"__claude_TAB_MARKER_abc-123__","tty":"/dev/fixture","ghosttyPID":"123","#
+                + #""tabs":[{"id":"tab-1","title":"known title"}]}"#)
+        let terminal = TerminalFixture()
+        terminal.setTabs([.init(id: "tab-1", title: "__claude_TAB_MARKER_abc-123__")])
+        terminal.lagTitles()
+        let binding = NativeTerminalBinding(
+            automation: terminal, writer: terminal,
+            clock: SettlingBindingClock(terminal: terminal))
+        #expect(await binding.resolve(event) == "tab-1")
+        terminal.settle()
+        #expect(terminal.visible.map(\.title) == ["known title"])
+        #expect(
+            !FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.marker.json"))
     }
 
     @Test func aRecordAboutAnotherGhosttyProcessIsDiscardedNotApplied() async throws {
