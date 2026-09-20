@@ -103,7 +103,7 @@ private actor BindingSpy: TerminalBindingProviding {
         resolved += 1
         return "tab-1"
     }
-    func clearLegacy(_ event: HookEvent) {}
+    func clearExternal(_ event: HookEvent) {}
 }
 
 @Suite("Native asynchronous hook lifecycle")

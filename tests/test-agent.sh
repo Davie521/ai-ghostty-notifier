@@ -2,8 +2,7 @@
 # Integration test for the resident notification agent.
 #
 # Drives the REAL binary through the REAL spool transport and native hook
-# launchers, asserting against the agent's own state file and log. Frozen
-# shell helpers exercise only the older wire protocol's compatibility path.
+# launchers, asserting against the agent's own state file and log.
 #
 # What this deliberately does NOT assert: that a banner appeared. Notification
 # delivery needs an authorization grant that only a human can give, so a test
@@ -38,12 +37,13 @@ fi
 
 if [[ ! -x "$BIN" ]]; then
     echo "FATAL: $BIN missing. Build it first:" >&2
-    echo "  bash scripts/build-agent.sh" >&2
+    echo "  bash scripts/build-agent.sh --build-only" >&2
     exit 2
 fi
 
 SANDBOX=$(mktemp -d)
 AGENT_PID=""
+STARTED=()
 stop_agent() {
     [[ -n "$AGENT_PID" ]] || return 0
     local pid="$AGENT_PID" i=0 result=0
@@ -73,13 +73,13 @@ cleanup() {
     # inside cleanup.
     if [[ -n "$AGENT_PID" ]] && kill -0 "$AGENT_PID" 2>/dev/null &&
         command -v agent_queue >/dev/null 2>&1; then
-        for sid in "${SID:-}" "${OTHER:-}" "${NATIVE_SID:-}"; do
+        for sid in "${SID:-}" "${OTHER:-}" "${NATIVE_SID:-}" "${EXPIRING:-}" "${KEPT:-}"; do
             [[ -n "$sid" ]] || continue
-            agent_queue "$(jq -nc --arg s "$sid" '{type:"dismiss",session_id:$s}')" "$APP" \
+            agent_queue "$(jq -nc --arg s "$sid" '{type:"dismiss",session_id:$s}')" \
                 2>/dev/null || true
         done
         if [[ -n "${NATIVE_SID:-}" ]]; then
-            agent_queue "$(jq -nc --arg s "$NATIVE_SID" '{type:"dismiss",session_id:$s,source:"codex"}')" "$APP" \
+            agent_queue "$(jq -nc --arg s "$NATIVE_SID" '{type:"dismiss",session_id:$s,source:"codex"}')" \
                 2>/dev/null || true
         fi
         # Give the watcher a moment to drain before the process goes away.
@@ -87,6 +87,9 @@ cleanup() {
     fi
     # Reap even a hung test app before deleting its private state directory.
     stop_agent || echo "Test cleanup required a forced agent exit" >&2
+    # Every contender of section 1 too, should the run have ended in there.
+    local pid
+    for pid in ${STARTED[@]+"${STARTED[@]}"}; do kill -KILL "$pid" 2>/dev/null || true; done
     rm -rf "$SANDBOX"
 }
 trap cleanup EXIT
@@ -99,9 +102,9 @@ mkdir -p "$ROOT"
 printf 'shown\n' > "$ROOT/style-hint-shown"
 export GHOSTTY_NOTIFY_MENU_BAR=0
 
-# The helpers under test. They read HOME, so source after exporting it.
-# shellcheck source=tests/fixtures/shell-baseline/hooks/agent-common.sh
-source "$REPO/tests/fixtures/shell-baseline/hooks/agent-common.sh"
+# One request into the spool, through the binary's own sender. It reads HOME,
+# so this works on the sandbox and never on the user's agent.
+agent_queue() { "$BIN" --send "$1"; }
 
 pass=0; fail=0
 fail_list=()
@@ -130,13 +133,6 @@ wait_for() {
     return 1
 }
 
-# Negative assertions go through a predicate function: `check` invokes "$@"
-# directly, which cannot carry a `!` or a subshell.
-rejects() { ! "$@"; }
-stale_app_is_rejected() {
-    ( export GHOSTTY_NOTIFY_AGENT_APP="$SANDBOX/gone.app"
-      agent_app "$REPO/hooks" >/dev/null )
-}
 
 log_has() { grep -qF "$1" "$LOG" 2>/dev/null; }
 state_outstanding() {
@@ -157,77 +153,93 @@ echo "== resident agent integration test =="
 SID="deadbeef-1111-2222-3333-444455556666"
 OTHER="deadbeef-9999"
 NATIVE_SID="deadbeef-2222-3333"
+EXPIRING="deadbeef-4444"
+KEPT="deadbeef-5555"
 
-# ── 1. The agent starts and claims its pidfile ─────────────────────────────
-"$BIN" >/dev/null 2>&1 &
-AGENT_PID=$!
+# ── 1. Three start together, one stays, and it claims its pidfile ──────────
+# launchd and `open -a` can start the agent at the same moment, and two of them
+# split the spool and overwrite each other's state.json. Started one after the
+# other they have always sorted themselves out through the pid file; started
+# together, every one of them used to stay. So: together.
+for _ in 1 2 3; do
+    "$BIN" >/dev/null 2>&1 &
+    STARTED+=("$!")
+done
+alive_agents() {
+    local pid
+    for pid in "${STARTED[@]}"; do
+        if kill -0 "$pid" 2>/dev/null; then printf '%s\n' "$pid"; fi
+    done
+    return 0
+}
+one_agent_left() { [[ "$(alive_agents | wc -l | tr -d ' ')" == 1 ]]; }
 check "agent starts and writes a pidfile" \
     wait_for 15 test -f "$ROOT/agent.pid"
+check "of three agents started together, exactly one stays" wait_for 10 one_agent_left
+AGENT_PID=$(cat "$ROOT/agent.pid" 2>/dev/null || true)
+# Whatever the check above said, the rest of this file needs exactly one agent,
+# and a contender that stayed must not outlive the test either. Killed before
+# it is waited for: waiting for a process that stays never returns.
+LEAVERS_OK=1
+for pid in "${STARTED[@]}"; do
+    [[ "$pid" == "$AGENT_PID" ]] && continue
+    if kill -0 "$pid" 2>/dev/null; then
+        kill -KILL "$pid" 2>/dev/null || true
+        LEAVERS_OK=0
+    fi
+    wait "$pid" 2>/dev/null || LEAVERS_OK=0
+done
+check "the others left by themselves with status 0, so launchd does not restart them" \
+    test "$LEAVERS_OK" = 1
+check "and said why" log_has "another agent is already running"
+check "the one that stays is the one in the pidfile" kill -0 "$AGENT_PID"
 check "agent logs its bundle identity (proves it is bundled, not a bare binary)" \
     wait_for 15 log_has "bundle=io.github.davie521.cgnotify"
 
 # Everything below is meaningless if the agent is not actually draining, so
 # establish that first with a request whose only effect is a log line.
-agent_queue '{"type":"ping"}' "$APP"
+agent_queue '{"type":"ping"}'
 check "spool transport delivers (ping answered)" wait_for 10 log_has "pong"
 check "consumed request files are removed" wait_for 10 spool_drained
 
-# ── 2. Readiness is published, and gates delivery ──────────────────────────
-# The severest defect this file guards: a spool write is NOT a delivered
-# notification. Unless the agent says it is authorized, agent_deliver has to
-# fail so ghostty-notify.sh falls back to alerter/terminal-notifier instead of
-# silently swallowing the notification.
+# ── 2. Readiness is published ───────────────────────────────────────────────
 # Whether the agent gets an ANSWER is environmental, not a property of the code:
 # the prompt needs a human, and on a CI runner nobody can click it, so the
-# completion handler never fires. Reported, never asserted — a machine that
-# cannot answer must not fail the build, and a green tick here would have meant
-# nothing anyway.
+# completion handler never fires. Reported, never asserted. That the answer
+# gates delivery is a NotifyCore test (HookTransport), where the hooks decide.
 if wait_for 10 test -s "$ROOT/ready"; then
     printf '  \033[36mINFO\033[0m  agent published its authorization answer: %s\n' \
         "$(cat "$ROOT/ready")"
 else
     printf '  \033[36mINFO\033[0m  no authorization answer (nobody here can answer the prompt)\n'
 fi
-
-# The contract that IS testable: whatever the answer, the gate governs delivery.
-printf 'denied\n' > "$ROOT/ready"
-check "agent_deliver refuses when notifications are not authorized" \
-    rejects agent_deliver '{"type":"ping"}' "$APP"
 printf 'authorized\n' > "$ROOT/ready"
-check "agent_deliver accepts once authorized" \
-    agent_deliver '{"type":"ping"}' "$APP"
-# A stale bundle path must not be trusted either — routing into a spool nothing
-# drains is the same silent-drop failure by another route.
-check "a non-existent GHOSTTY_NOTIFY_AGENT_APP is rejected" \
-    rejects stale_app_is_rejected
-# An empty payload means the caller's jq failed; queuing it would look like a
-# delivered notification to the caller and an undecodable file to the agent.
-check "an empty payload is refused rather than queued" \
-    rejects agent_deliver "" "$APP"
 
 # ── 3. notify records a stable identifier ──────────────────────────────────
 agent_queue "$(jq -nc --arg s "$SID" \
-    '{type:"notify",session_id:$s,title:"Claude ✅",subtitle:"sub",body:"done",sound:"Glass"}')" \
-    "$APP"
+    '{type:"notify",session_id:$s,title:"Claude ✅",subtitle:"sub",body:"done",sound:"Glass"}')"
 check "notify posts and records claude-<session>" \
     wait_for 10 log_has "posted claude-$SID"
 check "state.json lists the identifier as outstanding" \
     wait_for 10 state_is "$SID" "claude-$SID"
+# They hold notification text, and a home directory is usually traversable.
+check "state.json, the log and their directory are private to the user" \
+    test "$(stat -f '%Lp' "$STATE" "$LOG" "$ROOT" | tr '\n' ' ')" = "600 600 700 "
 
 # Posting again must reuse the identifier: that is what makes the notification
 # center REPLACE the banner instead of stacking a second one, which is the
 # behaviour `-group ghostty-notify-<session>` gave both shell backends.
-agent_queue "$(jq -nc --arg s "$SID" '{type:"notify",session_id:$s,title:"again"}')" "$APP"
+agent_queue "$(jq -nc --arg s "$SID" '{type:"notify",session_id:$s,title:"again"}')"
 check "a repeat notification replaces rather than stacks" \
     wait_for 10 state_is "$SID" "claude-$SID"
 
 # ── 4. A second session's notification is tracked separately ───────────────
-agent_queue "$(jq -nc --arg s "$OTHER" '{type:"notify",session_id:$s,title:"other"}')" "$APP"
+agent_queue "$(jq -nc --arg s "$OTHER" '{type:"notify",session_id:$s,title:"other"}')"
 check "a second session gets its own identifier" \
     wait_for 10 state_is "$OTHER" "claude-$OTHER"
 
 # ── 5. dismiss withdraws only the session it names ─────────────────────────
-agent_queue "$(jq -nc --arg s "$SID" '{type:"dismiss",session_id:$s}')" "$APP"
+agent_queue "$(jq -nc --arg s "$SID" '{type:"dismiss",session_id:$s}')"
 check "dismiss withdraws the named session's notification" \
     wait_for 10 log_has "withdrew claude-$SID"
 check "dismissed session has nothing outstanding" \
@@ -241,7 +253,7 @@ check "the other session's notification survives" \
 # Sampling the focused tab at drain time anchors a session to whatever tab the
 # user happens to be on by then, so a hook-supplied id must win outright.
 agent_queue "$(jq -nc --arg s "$SID" \
-    '{type:"anchor",session_id:$s,tab_id:"BEEF-TAB"}')" "$APP"
+    '{type:"anchor",session_id:$s,tab_id:"BEEF-TAB"}')"
 check "a hook-supplied tab id is recorded verbatim" \
     wait_for 10 log_has "anchored $SID -> BEEF-TAB"
 check "state.json records the tab" \
@@ -251,11 +263,11 @@ check "state.json records the tab" \
 # A poison file is unlinked before it is decoded, so it must be dropped once and
 # never retried — and the next good request must still be served.
 PONGS_BEFORE=$(grep -cF pong "$LOG")
-agent_queue 'not json at all' "$APP"
-agent_queue "$(jq -nc --arg s "../escape" '{type:"notify",session_id:$s,title:"evil"}')" "$APP"
-agent_queue '{"type":"selfDestruct"}' "$APP"
+agent_queue 'not json at all'
+agent_queue "$(jq -nc --arg s "../escape" '{type:"notify",session_id:$s,title:"evil"}')"
+agent_queue '{"type":"selfDestruct"}'
 check "malformed requests are dropped, not retried" wait_for 10 spool_drained
-agent_queue '{"type":"ping"}' "$APP"
+agent_queue '{"type":"ping"}'
 check "the agent still serves requests after garbage" \
     wait_for 10 pongs_increased "$PONGS_BEFORE"
 # A rejected session id must not have created a record.
@@ -336,7 +348,7 @@ check "switching Codex to the external backend still clears its native notice" \
     wait_for 10 state_is "codex-$NATIVE_SID" ""
 # Simulate state produced by an older agent, before source-scoped identifiers.
 agent_queue "$(jq -nc --arg s "$NATIVE_SID" \
-    '{type:"notify",session_id:$s,title:"Codex ✅",subtitle:"legacy Codex fixture",clear_on_focus:false}')" "$APP"
+    '{type:"notify",session_id:$s,title:"Codex ✅",subtitle:"legacy Codex fixture",clear_on_focus:false}')"
 check "legacy Codex state can coexist with the new protocol" \
     wait_for 10 native_notice_is "legacy Codex fixture"
 jq -nc --arg s "$NATIVE_SID" '{session_id:$s,hook_event_name:"UserPromptSubmit",prompt:"retire legacy"}' \
@@ -354,7 +366,7 @@ agent_queue "$(jq -nc --arg s "$NATIVE_SID" --arg sessions "$SESSIONS" \
     --argjson at "$(( $(date +%s) - 600 ))" \
     '{type:"hook_event",version:1,source:"claude",round_id:$round,occurred_at:$at,
       started_at:($at - 1000),session_dir:$sessions,rate_dir:$rates,hooks_dir:$hooks,
-      settings:{},payload:{session_id:$s,hook_event_name:"Stop",cwd:"/work/stale"}}')" "$APP"
+      settings:{},payload:{session_id:$s,hook_event_name:"Stop",cwd:"/work/stale"}}')"
 check "fresh spool file cannot resurrect an expired hook event" \
     wait_for 10 log_has "dropped stale hook event"
 check "stale native replay leaves the notification withdrawn" native_clear
@@ -367,19 +379,34 @@ mv "$STALE" "$ROOT/spool/0000000000000001-stale.json"
 check "a stale notify is dropped, not replayed" wait_for 10 log_has "dropped stale notify"
 
 # ── 10. Shutdown completes, then state survives a restart ─────────────────
+# Two timeouts are left running across the restart: one that runs out while no
+# agent is up, and one that has not. A timer dies with the process; the
+# notification does not, so the deadline has to come back from state.json.
+agent_queue "$(jq -nc --arg s "$EXPIRING" '{type:"notify",session_id:$s,title:"runs out while down",timeout:4}')"
+agent_queue "$(jq -nc --arg s "$KEPT" '{type:"notify",session_id:$s,title:"still has time",timeout:600}')"
+check "both timed notifications are posted before the shutdown" \
+    wait_for 10 state_is "$KEPT" "claude-$KEPT"
 check "SIGTERM completes asynchronous shutdown within 10 seconds" stop_agent
 check "shutdown calls the lifecycle cleanup" log_has "agent down"
 for marker in agent.pid ready capabilities native-hook-ready; do
     check "shutdown removes $marker" test ! -f "$ROOT/$marker"
 done
+check "the deadline was written to state.json" \
+    test "$(jq -r --arg s "$EXPIRING" '.sessions[$s].expiresAt // 0 | . > 0' "$STATE")" = "true"
+sleep 5
 "$BIN" >/dev/null 2>&1 &
 AGENT_PID=$!
 check "restarted agent reloads its sessions" wait_for 15 log_has "restored "
+check "a timeout that ran out while the agent was down is honoured at launch" \
+    wait_for 10 log_has "expired while the agent was down: claude-$EXPIRING"
+check "and its notification is no longer outstanding" state_is "$EXPIRING" ""
+check "a timeout still ahead keeps its notification and its deadline" \
+    test "$(jq -r --arg s "$KEPT" '.sessions[$s] | (.notificationIDs | length), (.expiresAt > 0)' "$STATE" | tr '\n' ' ')" = "1 true "
 # No assertion that readiness is republished: this file was written by hand
 # above, so it exists no matter what the restarted agent does — the check that
 # used to be here could never fail.
 printf 'authorized\n' > "$ROOT/ready"
-agent_queue "$(jq -nc --arg s "$SID" '{type:"notify",session_id:$s,title:"after restart"}')" "$APP"
+agent_queue "$(jq -nc --arg s "$SID" '{type:"notify",session_id:$s,title:"after restart"}')"
 # A changed identifier here would post a SECOND banner beside one that may still
 # be on screen from before the restart, instead of replacing it.
 check "the identifier is still stable after a restart" \

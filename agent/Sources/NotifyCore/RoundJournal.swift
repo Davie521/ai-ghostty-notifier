@@ -8,13 +8,10 @@ public protocol RoundJournalProviding: Sendable {
     func claimRate(_ event: HookEvent, now: Double) async -> Bool
 }
 
-/// Same directory locks and plain-text records as hook-common.sh. Keeping one
-/// journal lets cold starts, downgrades and permission failures switch backends
-/// without losing the start time or opening a second rate-limit bucket.
+/// The plain-text records hook-common.sh kept, so that a cold start or a
+/// permission failure can switch backends without losing the start time or
+/// opening a second rate-limit bucket.
 public actor DiskRoundJournal: RoundJournalProviding {
-    private var directories: Set<String> = []
-    private var lastPruned: Double = 0
-
     public init() {}
 
     /// Runs in the short-lived native hook before it returns. A queued prompt
@@ -23,10 +20,8 @@ public actor DiskRoundJournal: RoundJournalProviding {
         guard RequestCodec.isValidSessionID(input.sessionID),
             input.sessionDirectory.hasPrefix("/"), input.sessionDirectory != "/"
         else { throw CocoaError(.fileWriteInvalidFileName) }
-        try FileManager.default.createDirectory(
-            atPath: input.sessionDirectory,
-            withIntermediateDirectories: true)
-        guard let lease = DirectoryLease.acquire(path(input, "round-lock")) else {
+        try PrivateFile.createDirectory(input.sessionDirectory)
+        guard let lease = FileLease.acquire(path(input, "round-lock")) else {
             throw CocoaError(.fileLocking)
         }
         defer { lease.release() }
@@ -70,8 +65,6 @@ public actor DiskRoundJournal: RoundJournalProviding {
     }
 
     public func prepare(_ event: HookEvent) {
-        directories.insert(event.sessionDirectory)
-        directories.insert(event.rateDirectory)
         _ = withLock(path(event, "round-lock")) {
             guard Self.read(path(event, "round")) == event.roundID else { return false }
             if let owner = event.owner, !owner.isEmpty {
@@ -96,7 +89,7 @@ public actor DiskRoundJournal: RoundJournalProviding {
             }
             return true
         }
-        prune(now: event.occurredAt)
+        prune(event, now: event.occurredAt)
     }
 
     public func finish(_ event: HookEvent) {
@@ -109,11 +102,8 @@ public actor DiskRoundJournal: RoundJournalProviding {
     }
 
     public func claimRate(_ event: HookEvent, now: Double) -> Bool {
-        directories.insert(event.sessionDirectory)
-        directories.insert(event.rateDirectory)
         let file = Self.rateFile(event)
-        try? FileManager.default.createDirectory(
-            atPath: event.rateDirectory, withIntermediateDirectories: true)
+        try? PrivateFile.createDirectory(event.rateDirectory)
         let result = withLock(file + ".lock") {
             if FileManager.default.fileExists(atPath: file) {
                 let value = Self.read(file)
@@ -129,7 +119,7 @@ public actor DiskRoundJournal: RoundJournalProviding {
             }
             return write(String(format: "%.0f", floor(now)), file)
         }
-        prune(now: now)
+        prune(event, now: now)
         return result
     }
 
@@ -157,7 +147,7 @@ public actor DiskRoundJournal: RoundJournalProviding {
 
     @discardableResult private func write(_ value: String, _ path: String) -> Bool {
         do {
-            try (value + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+            try PrivateFile.write(value + "\n", to: path)
             return true
         } catch { return false }
     }
@@ -165,22 +155,36 @@ public actor DiskRoundJournal: RoundJournalProviding {
     private func remove(_ path: String) { try? FileManager.default.removeItem(atPath: path) }
 
     private func withLock(_ directory: String, _ body: () -> Bool) -> Bool {
-        guard let lease = DirectoryLease.acquire(directory) else { return false }
+        guard let lease = FileLease.acquire(directory) else { return false }
         defer { lease.release() }
         return body()
     }
 
-    private func prune(now: Double) {
-        guard now - lastPruned >= 3600 else { return }
-        lastPruned = now
+    /// At most hourly per directory. A hook is a new process for every tool
+    /// call, so the hour is kept in the directory, where the next one finds it:
+    /// kept in memory, every hook listed and examined every session file.
+    private func prune(_ event: HookEvent, now: Double) {
         let fm = FileManager.default
         let suffixes: Set<String> = [
             "json", "start", "attempts", "alerter-pid", "watch-pid", "callback-lock", "codex-owner",
             "claude-owner",
-            "title", "round", "native-notice.json", "legacy-cleared",
+            "title", "round", "native-notice.json", "legacy-cleared", "marker.json",
+            "lock.flock", "round-lock.flock", "delivery-lock.flock",
         ]
-        for directory in directories {
+        for directory in Set([event.sessionDirectory, event.rateDirectory]) {
+            let stamp = directory + "/.pruned"
+            if let attrs = try? fm.attributesOfItem(atPath: stamp),
+                let pruned = attrs[.modificationDate] as? Date,
+                (0..<3600).contains(now - pruned.timeIntervalSince1970)
+            {
+                continue
+            }
             guard let names = try? fm.contentsOfDirectory(atPath: directory) else { continue }
+            // `now` is the event's clock, which a test may set; the stamp follows it.
+            if (try? PrivateFile.write("", to: stamp)) != nil {
+                try? fm.setAttributes(
+                    [.modificationDate: Date(timeIntervalSince1970: now)], ofItemAtPath: stamp)
+            }
             for name in names {
                 let file = directory + "/" + name
                 let ownSessionFile = suffixes.contains { suffix in
@@ -194,7 +198,12 @@ public actor DiskRoundJournal: RoundJournalProviding {
                     name.hasPrefix("ghostty-notify-")
                         || ownSessionFile
                 else { continue }
-                remove(file)
+                // A lock file goes only while nobody holds it.
+                if name.hasSuffix(".flock") {
+                    FileLease.discard(lockFile: file)
+                } else {
+                    remove(file)
+                }
             }
         }
     }

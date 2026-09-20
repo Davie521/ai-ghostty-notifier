@@ -104,6 +104,12 @@ final class Notifier {
     /// from first registration and still got Banner. All an app can do is notice
     /// and say so.
     func currentAlertStyle(_ completion: @escaping @MainActor (String) -> Void) {
+        currentSettings { _, style in completion(style) }
+    }
+
+    /// The style, and whether notifications are allowed: nil while macOS has no
+    /// answer on record. Reads only. It never asks, so it never prompts.
+    func currentSettings(_ completion: @escaping @MainActor (Bool?, String) -> Void) {
         center.getNotificationSettings { settings in
             let name: String
             switch settings.alertStyle {
@@ -112,7 +118,13 @@ final class Notifier {
             case .none: name = "none"
             @unknown default: name = "unknown"
             }
-            Task { @MainActor in completion(name) }
+            let authorized: Bool?
+            switch settings.authorizationStatus {
+            case .authorized, .provisional: authorized = true
+            case .denied: authorized = false
+            default: authorized = nil
+            }
+            Task { @MainActor in completion(authorized, name) }
         }
     }
 

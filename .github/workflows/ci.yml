@@ -43,22 +43,14 @@ jobs:
             echo "  ok  $j"
           done
 
-      - name: Historical shell behavior fixtures (not native runtime coverage)
-        run: |
-          bash tests/test-fallback-no-focus.sh
-          bash tests/test-session-title.sh
-          bash tests/test-alerter-dispatch.sh
-          bash tests/test-clear-on-focus.sh
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Historical Codex fixtures and installer config regressions
-        run: python3 -m unittest discover -s tests -p 'test_codex_hooks.py' -v
+      - name: Codex installer config regressions
+        run: python3 -m unittest discover -s tests -p 'test_codex_install.py' -v
 
-      # The native bundle is required. Swift failures fail the product gate;
-      # historical fixtures above are comparisons, never a runtime fallback.
+      # The native bundle is required. Swift failures fail the product gate.
       - name: Swift toolchain
         run: swift --version
 

@@ -7,6 +7,7 @@ are exercised here. The resident's lifecycle has a separate integration suite.
 import json
 import os
 from pathlib import Path
+import plistlib
 import shutil
 import subprocess
 import sys
@@ -55,7 +56,7 @@ class NativeInstallTests(unittest.TestCase):
         self.bin.mkdir()
         # No jq, notification backend or shell worker is available.
         for command in ("uname", "dirname", "id", "mkdir", "mktemp", "ditto", "codesign",
-                        "mv", "rm", "rmdir", "cp", "chmod", "cat"):
+                        "mv", "rm", "rmdir", "cp", "chmod", "cat", "sed", "plutil", "seq", "awk"):
             executable = shutil.which(command, path="/usr/bin:/bin:/usr/sbin:/sbin")
             if executable is None:
                 raise RuntimeError("Missing installer utility " + command)
@@ -228,20 +229,26 @@ class NativeInstallTests(unittest.TestCase):
         self.install_app()
         self.assertTrue((self.app / MARKER).is_file())
 
+    def registered_hooks(self):
+        # An earlier install that a failed one must leave byte for byte as it was.
+        destination = self.home / ".claude/hooks"
+        destination.mkdir(parents=True)
+        for source in (REPO / "hooks").glob("*.sh"):
+            (destination / source.name).write_text("#!/bin/bash\n# registered by an earlier install\n")
+        return {p.name: p.read_bytes() for p in destination.iterdir()}
+
     def test_failed_bootstrap_copy_preserves_registered_claude_hooks(self):
         self.install_app()
+        before = self.registered_hooks()
         destination = self.home / ".claude/hooks"
-        shutil.copytree(REPO / "tests/fixtures/shell-baseline/hooks", destination)
-        before = {p.name: p.read_bytes() for p in destination.iterdir()}
         self.stub("cp", 'case "$1" in */native-hook.sh) exit 23 ;; esac\nexec /bin/cp "$@"\n')
         self.run_script("install.sh", success=False)
         self.assertEqual({p.name: p.read_bytes() for p in destination.iterdir()}, before)
 
     def test_failed_download_preserves_registered_claude_hooks(self):
         self.install_app()
+        before = self.registered_hooks()
         destination = self.home / ".claude/hooks"
-        shutil.copytree(REPO / "tests/fixtures/shell-baseline/hooks", destination)
-        before = {p.name: p.read_bytes() for p in destination.iterdir()}
         # Absence of local source hooks selects the existing download workflow.
         (self.checkout / "hooks").rename(self.checkout / "source-hooks")
         self.stub("curl", "exit 22\n")
@@ -250,12 +257,74 @@ class NativeInstallTests(unittest.TestCase):
 
     def test_invalid_staged_script_preserves_registered_claude_hooks(self):
         self.install_app()
+        before = self.registered_hooks()
         destination = self.home / ".claude/hooks"
-        shutil.copytree(REPO / "tests/fixtures/shell-baseline/hooks", destination)
-        before = {p.name: p.read_bytes() for p in destination.iterdir()}
         (self.checkout / "hooks/ghostty-tab-save.sh").write_text("#!/bin/bash\nif\n")
         self.run_script("install.sh", success=False)
         self.assertEqual({p.name: p.read_bytes() for p in destination.iterdir()}, before)
+
+    def test_launch_agent_is_valid_for_a_home_with_xml_metacharacters(self):
+        # The full install is not run here: it registers with LaunchServices.
+        # What it writes is what this mode prints.
+        home = self.root / "a&b <c>"
+        result = self.run_script("scripts/install-agent.sh", "--print-launch-agent", env={"HOME": str(home)})
+        agent = plistlib.loads(result.stdout.encode())
+        self.assertEqual(agent["ProgramArguments"], [str(
+            home / "Library/Application Support/claude-ghostty-notify" / "ClaudeGhosttyNotify.app" / EXECUTABLE)])
+        self.assertEqual(agent["Label"], "io.github.davie521.cgnotify")
+        self.assertFalse(home.exists())
+
+    def test_full_install_checks_its_launch_agent_before_stopping_anything(self):
+        # The only test of the path that starts a service. Every service command
+        # is a stand-in, LaunchServices included, and HOME has the characters
+        # that used to break the plist after the old agent had been stopped.
+        home = self.root / "a&b <c>"
+        calls = self.root / "full-install-calls"
+        self.stub("launchctl", '''if [[ ! -e "$CALLS" ]]; then
+    for staged in "$HOME/Library/Application Support/claude-ghostty-notify"/.native-install.*/*.plist; do
+        plutil -lint "$staged" >/dev/null && echo "valid plist staged before the first service command" >> "$CALLS"
+    done
+fi
+echo "launchctl $1" >> "$CALLS"
+''')
+        self.stub("lsregister", 'echo "lsregister $1" >> "$CALLS"\n')
+        # A worker of the previous version that needs three more polls to finish
+        # cleaning up after SIGTERM. The pid cannot exist, should it ever be signalled.
+        self.stub("ps", '''polls=$(($(cat "$CALLS.polls" 2>/dev/null || echo 0) + 1))
+echo "$polls" > "$CALLS.polls"
+if ((polls <= 3)); then
+    installed=no
+    [[ -e "$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app" ]] && installed=yes
+    echo "old worker still running; new bundle in place: $installed" >> "$CALLS"
+    echo "99999999 /somewhere/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent"
+fi
+echo "  501 /bin/zsh -c cat /x/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent.log"
+''')
+        self.stub("pkill", 'echo pkill >> "$CALLS"\n')
+        self.stub("sleep", "exit 0\n")
+        # Stands in for the agent answering the permission prompt.
+        self.stub("open", 'mkdir -p "$HOME/.claude/notifications/ghostty-agent" && '
+                  'echo authorized > "$HOME/.claude/notifications/ghostty-agent/ready"\n')
+        result = subprocess.run(
+            ["/bin/bash", str(self.checkout / "scripts/install-agent.sh")], cwd=self.checkout,
+            env={**self.env, "HOME": str(home), "CALLS": str(calls),
+                 "GHOSTTY_NOTIFY_LSREGISTER": str(self.bin / "lsregister")},
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        recorded = calls.read_text().splitlines()
+        self.assertEqual(recorded[0], "valid plist staged before the first service command")
+        self.assertEqual(recorded[-1], "launchctl bootstrap")
+        # The old worker was waited for, and nothing was replaced under it. The
+        # shell that only mentions the path was not taken for one, or the wait
+        # would have run to its limit and the polls would not stop at four.
+        self.assertEqual(recorded.count("old worker still running; new bundle in place: no"), 3)
+        self.assertNotIn("old worker still running; new bundle in place: yes", recorded)
+        self.assertEqual((self.root / "full-install-calls.polls").read_text().strip(), "5")
+        agent = plistlib.loads((home / "Library/LaunchAgents/io.github.davie521.cgnotify.plist").read_bytes())
+        installed = home / "Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app"
+        self.assertEqual(agent["ProgramArguments"], [str(installed / EXECUTABLE)])
+        self.assertTrue((installed / MARKER).is_file())
+        self.assertEqual(list(installed.parent.glob(".native-install.*")), [])
 
     def test_unknown_option_aborts_without_writes(self):
         self.run_script("scripts/install-agent.sh", "--typo", success=False)

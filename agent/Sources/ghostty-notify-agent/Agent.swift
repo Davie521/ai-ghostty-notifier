@@ -22,6 +22,7 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private var menuBar: MenuBar?
     private var permission: NotificationPermission = .unknown
     private var alertStyle = ""
+    private var lastActivatedBundleID: String?
     private var shuttingDown = false
     /// Per-identifier expiry timers, so a replacement notification restarts the
     /// clock instead of inheriting the old one's deadline.
@@ -65,8 +66,13 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        try? FileManager.default.createDirectory(
-            atPath: paths.root, withIntermediateDirectories: true)
+        try? PrivateFile.createDirectory(paths.root)
+        // Earlier versions created these open to every local account.
+        for directory in paths.ownedDirectories(
+            codexHome: ProcessInfo.processInfo.environment["CODEX_HOME"])
+        {
+            PrivateFile.closeDirectory(directory)
+        }
         writePidFile()
         try? readiness.publishCapabilities(pid: getpid())
         loadState()
@@ -274,10 +280,14 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             else { return }
             self.log("\(notify.sessionID) is already on screen; clearing in short order")
             self.scheduleExpiry(identifier: identifier, after: Agent.watchedGraceSeconds)
+            self.saveState()
         }
     }
 
     private static let watchedGraceSeconds: Double = 3
+    private static let systemSettingsBundleID = "com.apple.systempreferences"
+    /// How long after posting a notification is left out of reconciliation.
+    private static let deliverySettleSeconds: Double = 5
 
     private func deliver(_ notify: NotifyRequest) {
         let identifier = state.newNotification(
@@ -301,9 +311,14 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     /// the 24h prune, rather than the documented GHOSTTY_NOTIFY_TIMEOUT.
     private func scheduleExpiry(identifier: String, after seconds: Double?) {
         expiryTimers.removeValue(forKey: identifier)?.cancel()
-        guard let seconds, seconds > 0 else { return }
-        guard let owner = state.sessionID(forNotification: identifier),
-            let postedAt = state.sessions[owner]?.postedAt
+        let owner = state.sessionID(forNotification: identifier)
+        let lasting = seconds.map { $0 > 0 } ?? false
+        // The deadline goes into the state, and with it to disk: the timer
+        // below does not outlive this process, the notification does.
+        if let owner {
+            state.setExpiry(sessionID: owner, at: lasting ? Agent.now() + (seconds ?? 0) : nil)
+        }
+        guard let seconds, lasting, let owner, let postedAt = state.sessions[owner]?.postedAt
         else { return }
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + seconds, leeway: .seconds(1))
@@ -361,6 +376,12 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     private func activated(bundleID: String?) {
+        // Coming back from System Settings is when its answer may have changed.
+        if lastActivatedBundleID == Agent.systemSettingsBundleID, bundleID != lastActivatedBundleID
+        {
+            refreshSettings()
+        }
+        lastActivatedBundleID = bundleID
         guard bundleID == AgentConstants.ghosttyBundleID else { return }
         withdrawForGhostty(retriesLeft: 1)
     }
@@ -371,10 +392,14 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // dialog — neither belongs on a plain Cmd-Tab with nothing on screen.
         guard state.hasOutstandingNotifications else { return }
 
+        let asked = state.outstanding()
         Ghostty.selectedTabID { [weak self] selected in
-            guard let self else { return }
+            // The answer can take seconds. By then the user may have left
+            // Ghostty again, and a round may have finished meanwhile: neither
+            // that departure nor that notification is covered by the answer.
+            guard let self, self.frontmostIsGhostty else { return }
             let identifiers = self.state.takeNotifications(
-                for: .ghosttyActivated(selectedTabID: selected))
+                for: .ghosttyActivated(selectedTabID: selected), among: asked)
             if !identifiers.isEmpty {
                 self.cancelExpiry(identifiers)
                 self.notifier.withdraw(identifiers)
@@ -509,9 +534,13 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     /// waiting when nothing is.
     private func reconcileWithNotificationCenter() {
         guard state.hasOutstandingNotifications else { return }
+        // Not the newest: a notification handed to the center a moment ago may
+        // not be listed as delivered yet, and one posted while the list is on
+        // its way is not in it at all.
+        let asked = state.outstanding(postedBefore: Agent.now() - Agent.deliverySettleSeconds)
         notifier.deliveredIdentifiers { [weak self] delivered in
             guard let self else { return }
-            let gone = self.state.forgetNotifications(notIn: delivered)
+            let gone = self.state.forgetNotifications(notIn: delivered, among: asked)
             guard !gone.isEmpty else { return }
             self.cancelExpiry(gone)
             self.log("reconciled: \(gone.joined(separator: ",")) no longer on screen")
@@ -533,6 +562,7 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                 // Catches a notification cleared during a long idle stretch, so
                 // the count cannot drift for a whole day.
                 self.reconcileWithNotificationCenter()
+                self.refreshSettings()
             }
         }
         timer.resume()
@@ -569,6 +599,36 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                     + "System Settings › Notifications › \(Self.appName) › Alert Style › "
                     + "Persistent  (deep link: \(Self.notificationSettingsURL))")
             self.offerStyleGuidance(force: false)
+        }
+    }
+
+    /// Permission and style were read once, at launch, and then believed for
+    /// as long as the agent ran. Both can change under it: the menu's Settings
+    /// link exists to make the user change one. Until a restart the menu kept
+    /// its warning, and, worse, the readiness file kept telling the hooks that
+    /// the agent could display notifications after they had been switched off.
+    /// Looked at again when the user leaves System Settings, when the menu
+    /// opens, and hourly. This only reads: it never asks, and never reopens the
+    /// style guidance.
+    private func refreshSettings() {
+        notifier.currentSettings { [weak self] authorized, style in
+            guard let self, !self.shuttingDown else { return }
+            var changed = false
+            let permission = self.permission.updated(authorized: authorized)
+            if permission != self.permission {
+                self.permission = permission
+                if let readiness = permission.readiness { self.publishReadiness(readiness) }
+                self.log("notification permission is now \(permission)")
+                changed = true
+            }
+            if style != self.alertStyle {
+                self.alertStyle = style
+                try? (style + "\n").write(
+                    toFile: self.paths.alertStyleFile, atomically: true, encoding: .utf8)
+                self.log("alert style is now \(style)")
+                changed = true
+            }
+            if changed { self.menuBar?.refresh() }
         }
     }
 
@@ -650,7 +710,8 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             onOpenLog: { [weak self] in
                 guard let self else { return }
                 NSWorkspace.shared.open(URL(fileURLWithPath: self.paths.log))
-            }
+            },
+            onOpen: { [weak self] in self?.refreshSettings() }
         )
     }
 
@@ -669,6 +730,16 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         guard let data = FileManager.default.contents(atPath: paths.state) else { return }
         state = StateCodec.decode(data)
         log("restored \(state.sessions.count) sessions")
+        // Timeouts that ran out while no agent was running, then the rest.
+        let (overdue, pending) = state.resumeExpiries(now: Agent.now())
+        if !overdue.isEmpty {
+            notifier.withdraw(overdue)
+            log("expired while the agent was down: \(overdue.joined(separator: ","))")
+        }
+        for timer in pending {
+            scheduleExpiry(identifier: timer.identifier, after: timer.remaining)
+        }
+        if !overdue.isEmpty { saveState() }
     }
 
     /// Persist bookkeeping and let the menu bar catch up.
@@ -686,7 +757,7 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Atomic: a crash mid-write must not leave bookkeeping that decodes to
         // half a truth. `Data.write(options: .atomic)` handles the
         // does-not-exist-yet case, which replaceItemAt does not.
-        try? data.write(to: URL(fileURLWithPath: paths.state), options: [.atomic])
+        try? PrivateFile.write(data, to: paths.state)
     }
 
     private static func now() -> Double { Date().timeIntervalSince1970 }

@@ -77,6 +77,99 @@ struct BookkeepingTests {
         #expect(state.sessionID(forNotification: "claude-nobody") == nil)
     }
 
+    @Test func aTimeoutSurvivesARestartAndAnOverdueOneIsCollected() throws {
+        var state = SessionState()
+        _ = state.newNotification(sessionID: "soon", now: 100)
+        state.setExpiry(sessionID: "soon", at: 160)
+        _ = state.newNotification(sessionID: "later", now: 100)
+        state.setExpiry(sessionID: "later", at: 400)
+        _ = state.newNotification(sessionID: "never", now: 100)
+        // TIMEOUT=0: stays until focus, a prompt or a click.
+        state.setExpiry(sessionID: "never", at: nil)
+        // Nothing on screen, nothing to expire.
+        state.anchor(sessionID: "idle", tabID: "TAB-1", now: 100)
+        state.setExpiry(sessionID: "idle", at: 160)
+        #expect(state.sessions["idle"]?.expiresAt == nil)
+
+        // The agent goes down at 120 and comes back at 200.
+        var restored = StateCodec.decode(try StateCodec.encode(state))
+        #expect(restored == state)
+        let resumed = restored.resumeExpiries(now: 200)
+        #expect(resumed.overdue == ["claude-soon"])
+        #expect(restored.sessions["soon"]?.expiresAt == nil)
+        #expect(resumed.pending.map(\.identifier) == ["claude-later"])
+        #expect(resumed.pending.first?.remaining == 200)
+        #expect(restored.sessions["never"]?.notificationIDs == ["claude-never"])
+
+        // A replacement notification does not inherit the old deadline.
+        _ = restored.newNotification(sessionID: "later", now: 210)
+        #expect(restored.resumeExpiries(now: 210).pending.isEmpty)
+    }
+
+    @Test func everyDeadlineIsEitherOverdueOrPendingWhateverTheMoment() {
+        // Judged against one reading of the clock. With two, a deadline between
+        // them was neither, and its notification kept no timer.
+        for now in [159.999, 160, 160.001] {
+            var state = SessionState()
+            _ = state.newNotification(sessionID: "edge", now: 100)
+            state.setExpiry(sessionID: "edge", at: 160)
+            let resumed = state.resumeExpiries(now: now)
+            #expect(resumed.overdue.count + resumed.pending.count == 1, "at \(now)")
+            #expect(resumed.overdue.isEmpty == (now < 160), "at \(now)")
+        }
+    }
+
+    @Test func stateWrittenBeforeDeadlinesExistedStillDecodes() {
+        let old = Data(
+            #"{"sessions":{"abc":{"notificationIDs":["claude-abc"],"updatedAt":5,"tabID":"T"}}}"#
+                .utf8)
+        let state = StateCodec.decode(old)
+        #expect(state.sessions["abc"]?.tabID == "T")
+        #expect(state.sessions["abc"]?.expiresAt == nil)
+    }
+
+    @Test func aLateTabAnswerDoesNotWithdrawWhatArrivedWhileItWasPending() {
+        var state = SessionState()
+        state.anchor(sessionID: "old", tabID: "TAB-1", now: 1)
+        _ = state.newNotification(sessionID: "old", now: 10)
+        let asked = state.outstanding()
+        // The tab query is on its way. A round finishes in the same tab, and
+        // another session replaces the notification it already had.
+        state.anchor(sessionID: "new", tabID: "TAB-1", now: 11)
+        _ = state.newNotification(sessionID: "new", now: 11)
+        var replaced = state
+        _ = replaced.newNotification(sessionID: "old", now: 12)
+
+        let taken = state.takeNotifications(
+            for: .ghosttyActivated(selectedTabID: "TAB-1"), among: asked)
+        #expect(taken == ["claude-old"])
+        #expect(state.sessions["new"]?.notificationIDs == ["claude-new"])
+        #expect(
+            replaced.takeNotifications(
+                for: .ghosttyActivated(selectedTabID: "TAB-1"), among: asked) == [])
+        // Without the snapshot the answer is applied to everything, which is
+        // how a notification nobody had seen used to disappear.
+        var unscoped = replaced
+        #expect(
+            unscoped.takeNotifications(for: .ghosttyActivated(selectedTabID: "TAB-1"))
+                == ["claude-new", "claude-old"])
+    }
+
+    @Test func aLateDeliveredListDoesNotForgetWhatItCouldNotHaveListed() {
+        var state = SessionState()
+        _ = state.newNotification(sessionID: "cleared", now: 10)
+        _ = state.newNotification(sessionID: "just-posted", now: 99)
+        // Asked at 100 with five seconds to settle: 99 is too new to judge.
+        let asked = state.outstanding(postedBefore: 95)
+        #expect(asked == ["cleared": 10])
+        _ = state.newNotification(sessionID: "during", now: 100.5)
+
+        let gone = state.forgetNotifications(notIn: [], among: asked)
+        #expect(gone == ["claude-cleared"])
+        #expect(state.sessions["just-posted"]?.notificationIDs == ["claude-just-posted"])
+        #expect(state.sessions["during"]?.notificationIDs == ["claude-during"])
+    }
+
     @Test func pruningDropsStaleSessionsAndReportsOrphans() {
         var state = SessionState()
         _ = state.newNotification(sessionID: "old", now: 0)

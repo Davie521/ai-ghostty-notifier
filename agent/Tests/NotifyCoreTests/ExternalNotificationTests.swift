@@ -43,16 +43,11 @@ private struct FinishedCommand: RunningCommand {
 private final class RecordingCommands: CommandLaunching, @unchecked Sendable {
     private let lock = NSLock()
     private var calls: [(String, [String])] = []
-    let alerterStatus: Int32
     let terminalStatus: Int32
     let action: String
     let failLaunch: Bool
     var recorded: [(String, [String])] { lock.withLock { calls } }
-    init(
-        alerterStatus: Int32 = 0, terminalStatus: Int32 = 0, action: String = "Dismiss",
-        failLaunch: Bool = false
-    ) {
-        self.alerterStatus = alerterStatus
+    init(terminalStatus: Int32 = 0, action: String = "Dismiss", failLaunch: Bool = false) {
         self.terminalStatus = terminalStatus
         self.action = action
         self.failLaunch = failLaunch
@@ -60,17 +55,11 @@ private final class RecordingCommands: CommandLaunching, @unchecked Sendable {
     func start(executable: String, arguments: [String]) throws -> any RunningCommand {
         let name = URL(fileURLWithPath: executable).lastPathComponent
         lock.withLock { calls.append((name, arguments)) }
-        if arguments == ["--help"] {
-            return FinishedCommand(value: .init(status: 0, output: "--close-label --remove"))
-        }
         if arguments.first?.contains("remove") == true {
             return FinishedCommand(value: .init(status: 0))
         }
         if failLaunch { throw CocoaError(.executableNotLoadable) }
-        return FinishedCommand(
-            value: .init(
-                status: name == "alerter" ? alerterStatus : terminalStatus,
-                output: action))
+        return FinishedCommand(value: .init(status: terminalStatus, output: action))
     }
 }
 private final class ProcessAndSignalFixture: ProcessInspecting, ProcessSignalling,
@@ -101,14 +90,11 @@ struct ExternalNotificationTests {
         throws -> HookEvent
     {
         var event = try sandbox.event()
-        for file in ["alerter", "terminal-notifier"] {
-            try sandbox.write(file, "fixture")
-            try FileManager.default.setAttributes(
-                [.posixPermissions: 0o755], ofItemAtPath: sandbox.root.path + "/" + file)
-        }
+        try sandbox.write("terminal-notifier", "fixture")
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: sandbox.root.path + "/terminal-notifier")
         event.homeDirectory = sandbox.root.path
         event.searchPath = sandbox.root.path
-        event.settings["GHOSTTY_NOTIFY_ALERTER"] = sandbox.root.path + "/alerter"
         event.settings["GHOSTTY_NOTIFY_BACKEND"] = backend
         event.settings["GHOSTTY_NOTIFY_CLEAR_ON_FOCUS"] = clear ? "1" : "0"
         event.settings["GHOSTTY_NOTIFY_TIMEOUT"] = "1"
@@ -192,39 +178,111 @@ struct ExternalNotificationTests {
         await external.clear(event, force: true)
         #expect(commands.recorded.contains { $0.1.first == "-remove" })
     }
-    @Test func completedMigrationDoesNotProbeBackendsEveryPrompt() async throws {
+    @Test func aPromptWithNothingOnScreenStartsNoCommand() async throws {
         let sandbox = try HookSandbox()
         let event = try event(sandbox, clear: true)
         let commands = RecordingCommands()
         let external = ExternalNotifications(
             automation: FocusFixture(), launcher: commands, clock: TickClock())
         await external.clear(event)
-        let firstCount = commands.recorded.count
-        #expect(firstCount > 0)
-        await external.clear(event)
-        #expect(commands.recorded.count == firstCount)
+        await external.clear(event, force: true)
+        #expect(commands.recorded.isEmpty)
     }
-    @Test(arguments: ["same", "different-group", "reused-pid"])
-    func legacyPIDRequiresExactGroupAndUnchangedBirth(_ scenario: String) async throws {
+    @Test(arguments: ["same", "different-group", "reused-pid", "another-executable"])
+    func aRecordedBackendIsSignalledOnlyWhenItIsStillThatProcess(_ scenario: String)
+        async throws
+    {
         let sandbox = try HookSandbox()
-        var event = try event(sandbox, clear: true)
-        event.occurredAt = Date().timeIntervalSince1970 + 1
-        try sandbox.write("abc-123.alerter-pid", "456789\n")
+        let event = try event(sandbox, clear: true)
+        let backend = sandbox.root.path + "/terminal-notifier"
+        try sandbox.write(
+            "abc-123.native-notice.json",
+            #"{"token":"t","round":"earlier","postedAt":0,"executable":""# + backend
+                + #"","childPID":456789,"childBirth":"old"}"#)
         let process = ProcessAndSignalFixture()
         process.value = HostProcess(
-            pid: 456789, parent: 1, name: "alerter", executable: sandbox.root.path + "/alerter",
+            pid: 456789, parent: 1, name: "terminal-notifier",
+            executable: scenario == "another-executable" ? "/usr/bin/true" : backend,
             tty: nil, birth: "old")
         process.argv = [
-            "alerter", "--group",
+            "terminal-notifier", "-group",
             scenario == "different-group" ? "other-session" : "ghostty-notify-abc-123",
         ]
         process.changesBirth = scenario == "reused-pid"
         let external = ExternalNotifications(
             automation: FocusFixture(), launcher: RecordingCommands(),
             inspector: process, signaller: process, clock: TickClock())
-        await external.clear(event)
+        await external.clear(event, force: true)
         #expect(process.terminated == (scenario == "same" ? [456789] : []))
     }
+    @Test func pruningIsHourlyAcrossProcessesNotOncePerHook() async throws {
+        let sandbox = try HookSandbox()
+        var event = try event(sandbox)
+        event.occurredAt = Date().timeIntervalSince1970
+        func plant(_ name: String) throws {
+            try sandbox.write(name, "stale")
+            try FileManager.default.setAttributes(
+                [.modificationDate: Date(timeIntervalSince1970: 0)],
+                ofItemAtPath: sandbox.root.path + "/" + name)
+        }
+        func exists(_ name: String) -> Bool {
+            FileManager.default.fileExists(atPath: sandbox.root.path + "/" + name)
+        }
+        try plant("aaa-111.title")
+        await DiskRoundJournal().prepare(event)
+        #expect(!exists("aaa-111.title"))
+        // Every hook is a new process, which a new journal stands in for. Within
+        // the hour it must not list the directory again.
+        try plant("bbb-222.title")
+        event.occurredAt += 1800
+        await DiskRoundJournal().prepare(event)
+        #expect(exists("bbb-222.title"))
+        event.occurredAt += 1801
+        await DiskRoundJournal().prepare(event)
+        #expect(!exists("bbb-222.title"))
+    }
+
+    @Test func recordsArePrivateAndAChosenDirectoryKeepsItsMode() async throws {
+        let sandbox = try HookSandbox()
+        var event = try event(sandbox)
+        func mode(_ path: String) throws -> Int {
+            let attrs = try FileManager.default.attributesOfItem(atPath: path)
+            return (attrs[.posixPermissions] as? NSNumber)?.intValue ?? -1
+        }
+        // The sandbox root stands for a directory the user chose: left as it is.
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: sandbox.root.path)
+        event.sessionDirectory = sandbox.root.path
+        event.rateDirectory = sandbox.root.path + "/made/by/us"
+        event.owner = "1000:ttys001:now"
+        // A prompt, so that the journal writes the round itself rather than
+        // keeping the one the fixture planted.
+        event.payload.hookEventName = "UserPromptSubmit"
+        try FileManager.default.removeItem(atPath: sandbox.root.path + "/abc-123.start")
+        let journal = DiskRoundJournal()
+        event = try await journal.capture(event)
+        await journal.prepare(event)
+        _ = await journal.claimRate(event, now: event.occurredAt)
+        #expect(try mode(sandbox.root.path) == 0o755)
+        #expect(try mode(sandbox.root.path + "/made") == 0o700)
+        #expect(try mode(event.rateDirectory) == 0o700)
+        let records = try FileManager.default.contentsOfDirectory(atPath: sandbox.root.path)
+            .filter { $0.hasPrefix(event.sessionID + ".") && !$0.hasSuffix("lock") }
+        #expect(records.contains(event.sessionID + ".round"))
+        #expect(records.contains(event.sessionID + ".claude-owner"))
+        for name in records + [".pruned"] {
+            let found = try? mode(sandbox.root.path + "/" + name)
+            #expect(found == 0o600, "\(name) has mode \(String(found ?? -1, radix: 8))")
+        }
+        #expect(try mode(DiskRoundJournal.rateFile(event)) == 0o600)
+        // Replacing a record keeps it private and leaves no temporary file.
+        try PrivateFile.write("again\n", to: sandbox.root.path + "/" + event.sessionID + ".round")
+        #expect(try mode(sandbox.root.path + "/" + event.sessionID + ".round") == 0o600)
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: sandbox.root.path)
+                .allSatisfy { !$0.hasSuffix(".tmp") })
+    }
+
     @Test func pruneCannotDeleteUnrelatedFilesInAnOverriddenDirectory() async throws {
         let sandbox = try HookSandbox()
         var event = try event(sandbox)

@@ -5,6 +5,21 @@ import Testing
 
 @Suite("Menu bar state")
 struct MenuBarStateTests {
+    @Test func aChangeMadeInSystemSettingsReplacesTheLaunchTimeAnswer() {
+        // Switched off while the agent runs: the hooks must stop routing to it.
+        #expect(NotificationPermission.granted.updated(authorized: false) == .denied)
+        #expect(NotificationPermission.denied.updated(authorized: true) == .granted)
+        #expect(NotificationPermission.unknown.updated(authorized: true) == .granted)
+        // Nothing on record is not an answer: what launch found stands.
+        for known in [NotificationPermission.unknown, .granted, .denied, .unavailable] {
+            #expect(known.updated(authorized: nil) == known)
+        }
+        #expect(NotificationPermission.granted.readiness == AgentConstants.readyAuthorized)
+        #expect(NotificationPermission.denied.readiness == AgentConstants.readyDenied)
+        #expect(NotificationPermission.unknown.readiness == nil)
+        #expect(NotificationPermission.unavailable.readiness == nil)
+    }
+
     @Test func anIdleAgentShowsNoNumber() {
         let state = MenuBarState.resolve(permission: .granted, alertStyle: "alert", waiting: 0)
         #expect(state == .idle)
@@ -158,8 +173,9 @@ struct WaitingSessionTests {
     // State written before the text was recorded leaves a row with nothing to
     // say. It still has to be visible: the session is waiting on the user.
     @Test func aRowWithNoTextStillNamesItsSession() {
-        #expect(session(id: "0123456789ab", title: "", subtitle: "", body: "").fallbackLabel
-            == "Session 01234567")
+        #expect(
+            session(id: "0123456789ab", title: "", subtitle: "", body: "").fallbackLabel
+                == "Session 01234567")
     }
 }
 

@@ -44,6 +44,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let onShowGuidance: () -> Void
     private let onOpenSettings: () -> Void
     private let onOpenLog: () -> Void
+    private let onOpen: () -> Void
 
     /// There are exactly two icons; drawing them once beats re-running the
     /// bezier construction on every state change.
@@ -68,7 +69,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
         onJump: @escaping (String) -> Void,
         onShowGuidance: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void,
-        onOpenLog: @escaping () -> Void
+        onOpenLog: @escaping () -> Void,
+        onOpen: @escaping () -> Void = {}
     ) {
         self.item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.iconState = iconState
@@ -77,6 +79,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         self.onShowGuidance = onShowGuidance
         self.onOpenSettings = onOpenSettings
         self.onOpenLog = onOpenLog
+        self.onOpen = onOpen
         // Sized from the bar AppKit actually gave us rather than a constant:
         // the thickness differs with accessibility text sizing and on notched
         // displays. The inset is the usual breathing room around a menu bar
@@ -122,6 +125,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
     // MARK: - NSMenuDelegate
 
     func menuNeedsUpdate(_ menu: NSMenu) {
+        onOpen()
         // One snapshot for the icon and the rows: nothing can change between
         // them, and building the rows is the expensive half.
         let current = menuStatus()

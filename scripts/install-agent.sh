@@ -27,14 +27,15 @@
 #   bash scripts/install-agent.sh              install (or update) and start
 #   bash scripts/install-agent.sh --no-start   install the required runtime only
 #   bash scripts/install-agent.sh --uninstall  stop and remove
+#   bash scripts/install-agent.sh --print-launch-agent   print the LaunchAgent, change nothing
 
 set -euo pipefail
 
 START=1
 case "${1:-}" in
     --no-start) START=0 ;;
-    --uninstall|"") ;;
-    *) echo "usage: install-agent.sh [--no-start|--uninstall]" >&2; exit 2 ;;
+    --uninstall|--print-launch-agent|"") ;;
+    *) echo "usage: install-agent.sh [--no-start|--uninstall|--print-launch-agent]" >&2; exit 2 ;;
 esac
 [[ $# -le 1 ]] || { echo "FATAL: too many arguments" >&2; exit 2; }
 [[ "$(uname)" == Darwin ]] || { echo "FATAL: macOS only" >&2; exit 2; }
@@ -52,7 +53,46 @@ APP="$INSTALL_DIR/$BUNDLE_NAME"
 BIN="$APP/Contents/MacOS/ghostty-notify-agent"
 DOMAIN="gui/$(id -u)"
 STATE="$HOME/.claude/notifications/ghostty-agent"
-LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+# Overridable so that a test can run the whole install: the real tool would
+# register a sandbox copy under the bundle identifier the installed app uses.
+LSREGISTER=${GHOSTTY_NOTIFY_LSREGISTER:-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister}
+
+# The LaunchAgent as text. The path is XML-escaped: a home directory with & or <
+# in its name otherwise yields a plist launchd cannot read.
+xml_escape() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+launch_agent_plist() {
+cat <<PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$LABEL</string>
+    <!-- The binary INSIDE the bundle, not \`open -a\`: launchd needs a process
+         that stays alive, and \`open\` exits immediately. Running the bundled
+         executable directly still resolves the bundle identity that
+         UNUserNotificationCenter requires — verified by tests/test-agent.sh,
+         which launches it exactly this way. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>$(xml_escape "$BIN")</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <!-- Restart on a crash, but NOT on a clean exit. A second agent exits 0 on
+         purpose when one is already running (see Singleton.swift); with
+         KeepAlive=true launchd would restart it immediately and spin. -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>
+PLIST_EOF
+}
 
 unload() {
     # bootout fails when nothing is loaded; that is the normal case on a fresh
@@ -65,12 +105,42 @@ unload() {
 # readiness checks would confirm that stale process as
 # healthy — so nothing would ever start the new copy. The liveness markers go
 # too: a recycled pid is exactly what the ps check there defends against.
+# Processes whose executable is the bundled binary, wherever the bundle lives:
+# the resident, and every hook and worker, which run the same file. By
+# executable, not by command line: a shell that merely mentions the path is not
+# one of them.
+agent_pids() {
+    ps -axww -o pid=,comm= 2>/dev/null |
+        awk -v suffix="/$BUNDLE_NAME/Contents/MacOS/ghostty-notify-agent" '
+            { pid = $1; sub(/^[ ]*[0-9]+[ ]+/, "") }
+            length($0) >= length(suffix) && substr($0, length($0) - length(suffix) + 1) == suffix { print pid }'
+}
+
 stop_agents() {
     unload
     pkill -f "/$BUNDLE_NAME/Contents/MacOS/ghostty-notify-agent" 2>/dev/null || true
     rm -f "$STATE/agent.pid" "$STATE/ready" "$STATE/capabilities" "$STATE/native-hook-ready"
-    sleep 1
+    # Wait for them to be gone, not for a second. After SIGTERM a hook takes up
+    # to four seconds to put a tab title back and a worker up to ten to reap its
+    # notification backend, and a version may change how processes exclude each
+    # other (the locks became flock files in 2026-09): old and new must not
+    # work on the same session files side by side. Their own watchdogs end
+    # them; whatever is left after that is killed. A hook that starts from the
+    # old bundle during this wait lives for milliseconds, which is the overlap
+    # that remains.
+    local waited=0 pids pid
+    while pids=$(agent_pids) && [[ -n "$pids" ]] && ((waited < 60)); do
+        sleep 0.25
+        waited=$((waited + 1))
+    done
+    for pid in $(agent_pids); do kill -KILL "$pid" 2>/dev/null || true; done
 }
+
+# Read-only: the LaunchAgent a full install would write for this HOME.
+if [[ "${1:-}" == "--print-launch-agent" ]]; then
+    launch_agent_plist
+    exit 0
+fi
 
 if [[ "${1:-}" == "--uninstall" ]]; then
     stop_agents
@@ -135,6 +205,17 @@ ditto "$BUILT" "$STAGED"
 # Refuse an incomplete/unsigned copy before stopping any running service or
 # replacing the previous installation.
 codesign --verify --deep --strict "$STAGED"
+
+# Written and checked here, while the previous service is still running, so
+# that a plist launchd cannot read is found out before anything is stopped.
+STAGED_PLIST="$STAGING/$LABEL.plist"
+if [[ "$START" == 1 ]]; then
+    launch_agent_plist > "$STAGED_PLIST"
+    plutil -lint "$STAGED_PLIST" >/dev/null || {
+        echo "FATAL: could not write a valid LaunchAgent for $BIN; nothing was changed." >&2
+        exit 2
+    }
+fi
 if [[ "$START" == 1 ]]; then stop_agents; fi
 if [[ -e "$APP" ]]; then mv "$APP" "$PREVIOUS"; fi
 mv "$STAGED" "$APP"
@@ -160,37 +241,7 @@ if [[ -x "$LSREGISTER" ]]; then
 fi
 
 mkdir -p "$(dirname "$PLIST")"
-cat > "$PLIST" <<PLIST_EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>$LABEL</string>
-    <!-- The binary INSIDE the bundle, not \`open -a\`: launchd needs a process
-         that stays alive, and \`open\` exits immediately. Running the bundled
-         executable directly still resolves the bundle identity that
-         UNUserNotificationCenter requires — verified by tests/test-agent.sh,
-         which launches it exactly this way. -->
-    <key>ProgramArguments</key>
-    <array>
-        <string>$BIN</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <!-- Restart on a crash, but NOT on a clean exit. A second agent exits 0 on
-         purpose when one is already running (see Singleton.swift); with
-         KeepAlive=true launchd would restart it immediately and spin. -->
-    <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-    </dict>
-    <key>ProcessType</key>
-    <string>Interactive</string>
-</dict>
-</plist>
-PLIST_EOF
+mv "$STAGED_PLIST" "$PLIST"
 
 # Obtain the notification grant BEFORE handing the agent to launchd.
 #

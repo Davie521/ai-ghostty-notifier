@@ -210,8 +210,8 @@ Claude 首次绑定标签页以及恢复标题的尝试，会在 hook 返回前�
 SQLite 通过只读 C API 查询。构建和安装脚本仍可使用 shell。
 
 职责和证据见[原生迁移文档](docs/native-hook-migration.md)。
-[第一阶段迁移](docs/hook-migration.md)及冻结的 shell 测试样本是历史对照，
-不是安装后可用的兜底实现。
+[第一阶段迁移](docs/hook-migration.md)是历史记录。其中描述的 shell 实现不是安装后可用的兜底；
+它和与之对照的测试套件已在迁移完成后删除，保留在 git 历史里。
 
 ## 排查与局限
 
@@ -249,7 +249,7 @@ bash tests/test-agent.sh
 常驻集成测试需要 Aqua 和仅供测试使用的 jq；没有 Aqua 时会明确输出 SKIP。
 安装测试使用私有 HOME、真实签名 App 和拦截服务命令的保护桩；
 不注册 LaunchAgent，也不测试需要人工应答的权限流程。
-历史 shell 样本测试仍需 jq，但生产 hook 不需要。
+生产 hook 不依赖 jq。
 
 另有两项检查需要手动运行：它们依赖正在运行的 Ghostty，而 CI 里没有。
 部署任何改动了 Apple Events 或原生进程启动流程的构建之前，先跑一遍：

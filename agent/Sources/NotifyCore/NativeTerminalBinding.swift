@@ -96,6 +96,8 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
     /// Short on purpose: the causes seen so far (an unanswered Automation
     /// prompt, a wedged Ghostty) clear on their own, unlike a denied permission.
     public static let stallBackoff: Double = 60
+    /// How long a terminal is given to show a title that was just written.
+    static let titleSettle: Double = 0.15
 
     public init(
         automation: any TerminalAutomationProviding,
@@ -151,7 +153,7 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
             stalledAt = now
             // Other hook processes cannot see this actor. The stamp is how the
             // next one avoids paying the same timeout for the same condition.
-            try? "\(now)\n".write(toFile: stallStamp(event), atomically: true, encoding: .utf8)
+            try? PrivateFile.write("\(now)\n", to: stallStamp(event))
             log(
                 "terminal query abandoned after \(queryTimeout)s; "
                     + "skipping terminal binding for \(Int(Self.stallBackoff))s")
@@ -221,11 +223,24 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
                 // this one when the session was resumed in another tab. A tab
                 // still showing the marker is still attached to that terminal.
                 try writer.write(title: restorable(original.title), tty: record.tty)
-                log("restored a title left behind by an interrupted binding")
             } catch {
                 log("terminal restoration failed: \(error)")
                 return false
             }
+            // A terminal shows a title a moment after it was written. The
+            // caller takes a new baseline next, and a marker still showing in
+            // it would be set aside as a leftover: this run's own marker, the
+            // same text, would land on that tab and be ignored, and the tab
+            // would keep it with the record already gone. So the record goes
+            // only once the marker is seen to be gone.
+            try? await clock.sleep(seconds: Self.titleSettle)
+            guard let settled = try? await snapshot(event),
+                !settled.contains(where: { $0.id == stuck.id && $0.title == marker })
+            else {
+                log("a restored title has not taken effect yet; binding skipped for now")
+                return false
+            }
+            log("restored a title left behind by an interrupted binding")
         }
         discard()
         return true
@@ -236,7 +251,7 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
         let value = cached(event, pid: pid)?.tabID
         return value?.isEmpty == false ? value : nil
     }
-    public func clearLegacy(_ event: HookEvent) async {
+    public func clearExternal(_ event: HookEvent) async {
         if event.options.clearOnFocus { await clear(event) }
     }
     public func resolve(_ event: HookEvent) async -> String? {
@@ -257,7 +272,7 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
         try? FileManager.default.removeItem(atPath: sentinel)
         if recentlyStalled(Double(DiskRoundJournal.read(stallStamp(event)))) { return nil }
         let stallsBefore = stalledAt
-        guard let lease = DirectoryLease.acquire(path(event, "lock"), timeout: 0, staleAfter: 120)
+        guard let lease = FileLease.acquire(path(event, "lock"), timeout: 0)
         else { return await existing(event) }
         defer { lease.release() }
         if let record = cached(event, pid: pid) {
@@ -292,8 +307,7 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
                     [-1743, -1708, -2741, CocoaError.fileReadNoPermission.rawValue]
                         .contains((error as NSError).code)
                 {
-                    try? Data("unavailable\n".utf8).write(
-                        to: URL(fileURLWithPath: sentinel), options: .atomic)
+                    try? PrivateFile.write("unavailable\n", to: sentinel)
                 }
                 log("terminal snapshot unavailable: \(error)")
                 return nil
@@ -333,7 +347,7 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
             // Restoration runs even when sleep/lookup fails or a newer prompt
             // cancels us. Never put a cancellation check ahead of restoration.
             do {
-                try await clock.sleep(seconds: 0.15)
+                try await clock.sleep(seconds: Self.titleSettle)
                 result = try await snapshot(event).first(where: {
                     $0.title == marker && !stale.contains($0.id)
                 })?.id
@@ -349,7 +363,7 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
             if stalledAt != stallsBefore { return nil }
         }
         guard current(event), !Task.isCancelled, await automation.processID() == pid,
-            let journalLease = DirectoryLease.acquire(path(event, "round-lock"))
+            let journalLease = FileLease.acquire(path(event, "round-lock"))
         else { return nil }
         defer { journalLease.release() }
         guard current(event) else { return nil }
@@ -363,8 +377,7 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
                 publish(event, tab: "", pid: pid)
                 try? FileManager.default.removeItem(atPath: path(event, "attempts"))
             } else {
-                try? "\(attempts)\n".write(
-                    toFile: path(event, "attempts"), atomically: true, encoding: .utf8)
+                try? PrivateFile.write("\(attempts)\n", to: path(event, "attempts"))
             }
         }
         return result
@@ -421,7 +434,7 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
         let record = Record(tabID: tab, cwd: event.payload.cwd, ghosttyPID: pid.map(String.init))
         guard let data = try? JSONEncoder().encode(record) else { return false }
         do {
-            try data.write(to: URL(fileURLWithPath: path(event, "json")), options: .atomic)
+            try PrivateFile.write(data, to: path(event, "json"))
             return true
         } catch {
             log("cannot publish terminal binding: \(error)")

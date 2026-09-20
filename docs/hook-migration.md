@@ -1,5 +1,10 @@
 # Hook / resident-agent migration
 
+> The frozen shell baseline (`tests/fixtures/shell-baseline/`), the suites that drove it
+> (`tests/test_codex_hooks.py`, four `tests/test-*.sh` files) and `tests/benchmark-hooks.py`
+> were removed on 2026-09-20; the last commit that has them is `0f1ba95`. What follows is a
+> record of what was measured at the time.
+
 Historical first-stage snapshot. The [native migration](native-hook-migration.md)
 supersedes the runtime layout below. The shell implementations mentioned here
 now live only in `tests/fixtures/shell-baseline/`, not in installed hooks. These

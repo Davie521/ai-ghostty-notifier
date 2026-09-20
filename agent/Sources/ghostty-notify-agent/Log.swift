@@ -14,7 +14,9 @@ enum AgentLog {
         let line = "\(stamp()) \(message)\n"
         guard let data = line.data(using: .utf8) else { return }
         guard let handle = FileHandle(forWritingAtPath: path) else {
-            try? data.write(to: URL(fileURLWithPath: path))
+            // The log names sessions and titles: private from its first line.
+            FileManager.default.createFile(
+                atPath: path, contents: data, attributes: [.posixPermissions: 0o600])
             return
         }
         defer { try? handle.close() }

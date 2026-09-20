@@ -12,12 +12,13 @@
 
 set -euo pipefail
 
-# Isolated verification builds must not stop the installed service or alter
-# LaunchServices registration. The resulting bundle is otherwise identical.
-ACTIVATE=1
+# Building only builds. It never stops the installed service, removes its
+# readiness markers or changes LaunchServices registration: a build that did
+# left the machine without its notifier until someone ran the installer.
+# Deploying is scripts/install-agent.sh, which stops, replaces, registers and
+# restarts. --build-only is still accepted, since it is what the docs and CI say.
 case "${1:-}" in
-    --build-only) ACTIVATE=0 ;;
-    "") ;;
+    --build-only | "") ;;
     *) echo "usage: build-agent.sh [--build-only]" >&2; exit 2 ;;
 esac
 
@@ -38,23 +39,6 @@ echo "==> Building $BINARY_NAME (release)"
 swift build -c release --package-path "$REPO/agent"
 BUILT=$(swift build -c release --package-path "$REPO/agent" --show-bin-path)/"$BINARY_NAME"
 [[ -x "$BUILT" ]] || { echo "FATAL: $BUILT missing after build" >&2; exit 2; }
-
-# Stop the old agent BEFORE replacing the bundle. A running agent keeps
-# executing from the deleted inode, and readiness checks can still confirm
-# that stale process as healthy — so `open -a` never starts
-# the rebuilt bundle and every fix in this build stays inert until logout.
-if [[ "$ACTIVATE" == 1 ]]; then
-    echo "==> Stopping any running agent"
-    LABEL="io.github.davie521.cgnotify"
-    launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-    pkill -f "$APP/Contents/MacOS/$BINARY_NAME" 2>/dev/null || true
-    # The pidfile has to go too: agent_running reads it, and a pid that has been
-    # recycled by an unrelated process is exactly what its ps check defends against.
-    rm -f "$HOME/.claude/notifications/ghostty-agent/agent.pid" \
-          "$HOME/.claude/notifications/ghostty-agent/ready" \
-          "$HOME/.claude/notifications/ghostty-agent/capabilities" \
-          "$HOME/.claude/notifications/ghostty-agent/native-hook-ready"
-fi
 
 echo "==> Assembling $APP"
 rm -rf "$APP"
@@ -89,10 +73,5 @@ done
 echo "==> Signing (ad-hoc)"
 codesign --sign - --force --timestamp=none "$APP" >/dev/null 2>&1 ||
     echo "  warning: codesign failed; the linker's implicit signature will have to do" >&2
-
-# Register with LaunchServices so `open -a` and notification delivery resolve
-# the bundle without waiting for a periodic rescan.
-LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
-if [[ "$ACTIVATE" == 1 && -x "$LSREGISTER" ]]; then "$LSREGISTER" -f "$APP"; fi
 
 echo "==> Built $APP"

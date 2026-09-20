@@ -27,6 +27,11 @@ public struct SessionRecord: Equatable, Sendable {
     /// When the outstanding notification was posted. Separate from `updatedAt`,
     /// which an anchor moves without anything new being on screen.
     public var postedAt: Double
+    /// When the outstanding notification is due to be withdrawn, or nil when it
+    /// stays until focus, a prompt or a click. Kept here, and so on disk, since
+    /// a timer alone dies with the process: an agent restarted by an upgrade or
+    /// a login left every surviving notification without its timeout.
+    public var expiresAt: Double?
 
     public init(
         tabID: String? = nil,
@@ -38,7 +43,8 @@ public struct SessionRecord: Equatable, Sendable {
         body: String = "",
         postedAt: Double = 0,
         roundID: String? = nil,
-        owner: String? = nil
+        owner: String? = nil,
+        expiresAt: Double? = nil
     ) {
         self.tabID = tabID
         self.notificationIDs = notificationIDs
@@ -50,6 +56,7 @@ public struct SessionRecord: Equatable, Sendable {
         self.postedAt = postedAt
         self.roundID = roundID
         self.owner = owner
+        self.expiresAt = expiresAt
     }
 
     /// Drop the notification's text once nothing is on screen for this session.
@@ -66,6 +73,7 @@ public struct SessionRecord: Equatable, Sendable {
         subtitle = ""
         body = ""
         postedAt = 0
+        expiresAt = nil
     }
 }
 
@@ -147,8 +155,39 @@ public struct SessionState: Equatable, Sendable {
         record.body = body
         record.postedAt = now
         record.roundID = roundID
+        // A replacement starts its own clock; the caller sets it.
+        record.expiresAt = nil
         sessions[sessionID] = record
         return id
+    }
+
+    /// When a session's outstanding notification is due to go, or nil for never.
+    public mutating func setExpiry(sessionID: String, at deadline: Double?) {
+        guard sessions[sessionID]?.notificationIDs.isEmpty == false else { return }
+        sessions[sessionID]?.expiresAt = deadline
+    }
+
+    /// Every outstanding deadline, judged against one moment: those that passed
+    /// while nothing was there to act on them are forgotten and handed back, the
+    /// rest come back with the seconds they have left. One `now` for both, so a
+    /// deadline cannot fall between two readings of the clock and end up in
+    /// neither, which would leave its notification with no timer at all.
+    public mutating func resumeExpiries(now: Double) -> (
+        overdue: [String], pending: [(identifier: String, remaining: Double)]
+    ) {
+        var overdue: [String] = []
+        var pending: [(identifier: String, remaining: Double)] = []
+        for sessionID in sessions.keys.sorted() {
+            guard let record = sessions[sessionID], !record.notificationIDs.isEmpty,
+                let deadline = record.expiresAt
+            else { continue }
+            if deadline <= now {
+                overdue += takeNotifications(sessionID: sessionID)
+            } else {
+                pending += record.notificationIDs.map { ($0, deadline - now) }
+            }
+        }
+        return (overdue, pending)
     }
 
     /// How many sessions are waiting on the user.
@@ -219,17 +258,39 @@ public struct SessionState: Equatable, Sendable {
         }
     }
 
+    /// What is on screen at this moment: each waiting session and when its
+    /// notification was posted. Both questions this process asks about its
+    /// notifications, which tab is selected and which are still delivered, are
+    /// answered later, from another thread's callback. The answer is applied
+    /// only to what was there when the question was put, so a notification
+    /// posted in between is never withdrawn or forgotten on stale evidence.
+    /// `postedBefore` leaves out the newest ones: posting is asynchronous, and a
+    /// notification handed over a moment ago may not count as delivered yet.
+    public func outstanding(postedBefore limit: Double = .infinity) -> [String: Double] {
+        sessions.filter { !$0.value.notificationIDs.isEmpty && $0.value.postedAt < limit }
+            .mapValues(\.postedAt)
+    }
+
+    private func unchanged(_ sessionID: String, since asked: [String: Double]?) -> Bool {
+        guard let asked else { return true }
+        return asked[sessionID] == sessions[sessionID]?.postedAt
+    }
+
     /// Forget every identifier that is no longer among `delivered`, and return
-    /// them.
+    /// them. With `among`, only for sessions unchanged since that snapshot.
     ///
     /// The user can clear a notification from Notification Center without this
     /// process hearing about it — most reliably while the agent is not running
     /// at all. Bookkeeping that outlives the notification used to be invisible;
     /// with a count on the menu bar it is a standing lie.
-    public mutating func forgetNotifications(notIn delivered: Set<String>) -> [String] {
+    public mutating func forgetNotifications(
+        notIn delivered: Set<String>, among asked: [String: Double]? = nil
+    ) -> [String] {
         var gone: [String] = []
         for sessionID in sessions.keys.sorted() {
-            guard var record = sessions[sessionID], !record.notificationIDs.isEmpty else {
+            guard var record = sessions[sessionID], !record.notificationIDs.isEmpty,
+                unchanged(sessionID, since: asked)
+            else {
                 continue
             }
             let missing = record.notificationIDs.filter { !delivered.contains($0) }
@@ -275,10 +336,15 @@ public struct SessionState: Equatable, Sendable {
     /// match — when the tab query fails we leave it alone rather than clear a
     /// notification for a tab the user is not on. A session that opted out of
     /// clear-on-focus is never withdrawn this way at all.
-    public mutating func takeNotifications(for event: FocusEvent) -> [String] {
+    ///
+    /// With `among`, only sessions unchanged since that snapshot.
+    public mutating func takeNotifications(
+        for event: FocusEvent, among asked: [String: Double]? = nil
+    ) -> [String] {
         guard case .ghosttyActivated(let selectedTabID) = event else { return [] }
         // Deterministic order so assertions do not depend on dictionary layout.
         return sessionsMatching(selectedTabID: selectedTabID)
+            .filter { unchanged($0, since: asked) }
             .flatMap { takeNotifications(sessionID: $0) }
     }
 

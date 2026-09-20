@@ -6,14 +6,12 @@ private struct ExternalNotice: Codable {
     var round: String
     var postedAt: Double
     var executable: String
-    var modern: Bool
     var childPID: Int32?
     var childBirth: String?
 }
 
 /// Native display-only fallback for terminal-notifier. No click command or
 /// long-lived focus watcher is installed. The next prompt removes the group.
-/// Legacy alerter support exists only to clean up pre-migration notifications.
 public actor ExternalNotifications {
     private let launcher: any CommandLaunching
     private let inspector: any ProcessInspecting
@@ -51,55 +49,24 @@ public actor ExternalNotifications {
             .flatMap { try? JSONDecoder().decode(ExternalNotice.self, from: $0) }
     }
     private func owns(_ event: HookEvent, _ token: String) -> Bool { notice(event)?.token == token }
-    private func alerter(_ event: HookEvent) -> String? {
-        let value =
-            event.settings["GHOSTTY_NOTIFY_ALERTER"].flatMap { $0.isEmpty ? nil : $0 }
-            ?? ExecutableSearch.find("alerter", event: event)
-        return value.flatMap { FileManager.default.isExecutableFile(atPath: $0) ? $0 : nil }
-    }
-    private func modern(_ executable: String) async -> Bool {
-        guard let child = try? launcher.start(executable: executable, arguments: ["--help"]) else {
-            return false
-        }
-        return await child.result(timeout: 2).output.contains("--close-label")
-    }
-    private func remove(executable: String, modern: Bool, event: HookEvent) async {
+    private func remove(executable: String, event: HookEvent) async {
         guard
             let child = try? launcher.start(
-                executable: executable,
-                arguments: [modern ? "--remove" : "-remove", group(event)])
+                executable: executable, arguments: ["-remove", group(event)])
         else { return }
         // Withdrawal is cleanup: let this bounded command finish even when
         // the delivery task was cancelled while its banner was visible.
         _ = await Task { await child.result(timeout: 2) }.value
     }
-    private func stop(
-        pid: Int32?, birth: String?, event: HookEvent, watcher: Bool = false,
-        executable: String? = nil
-    ) {
+    private func stop(pid: Int32?, birth: String?, event: HookEvent, executable: String) {
         guard let pid, pid > 1, pid != getpid(), let process = inspector.process(pid),
             birth == nil || process.birth == birth
         else { return }
         let args = inspector.arguments(pid)
-        let valid: Bool
-        if watcher {
-            valid =
-                args.contains {
-                    URL(fileURLWithPath: $0).lastPathComponent == "ghostty-notify-clear.sh"
-                }
-                && zip(args, args.dropFirst()).contains { $0 == "--watch" && $1 == event.sessionID }
-        } else {
-            let sameExecutable =
-                executable.map {
-                    URL(fileURLWithPath: process.executable).resolvingSymlinksInPath().path
-                        == URL(fileURLWithPath: $0).resolvingSymlinksInPath().path
-                } ?? (URL(fileURLWithPath: process.executable).lastPathComponent == "alerter")
-            valid =
-                sameExecutable
-                && zip(args, args.dropFirst()).contains {
-                    ($0 == "--group" || $0 == "-group") && $1 == group(event)
-                }
-        }
+        let valid =
+            URL(fileURLWithPath: process.executable).resolvingSymlinksInPath().path
+            == URL(fileURLWithPath: executable).resolvingSymlinksInPath().path
+            && zip(args, args.dropFirst()).contains { $0 == "-group" && $1 == group(event) }
         // Re-read birth immediately before signalling: never trust a stale PID
         // file or a substring match on another session's command line.
         if valid, inspector.process(pid)?.birth == process.birth { signaller.terminate(pid) }
@@ -107,7 +74,7 @@ public actor ExternalNotifications {
 
     public func clear(_ event: HookEvent, force: Bool = false) async {
         guard force || event.options.clearOnFocus, current(event),
-            let lease = DirectoryLease.acquire(path(event, "delivery-lock"), timeout: 5)
+            let lease = FileLease.acquire(path(event, "delivery-lock"), timeout: 5)
         else { return }
         defer { lease.release() }
         guard current(event) else { return }
@@ -115,45 +82,12 @@ public actor ExternalNotifications {
             // Same-round Notification may already have overtaken this prompt.
             guard force || (record.round != event.roundID && record.postedAt <= event.occurredAt)
             else { return }
-            await remove(executable: record.executable, modern: record.modern, event: event)
+            await remove(executable: record.executable, event: event)
             stop(
                 pid: record.childPID, birth: record.childBirth, event: event,
                 executable: record.executable)
             try? FileManager.default.removeItem(atPath: path(event, "native-notice.json"))
         }
-        await clearLegacy(event)
-    }
-
-    private func clearLegacy(_ event: HookEvent) async {
-        let pidFile = path(event, "alerter-pid")
-        let stamp = path(event, "legacy-cleared")
-        let legacyPIDExists = ["alerter-pid", "watch-pid"].contains {
-            FileManager.default.fileExists(atPath: path(event, $0))
-        }
-        if !legacyPIDExists, FileManager.default.fileExists(atPath: stamp) { return }
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: pidFile),
-            let date = attrs[.modificationDate] as? Date,
-            date.timeIntervalSince1970 > event.occurredAt
-        {
-            return
-        }
-        for suffix in ["watch-pid", "alerter-pid"] {
-            stop(
-                pid: Int32(DiskRoundJournal.read(path(event, suffix))), birth: nil,
-                event: event, watcher: suffix == "watch-pid")
-            try? FileManager.default.removeItem(atPath: path(event, suffix))
-        }
-        // terminal-notifier never wrote a PID. Check both legacy senders even
-        // when there is no PID file, but only once per migrated session; an absent group
-        // is a no-op. All calls are bounded and receive EOF on stdin.
-        if let executable = alerter(event) {
-            let dialect = await modern(executable)
-            await remove(executable: executable, modern: dialect, event: event)
-        }
-        if let executable = ExecutableSearch.find("terminal-notifier", event: event) {
-            await remove(executable: executable, modern: false, event: event)
-        }
-        try? "cleared\n".write(toFile: stamp, atomically: true, encoding: .utf8)
     }
 
     public func deliver(_ request: NotifyRequest, event: HookEvent) async {
@@ -162,7 +96,7 @@ public actor ExternalNotifications {
             log("no usable notification backend; install/authorize the native agent")
             return
         }
-        guard let lease = DirectoryLease.acquire(path(event, "delivery-lock"), timeout: 5) else {
+        guard let lease = FileLease.acquire(path(event, "delivery-lock"), timeout: 5) else {
             return
         }
         guard !Task.isCancelled, current(event), clock.now() < event.expiresAt else {
@@ -186,11 +120,11 @@ public actor ExternalNotifications {
         }
         let record = ExternalNotice(
             token: UUID().uuidString, round: event.roundID,
-            postedAt: clock.now(), executable: executable, modern: false,
+            postedAt: clock.now(), executable: executable,
             childPID: child.pid, childBirth: inspector.process(child.pid)?.birth)
         do {
-            try JSONEncoder().encode(record).write(
-                to: URL(fileURLWithPath: path(event, "native-notice.json")), options: .atomic)
+            try PrivateFile.write(
+                JSONEncoder().encode(record), to: path(event, "native-notice.json"))
         } catch {
             child.cancel()
             lease.release()
@@ -211,12 +145,12 @@ public actor ExternalNotifications {
     }
 
     private func withdraw(_ event: HookEvent, record: ExternalNotice) async {
-        guard let lease = DirectoryLease.acquire(path(event, "delivery-lock"), timeout: 5) else {
+        guard let lease = FileLease.acquire(path(event, "delivery-lock"), timeout: 5) else {
             return
         }
         defer { lease.release() }
         guard owns(event, record.token) else { return }
-        await remove(executable: record.executable, modern: record.modern, event: event)
+        await remove(executable: record.executable, event: event)
         stop(
             pid: record.childPID, birth: record.childBirth, event: event,
             executable: record.executable)

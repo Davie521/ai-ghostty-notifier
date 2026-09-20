@@ -16,7 +16,7 @@ public struct SystemHookClock: HookClockProviding {
 public protocol TerminalBindingProviding: Sendable {
     func existing(_ event: HookEvent) async -> String?
     func resolve(_ event: HookEvent) async -> String?
-    func clearLegacy(_ event: HookEvent) async
+    func clearExternal(_ event: HookEvent) async
 }
 
 /// Shared policy/lifecycle for the resident app and native fallback worker.
@@ -105,7 +105,7 @@ public final class HookProcessor {
             let tab = await binding.existing(event)
             guard await journal.isCurrent(event), !Task.isCancelled, !closing else { return }
             onPrompt(event, tab)
-            await binding.clearLegacy(event)
+            await binding.clearExternal(event)
             log("handled UserPromptSubmit \(event.key) round=\(event.roundID)")
             return
         }

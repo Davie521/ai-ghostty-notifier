@@ -14,6 +14,26 @@ public enum NotificationPermission: Equatable, Sendable {
     case granted
     case denied
     case unavailable
+
+    /// What a later look at the system's settings makes of the answer. The
+    /// user can change it in System Settings while the agent runs, and the
+    /// menu's own link sends them there. `authorized` is nil while macOS has
+    /// nothing on record, which says no more than was known: only the
+    /// launch-time request can tell "never asked" from "could not ask".
+    public func updated(authorized: Bool?) -> NotificationPermission {
+        guard let authorized else { return self }
+        return authorized ? .granted : .denied
+    }
+
+    /// The value the hooks read to decide whether routing through the agent
+    /// would display anything; nil where there is no answer to publish.
+    public var readiness: String? {
+        switch self {
+        case .granted: return AgentConstants.readyAuthorized
+        case .denied: return AgentConstants.readyDenied
+        case .unknown, .unavailable: return nil
+        }
+    }
 }
 
 /// A reason the agent cannot put anything on screen at all.
