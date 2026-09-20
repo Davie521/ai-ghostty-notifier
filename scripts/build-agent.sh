@@ -47,16 +47,36 @@ install -m 755 "$BUILT" "$CONTENTS/MacOS/$BINARY_NAME"
 install -m 644 "$REPO/agent/Resources/Info.plist" "$CONTENTS/Info.plist"
 install -m 644 "$REPO/agent/Resources/native-hook-v1" "$CONTENTS/Resources/native-hook-v1"
 
-# Borrow Claude's icon so the notification looks like it came from Claude rather
-# than from a generic binary. Purely cosmetic — a missing icon is not an error.
-for icon in \
-    "/Applications/Claude.app/Contents/Resources/AppIcon.icns" \
-    "$HOME/Applications/Claude.app/Contents/Resources/AppIcon.icns"; do
-    if [[ -f "$icon" ]]; then
-        install -m 644 "$icon" "$CONTENTS/Resources/AppIcon.icns"
-        break
+# The icon this notification carries. It used to be Claude's own icon, copied
+# out of /Applications/Claude.app — which stopped being honest once the agent
+# started serving Codex CLI too, and was never there on a machine with only the
+# CLI installed. It is now this project's ghost bell, converted from
+# agent/Resources/AppIcon.png (1024x1024, transparent background) at build time:
+# a readable PNG in the repo beats a committed binary .icns, and both sips and
+# iconutil ship with macOS. Purely cosmetic — a failure here is not an error.
+ICON_SRC="$REPO/agent/Resources/AppIcon.png"
+if [[ -f "$ICON_SRC" ]]; then
+    ICONSET=$(mktemp -d)/AppIcon.iconset
+    mkdir -p "$ICONSET"
+    icon_ok=1
+    for size in 16 32 128 256 512; do
+        # Every size twice: macOS picks @2x on Retina, and an .icns missing them
+        # gets upscaled from the 1x slice and looks soft in the notification.
+        sips -z "$size" "$size" "$ICON_SRC" \
+            --out "$ICONSET/icon_${size}x${size}.png" >/dev/null 2>&1 || icon_ok=0
+        sips -z $((size * 2)) $((size * 2)) "$ICON_SRC" \
+            --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null 2>&1 || icon_ok=0
+    done
+    if [[ $icon_ok -eq 1 ]] &&
+        iconutil -c icns "$ICONSET" -o "$CONTENTS/Resources/AppIcon.icns" 2>/dev/null; then
+        :
+    else
+        echo "  warning: could not build AppIcon.icns; the agent will show a generic icon" >&2
     fi
-done
+    rm -rf "$(dirname "$ICONSET")"
+else
+    echo "  warning: $ICON_SRC missing; the agent will show a generic icon" >&2
+fi
 
 # UNNotificationSound resolves a named sound against the app bundle, not against
 # /System/Library/Sounds — unlike terminal-notifier, whose vocabulary
