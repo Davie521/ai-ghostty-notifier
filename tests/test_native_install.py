@@ -7,6 +7,7 @@ are exercised here. The resident's lifecycle has a separate integration suite.
 import json
 import os
 from pathlib import Path
+import plistlib
 import shutil
 import subprocess
 import sys
@@ -55,7 +56,7 @@ class NativeInstallTests(unittest.TestCase):
         self.bin.mkdir()
         # No jq, notification backend or shell worker is available.
         for command in ("uname", "dirname", "id", "mkdir", "mktemp", "ditto", "codesign",
-                        "mv", "rm", "rmdir", "cp", "chmod", "cat"):
+                        "mv", "rm", "rmdir", "cp", "chmod", "cat", "sed", "plutil", "seq"):
             executable = shutil.which(command, path="/usr/bin:/bin:/usr/sbin:/sbin")
             if executable is None:
                 raise RuntimeError("Missing installer utility " + command)
@@ -261,6 +262,51 @@ class NativeInstallTests(unittest.TestCase):
         (self.checkout / "hooks/ghostty-tab-save.sh").write_text("#!/bin/bash\nif\n")
         self.run_script("install.sh", success=False)
         self.assertEqual({p.name: p.read_bytes() for p in destination.iterdir()}, before)
+
+    def test_launch_agent_is_valid_for_a_home_with_xml_metacharacters(self):
+        # The full install is not run here: it registers with LaunchServices.
+        # What it writes is what this mode prints.
+        home = self.root / "a&b <c>"
+        result = self.run_script("scripts/install-agent.sh", "--print-launch-agent", env={"HOME": str(home)})
+        agent = plistlib.loads(result.stdout.encode())
+        self.assertEqual(agent["ProgramArguments"], [str(
+            home / "Library/Application Support/claude-ghostty-notify" / "ClaudeGhosttyNotify.app" / EXECUTABLE)])
+        self.assertEqual(agent["Label"], "io.github.davie521.cgnotify")
+        self.assertFalse(home.exists())
+
+    def test_full_install_checks_its_launch_agent_before_stopping_anything(self):
+        # The only test of the path that starts a service. Every service command
+        # is a stand-in, LaunchServices included, and HOME has the characters
+        # that used to break the plist after the old agent had been stopped.
+        home = self.root / "a&b <c>"
+        calls = self.root / "full-install-calls"
+        self.stub("launchctl", '''if [[ ! -e "$CALLS" ]]; then
+    for staged in "$HOME/Library/Application Support/claude-ghostty-notify"/.native-install.*/*.plist; do
+        plutil -lint "$staged" >/dev/null && echo "valid plist staged before the first service command" >> "$CALLS"
+    done
+fi
+echo "launchctl $1" >> "$CALLS"
+''')
+        self.stub("lsregister", 'echo "lsregister $1" >> "$CALLS"\n')
+        self.stub("pkill", 'echo pkill >> "$CALLS"\n')
+        self.stub("sleep", "exit 0\n")
+        # Stands in for the agent answering the permission prompt.
+        self.stub("open", 'mkdir -p "$HOME/.claude/notifications/ghostty-agent" && '
+                  'echo authorized > "$HOME/.claude/notifications/ghostty-agent/ready"\n')
+        result = subprocess.run(
+            ["/bin/bash", str(self.checkout / "scripts/install-agent.sh")], cwd=self.checkout,
+            env={**self.env, "HOME": str(home), "CALLS": str(calls),
+                 "GHOSTTY_NOTIFY_LSREGISTER": str(self.bin / "lsregister")},
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        recorded = calls.read_text().splitlines()
+        self.assertEqual(recorded[0], "valid plist staged before the first service command")
+        self.assertEqual(recorded[-1], "launchctl bootstrap")
+        agent = plistlib.loads((home / "Library/LaunchAgents/io.github.davie521.cgnotify.plist").read_bytes())
+        installed = home / "Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app"
+        self.assertEqual(agent["ProgramArguments"], [str(installed / EXECUTABLE)])
+        self.assertTrue((installed / MARKER).is_file())
+        self.assertEqual(list(installed.parent.glob(".native-install.*")), [])
 
     def test_unknown_option_aborts_without_writes(self):
         self.run_script("scripts/install-agent.sh", "--typo", success=False)
