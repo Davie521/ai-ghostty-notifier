@@ -284,20 +284,25 @@ echo ready > "$mark.ready"
 while :; do /bin/sleep 0.05; done
 '''
 
-    def full_install(self, home, ps_stub):
-        """The whole install, with a stand-in for every service command."""
+    def full_install(self, home, ps_stub, launchd=""):
+        """The whole install, with a stand-in for every service command.
+
+        `launchd` is shell that runs inside the launchctl stand-in after the
+        call has been recorded, with the subcommand in $1.
+        """
         calls = self.root / "full-install-calls"
         self.stub("launchctl", '''if [[ ! -e "$CALLS" ]]; then
     for staged in "$HOME/Library/Application Support/claude-ghostty-notify"/.native-install.*/*.plist; do
         plutil -lint "$staged" >/dev/null && echo "valid plist staged before the first service command" >> "$CALLS"
     done
 fi
-echo "launchctl $1" >> "$CALLS"
-''')
+[[ "$1" == print ]] || echo "launchctl $1" >> "$CALLS"
+STATE="$HOME/.claude/notifications/ghostty-agent"
+''' + launchd)
         self.stub("lsregister", 'echo "lsregister $1" >> "$CALLS"\n')
         self.stub("pkill", 'echo "pkill $*" >> "$CALLS"\n')
         # Only the wait for processes to exit really waits; the rest would take a minute.
-        self.stub("sleep", '[[ "$1" == 0.25 ]] && exec /bin/sleep 0.25\nexit 0\n')
+        self.stub("sleep", '[[ "$1" == 0.25 ]] && exec /bin/sleep 0.05\nexit 0\n')
         # Stands in for the agent answering the permission prompt.
         self.stub("open", 'mkdir -p "$HOME/.claude/notifications/ghostty-agent" && '
                   'echo authorized > "$HOME/.claude/notifications/ghostty-agent/ready"\n')
@@ -309,6 +314,27 @@ echo "launchctl $1" >> "$CALLS"
             capture_output=True, text=True, timeout=60)
         return result, (calls.read_text().splitlines() if calls.exists() else [])
 
+    def stand_in(self, name, script, installed):
+        """A real process for the installer to find. Returns (process, mark file)."""
+        mark = self.root / (name.replace(" ", "-") + ".mark")
+        process = subprocess.Popen([str(script), str(mark), str(installed)])
+        self.addCleanup(process.wait)
+        self.addCleanup(process.kill)
+        deadline = time.monotonic() + 5
+        while not Path(str(mark) + ".ready").exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        return process, mark
+
+    @staticmethod
+    def listed(process, path):
+        """One line of `ps -o pid=,lstart=,comm=` for a real process under a staged path."""
+        started = subprocess.check_output(["/bin/ps", "-o", "lstart=", "-p", str(process.pid)], text=True).strip()
+        return "{:>5} {} {}\n".format(process.pid, started, path)
+
+    # The listing is staged; a question about one pid goes to the real ps,
+    # since the stand-ins are real processes.
+    REAL_PS_FOR_ONE_PID = 'if [[ " $* " == *" -p "* ]]; then exec /bin/ps "$@"; fi\n'
+
     def test_full_install_waits_for_its_own_processes_and_touches_no_others(self):
         # The only test of the path that starts a service. HOME has the
         # characters that used to break the plist after the old agent had been
@@ -319,37 +345,22 @@ echo "launchctl $1" >> "$CALLS"
         helper.write_text(self.HELPER)
         helper.chmod(0o755)
         names = ("hook of this installation", "resident started from a checkout", "test agent of another checkout")
-        running = {}
-        for name in names:
-            mark = self.root / (name.replace(" ", "-") + ".mark")
-            process = subprocess.Popen([str(helper), str(mark), str(installed)])
-            self.addCleanup(process.wait)
-            self.addCleanup(process.kill)
-            running[name] = (process, mark)
-        for process, mark in running.values():
-            deadline = time.monotonic() + 5
-            while not Path(str(mark) + ".ready").exists() and time.monotonic() < deadline:
-                time.sleep(0.02)
+        running = {name: self.stand_in(name, helper, installed) for name in names}
         state = home / ".claude/notifications/ghostty-agent"
         state.mkdir(parents=True)
         (state / "agent.pid").write_text("{}\n".format(running[names[1]][0].pid))
         elsewhere = "/another/checkout/build/ClaudeGhosttyNotify.app/" + EXECUTABLE
-        table = "".join("{:>5} {}\n".format(pid, path) for pid, path in (
-            (running[names[0]][0].pid, installed / EXECUTABLE),
-            (running[names[1]][0].pid, elsewhere),
-            (running[names[2]][0].pid, elsewhere),
+        (self.root / "process-table").write_text(
+            self.listed(running[names[0]][0], installed / EXECUTABLE)
+            + self.listed(running[names[1]][0], elsewhere)
+            + self.listed(running[names[2]][0], elsewhere)
             # A shell that only mentions the binary, as `ps` shows it: by its executable.
-            (501, "/bin/zsh"),
-        ))
-        (self.root / "process-table").write_text(table)
-        # The listing is staged; a question about one pid goes to the real ps,
-        # since the stand-ins are real processes.
+            + "  501 Sun 20 Sep 10:00:00 2026 /bin/zsh\n")
         result, recorded = self.full_install(
-            home, 'if [[ " $* " == *" -p "* ]]; then exec /bin/ps "$@"; fi\ncat "{}"\n'.format(
-                self.root / "process-table"))
+            home, self.REAL_PS_FOR_ONE_PID + 'cat "{}"\n'.format(self.root / "process-table"))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(recorded[0], "valid plist staged before the first service command")
-        self.assertEqual(recorded[-1], "launchctl bootstrap")
+        self.assertIn("launchctl bootstrap", recorded)
         # Signalled by pid, from the list of executables: nothing is matched by command line any more.
         self.assertEqual([line for line in recorded if line.startswith("pkill")], [])
         for name in names[:2]:
@@ -365,6 +376,67 @@ echo "launchctl $1" >> "$CALLS"
         self.assertEqual(agent["ProgramArguments"], [str(installed / EXECUTABLE)])
         self.assertTrue((installed / MARKER).is_file())
         self.assertEqual(list(installed.parent.glob(".native-install.*")), [])
+
+    def test_a_pid_that_was_given_to_another_process_is_left_alone(self):
+        # The list of owned processes is acted on for up to twenty seconds. A
+        # listed process may exit in that time and its number go to something
+        # else, which must then be neither waited for nor killed. The bystander
+        # here ignores SIGTERM, so without the check it would sit out the wait
+        # and be killed at the end of it.
+        home = self.root / "home-with-a-reused-pid"
+        installed = home / "Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app"
+        stubborn = self.root / "bystander"
+        stubborn.write_text("#!/bin/bash\ntrap '' TERM\necho ready > \"$1.ready\"\nwhile :; do /bin/sleep 0.05; done\n")
+        stubborn.chmod(0o755)
+        bystander, _ = self.stand_in("bystander with a reused pid", stubborn, installed)
+        (self.root / "process-table").write_text(self.listed(bystander, installed / EXECUTABLE))
+        # Asked about that pid: the first answer is the real one, and from the
+        # second on it is a process that started at another time.
+        asked = self.root / "asked-about-the-pid"
+        ps_stub = '''if [[ " $* " == *" -p "* ]]; then
+    count=$(($(cat "{asked}" 2>/dev/null || echo 0) + 1)); echo "$count" > "{asked}"
+    if ((count == 1)); then exec /bin/ps "$@"; fi
+    echo "S    Thu  1 Jan 00:00:00 1970"; exit 0
+fi
+cat "{table}"
+'''.format(asked=asked, table=self.root / "process-table")
+        result, _ = self.full_install(home, ps_stub)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIsNone(bystander.poll(), "a process that only shares a pid with a listed one was killed")
+        # Dropped as soon as it was seen to be another process, not checked 80 times.
+        self.assertLess(int(asked.read_text()), 10)
+
+    def test_full_install_ends_with_the_resident_that_launchd_started(self):
+        # A hook of a session in use starts the app when it finds none, and can
+        # win the moment between the previous agent leaving and launchd
+        # starting its own. launchd's copy then bows out with status 0 and is
+        # not restarted: a resident runs, and nothing would bring it back.
+        home = self.root / "home-with-an-interloper"
+        installed = home / "Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app"
+        helper = self.root / "previous-version"
+        helper.write_text(self.HELPER)
+        helper.chmod(0o755)
+        interloper, asked_to_stop = self.stand_in("resident started by a hook", helper, installed)
+        launchds, _ = self.stand_in("resident started by launchd", helper, installed)
+        (self.root / "table-with-interloper").write_text(self.listed(interloper, installed / EXECUTABLE))
+        (self.root / "table-with-launchds").write_text(self.listed(launchds, installed / EXECUTABLE))
+        ps_stub = self.REAL_PS_FOR_ONE_PID + '''if [[ -e "$CALLS.kickstarted" ]]; then cat "{after}"
+elif [[ -e "$CALLS.bootstrapped" ]]; then cat "{before}"
+fi
+'''.format(before=self.root / "table-with-interloper", after=self.root / "table-with-launchds")
+        launchd = '''case "$1" in
+    bootstrap) : > "$CALLS.bootstrapped"; mkdir -p "$STATE"; echo {interloper} > "$STATE/agent.pid" ;;
+    kickstart) : > "$CALLS.kickstarted"; mkdir -p "$STATE"; echo {launchds} > "$STATE/agent.pid" ;;
+    print) if [[ -e "$CALLS.kickstarted" ]]; then printf '\\tstate = running\\n\\tpid = {launchds}\\n'; else printf '\\tstate = not running\\n'; fi ;;
+esac
+'''.format(interloper=interloper.pid, launchds=launchds.pid)
+        result, recorded = self.full_install(home, ps_stub, launchd)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("launchctl kickstart", recorded)
+        self.assertEqual(asked_to_stop.read_text().splitlines()[0], "asked to stop; new bundle in place: yes")
+        self.assertEqual(interloper.wait(timeout=5), 0)
+        self.assertIsNone(launchds.poll(), "the resident launchd started was stopped as well")
+        self.assertIn("running under launchd as pid {}".format(launchds.pid), result.stdout)
 
     def test_full_install_stops_nothing_when_processes_cannot_be_listed(self):
         # An empty list and a failed listing used to look the same, and the

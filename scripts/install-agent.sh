@@ -100,7 +100,7 @@ unload() {
     launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
 }
 
-# The processes this installation owns, one pid per line.
+# The processes this installation owns, one per line: "<pid> <start time>".
 #
 # Whatever runs the installed binary: the resident, and every hook and worker,
 # which run the same file. And the resident that serves this HOME when it was
@@ -109,47 +109,54 @@ unload() {
 # that mentions the path is not one of them, and neither is a test agent that
 # another checkout runs against a home of its own.
 #
+# The start time is the identity. A pid alone is a number the system hands out
+# again, and this list is acted on for up to twenty seconds.
+#
 # Fails when processes cannot be listed, which is not the same as there being
 # none.
-owned_pids() {
+owned_processes() {
     local table resident
-    table=$(ps -axww -o pid=,comm=) || return 1
+    table=$(ps -axww -o pid=,lstart=,comm=) || return 1
     resident=$(cat "$STATE/agent.pid" 2>/dev/null || true)
     printf '%s\n' "$table" |
         awk -v bin="$BIN" -v resident="$resident" \
             -v suffix="/$BUNDLE_NAME/Contents/MacOS/ghostty-notify-agent" '
-            { pid = $1; path = $0; sub(/^[ ]*[0-9]+[ ]+/, "", path) }
-            path == bin { print pid; next }
+            {
+                pid = $1; started = $2 " " $3 " " $4 " " $5 " " $6; path = $0
+                for (field = 0; field < 6; field++) sub(/^[ ]*[^ ]+[ ]+/, "", path)
+            }
+            path == bin { print pid, started; next }
             pid == resident && length(path) >= length(suffix) &&
-                substr(path, length(path) - length(suffix) + 1) == suffix { print pid }'
+                substr(path, length(path) - length(suffix) + 1) == suffix { print pid, started }'
+}
+
+# True while "<pid> <start time>" is still that process and still running.
+# False once it is gone, and also when it has exited but its parent has not
+# collected it yet, which kill -0 cannot tell (such a process holds no lock and
+# writes nothing, and a slow parent must not cost the whole wait), and when the
+# pid now belongs to a process that started at another time.
+still_running() {
+    local pid=$1 started=$2 state day month date clock year
+    kill -0 "$pid" 2>/dev/null || return 1
+    read -r state day month date clock year < <(ps -o stat=,lstart= -p "$pid" 2>/dev/null) || return 1
+    [[ "$state" != Z* && "$day $month $date $clock $year" == "$started" ]]
 }
 
 # Ask them to stop, and wait until they have, not for a second. After SIGTERM a
 # hook takes up to four seconds to put a tab title back and a worker up to ten
 # to reap its notification backend, and a version may change how processes
 # exclude each other (the locks became flock files in 2026-09): old and new
-# must not work on the same session files side by side, and launchd must not
-# be handed a new agent while the previous one still holds its place, or the
-# new one bows out and nothing is left running. Their own watchdogs end them;
-# what is left after about twenty seconds is killed.
+# must not work on the same session files side by side. Their own watchdogs
+# end them; what is left after about twenty seconds is killed.
 #
 # Only the processes listed at the start are waited for and, if need be,
-# killed. A hook that a running session starts meanwhile is none of them: it
-# lives for milliseconds and is left to finish.
-# kill -0 alone also answers for a process that has exited and is waiting for
-# its parent to collect it. Such a process holds no lock and writes nothing, and
-# a parent that is slow to collect must not cost the full wait below.
-still_running() {
-    local state
-    kill -0 "$1" 2>/dev/null || return 1
-    # It existed a moment ago, so a ps that fails here says nothing: keep waiting.
-    state=$(ps -o stat= -p "$1" 2>/dev/null) || return 0
-    [[ "$state" != Z* ]]
-}
-
+# killed, each only for as long as it is still the process that was listed. A
+# hook that a running session starts meanwhile is none of them: it lives for
+# milliseconds and is left to finish. A resident that such a hook starts is
+# dealt with where it matters, at the handover to launchd below.
 terminate_owned() {
-    local pids pid left="" waited=0
-    if ! pids=$(owned_pids); then
+    local list line left waited=0
+    if ! list=$(owned_processes); then
         # Too late to turn back when something has been stopped already, so
         # allow the longest grace there is instead of confirming the exits.
         echo "  warning: cannot list processes; waiting 10 s instead of confirming that the previous version has exited" >&2
@@ -159,17 +166,25 @@ terminate_owned() {
         sleep 10
         return 0
     fi
-    for pid in $pids; do kill -TERM "$pid" 2>/dev/null || true; done
-    while ((waited < 80)); do
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && kill -TERM "${line%% *}" 2>/dev/null || true
+    done <<<"$list"
+    while [[ -n "$list" ]] && ((waited < 80)); do
         left=""
-        for pid in $pids; do
-            if still_running "$pid"; then left="$left $pid"; fi
-        done
-        [[ -z "$left" ]] && return 0
+        while IFS= read -r line; do
+            [[ -n "$line" ]] || continue
+            if still_running "${line%% *}" "${line#* }"; then left="$left$line"$'\n'; fi
+        done <<<"$list"
+        # What has been seen to go is never looked at again.
+        list=$left
+        [[ -z "$list" ]] && return 0
         sleep 0.25
         waited=$((waited + 1))
     done
-    for pid in $left; do kill -KILL "$pid" 2>/dev/null || true; done
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        if still_running "${line%% *}" "${line#* }"; then kill -KILL "${line%% *}" 2>/dev/null || true; fi
+    done <<<"$list"
 }
 
 # A running agent keeps executing from the old inode after the bundle is
@@ -179,7 +194,7 @@ terminate_owned() {
 stop_agents() {
     # Asked before anything is stopped: if processes cannot be listed, this is
     # the moment to find out, while the previous service is still running.
-    owned_pids >/dev/null || {
+    owned_processes >/dev/null || {
         echo "FATAL: cannot list running processes (ps failed); nothing was stopped or changed." >&2
         exit 2
     }
@@ -361,16 +376,42 @@ esac
 unload
 launchctl bootstrap "$DOMAIN" "$PLIST"
 
-# Installed means running: a LaunchAgent that is loaded but whose process
-# never came up looks identical from the outside, and that is how a stale
-# path went unnoticed for weeks. Wait for the pidfile launchd's instance
-# writes, and name the command that explains a failure.
-for _ in $(seq 1 20); do
-    [[ -s "$STATE/agent.pid" ]] && break
-    sleep 0.5
+# Installed means running, and running under launchd. A LaunchAgent that is
+# loaded but whose process never came up looks identical from the outside, and
+# that is how a stale path went unnoticed for weeks. And a resident that is
+# running need not be launchd's: a hook of a session in use starts the app
+# when it finds none, which it can do in the moment between the previous agent
+# leaving and launchd starting its own. launchd's copy then finds the
+# single-instance lock taken, exits 0, and a clean exit is not restarted. What
+# is left works, and nothing brings it back when it dies. So the end state is
+# checked, and put right: stop whoever holds the place, start launchd's again.
+launchd_pid() {
+    launchctl print "$DOMAIN/$LABEL" 2>/dev/null | awk '$1 == "pid" && $2 == "=" { print $3; exit }'
+}
+supervised() {
+    local mine
+    mine=$(launchd_pid)
+    [[ -n "$mine" && "$mine" == "$(cat "$STATE/agent.pid" 2>/dev/null || true)" ]]
+}
+for attempt in 1 2 3; do
+    for _ in $(seq 1 20); do
+        supervised && break
+        sleep 0.5
+    done
+    supervised && break
+    if [[ -s "$STATE/agent.pid" ]]; then
+        echo "    the resident that is running was not started by launchd; replacing it (attempt $attempt of 3)"
+    fi
+    terminate_owned
+    rm -f "$STATE/agent.pid" "$STATE/ready" "$STATE/capabilities" "$STATE/native-hook-ready"
+    launchctl kickstart "$DOMAIN/$LABEL" 2>/dev/null || true
 done
-if [[ -s "$STATE/agent.pid" ]] && kill -0 "$(cat "$STATE/agent.pid")" 2>/dev/null; then
-    echo "==> Installed $LABEL, running as pid $(cat "$STATE/agent.pid")"
+if supervised; then
+    echo "==> Installed $LABEL, running under launchd as pid $(cat "$STATE/agent.pid")"
+elif [[ -s "$STATE/agent.pid" ]] && kill -0 "$(cat "$STATE/agent.pid")" 2>/dev/null; then
+    echo "==> Installed $LABEL. A resident is running as pid $(cat "$STATE/agent.pid"), but launchd did not start it" >&2
+    echo "    and will not restart it. Rerun this script when no Claude or Codex session is busy, or:" >&2
+    echo "    launchctl print $DOMAIN/$LABEL" >&2
 else
     echo "==> Installed $LABEL, but the agent has not started:" >&2
     echo "    launchctl print $DOMAIN/$LABEL" >&2
