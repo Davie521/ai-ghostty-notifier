@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/ghost-bell.png" alt="AI Ghostty Notifier ghost bell logo" width="144" height="144">
+</p>
+
 # ai-ghostty-notifier
 
 [![CI](https://github.com/Davie521/ai-ghostty-notifier/actions/workflows/ci.yml/badge.svg)](https://github.com/Davie521/ai-ghostty-notifier/actions/workflows/ci.yml)
