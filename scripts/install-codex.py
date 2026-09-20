@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -53,7 +54,14 @@ TUI_ALERTS_KEPT = ["approval-requested", "plan-mode-prompt"]
 
 
 def hook_command(destination, event):
-    return '"{}" {}'.format(destination / "codex-hook.sh", event)
+    # Codex runs this string through a shell. Double quotes are the form every
+    # existing installation has trusted, and they are safe for an ordinary path,
+    # spaces included. They are not for the four characters a shell still
+    # interprets inside them: such a path gets quoting that leaves nothing live.
+    script = str(destination / "codex-hook.sh")
+    if any(character in script for character in '$`"\\'):
+        return "{} {}".format(shlex.quote(script), event)
+    return '"{}" {}'.format(script, event)
 
 
 def our_handler(destination, event):

@@ -56,6 +56,22 @@ class InstallerTests(unittest.TestCase):
         })
         self.assertEqual(installer.EVENTS, ("UserPromptSubmit", "Stop"))
 
+    def test_hook_command_survives_any_directory_name(self):
+        # Codex hands the command to a shell. Whatever the directory is called,
+        # the hook has to run and nothing in its name may be executed.
+        for name in ("hooks $(touch substituted)", "hooks `touch substituted`", 'it"s $HOME',
+                     "back\\slash", "plain dir", "o'brien"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as root:
+                destination = Path(root) / name
+                destination.mkdir()
+                script = destination / "codex-hook.sh"
+                script.write_text('#!/bin/bash\necho "ran with $1"\n')
+                script.chmod(0o755)
+                command = installer.our_handler(destination, "Stop")["command"]
+                result = subprocess.run(["/bin/sh", "-c", command], capture_output=True, text=True, cwd=root)
+                self.assertEqual(result.stdout, "ran with Stop\n", result.stderr)
+                self.assertFalse((Path(root) / "substituted").exists())
+
     def test_merge_updates_in_place_and_keeps_other_hooks_where_they_are(self):
         mine = {"type": "command", "command": "/my/stop-logger"}
         lint = {"type": "command", "command": "/my/lint"}
