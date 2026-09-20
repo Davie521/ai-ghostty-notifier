@@ -496,10 +496,10 @@ while :; do /bin/sleep 0.05; done
         self.assertEqual(mark.read_text(), "hook exit 0\n")
         self.assertFalse(started.exists(), "a hook started the previous version while it was being stopped")
         self.assertIn("native runtime missing", Path(str(mark) + ".stderr").read_text())
-        # And open again, as the new version.
+        # And open again, as the new version. Compared, not run: running a
+        # bundle's binary registers that bundle with LaunchServices.
         self.assertTrue(os.access(installed / EXECUTABLE, os.X_OK))
-        version = subprocess.check_output([str(installed / EXECUTABLE), "--hook-runtime-version"], text=True)
-        self.assertEqual(version.strip(), "native-hook-v1")
+        self.assertEqual((installed / EXECUTABLE).read_bytes(), (self.built / EXECUTABLE).read_bytes())
 
     def test_the_previous_version_can_start_again_when_the_install_fails(self):
         home = self.root / "home-where-the-swap-fails"

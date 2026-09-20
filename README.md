@@ -65,6 +65,15 @@ The first command only builds and signs the checkout's app. The second
 and opens the notification-permission flow. Do not use the install command when
 you only want to test a build.
 
+Upgrading while sessions are in use is fine. Before it stops the previous
+version, the installer takes the execute bit off the installed binary, so that a
+hook firing in those seconds cannot start a process of the old version that would
+outlive the replacement. Until the new copy is in place, usually a second or two
+and at most about twenty, hooks find no runtime and do nothing: a notification
+due in that window is not shown. If the install fails or is interrupted, the bit
+goes back on and the previous version keeps working. Only `kill -9` on the
+installer can leave it off; rerun the installer to put that right.
+
 The app is copied to
 `~/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app`.
 Both hook entrypoints and launchd use this durable location, so moving the source
