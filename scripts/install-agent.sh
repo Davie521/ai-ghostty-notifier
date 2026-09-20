@@ -105,11 +105,35 @@ unload() {
 # readiness checks would confirm that stale process as
 # healthy — so nothing would ever start the new copy. The liveness markers go
 # too: a recycled pid is exactly what the ps check there defends against.
+# Processes whose executable is the bundled binary, wherever the bundle lives:
+# the resident, and every hook and worker, which run the same file. By
+# executable, not by command line: a shell that merely mentions the path is not
+# one of them.
+agent_pids() {
+    ps -axww -o pid=,comm= 2>/dev/null |
+        awk -v suffix="/$BUNDLE_NAME/Contents/MacOS/ghostty-notify-agent" '
+            { pid = $1; sub(/^[ ]*[0-9]+[ ]+/, "") }
+            length($0) >= length(suffix) && substr($0, length($0) - length(suffix) + 1) == suffix { print pid }'
+}
+
 stop_agents() {
     unload
     pkill -f "/$BUNDLE_NAME/Contents/MacOS/ghostty-notify-agent" 2>/dev/null || true
     rm -f "$STATE/agent.pid" "$STATE/ready" "$STATE/capabilities" "$STATE/native-hook-ready"
-    sleep 1
+    # Wait for them to be gone, not for a second. After SIGTERM a hook takes up
+    # to four seconds to put a tab title back and a worker up to ten to reap its
+    # notification backend, and a version may change how processes exclude each
+    # other (the locks became flock files in 2026-09): old and new must not
+    # work on the same session files side by side. Their own watchdogs end
+    # them; whatever is left after that is killed. A hook that starts from the
+    # old bundle during this wait lives for milliseconds, which is the overlap
+    # that remains.
+    local waited=0 pids pid
+    while pids=$(agent_pids) && [[ -n "$pids" ]] && ((waited < 60)); do
+        sleep 0.25
+        waited=$((waited + 1))
+    done
+    for pid in $(agent_pids); do kill -KILL "$pid" 2>/dev/null || true; done
 }
 
 # Read-only: the LaunchAgent a full install would write for this HOME.

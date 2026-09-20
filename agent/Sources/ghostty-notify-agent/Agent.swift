@@ -731,13 +731,13 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         state = StateCodec.decode(data)
         log("restored \(state.sessions.count) sessions")
         // Timeouts that ran out while no agent was running, then the rest.
-        let overdue = state.takeExpired(now: Agent.now())
+        let (overdue, pending) = state.resumeExpiries(now: Agent.now())
         if !overdue.isEmpty {
             notifier.withdraw(overdue)
             log("expired while the agent was down: \(overdue.joined(separator: ","))")
         }
-        for pending in state.pendingExpiries(now: Agent.now()) {
-            scheduleExpiry(identifier: pending.identifier, after: pending.remaining)
+        for timer in pending {
+            scheduleExpiry(identifier: timer.identifier, after: timer.remaining)
         }
         if !overdue.isEmpty { saveState() }
     }

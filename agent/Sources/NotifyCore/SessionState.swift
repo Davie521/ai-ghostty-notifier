@@ -167,22 +167,27 @@ public struct SessionState: Equatable, Sendable {
         sessions[sessionID]?.expiresAt = deadline
     }
 
-    /// Forget, and hand back, the notifications whose deadline passed while
-    /// nothing was there to act on it.
-    public mutating func takeExpired(now: Double) -> [String] {
-        sessions.filter {
-            !$0.value.notificationIDs.isEmpty && ($0.value.expiresAt ?? .infinity) <= now
+    /// Every outstanding deadline, judged against one moment: those that passed
+    /// while nothing was there to act on them are forgotten and handed back, the
+    /// rest come back with the seconds they have left. One `now` for both, so a
+    /// deadline cannot fall between two readings of the clock and end up in
+    /// neither, which would leave its notification with no timer at all.
+    public mutating func resumeExpiries(now: Double) -> (
+        overdue: [String], pending: [(identifier: String, remaining: Double)]
+    ) {
+        var overdue: [String] = []
+        var pending: [(identifier: String, remaining: Double)] = []
+        for sessionID in sessions.keys.sorted() {
+            guard let record = sessions[sessionID], !record.notificationIDs.isEmpty,
+                let deadline = record.expiresAt
+            else { continue }
+            if deadline <= now {
+                overdue += takeNotifications(sessionID: sessionID)
+            } else {
+                pending += record.notificationIDs.map { ($0, deadline - now) }
+            }
         }
-        .keys.sorted().flatMap { takeNotifications(sessionID: $0) }
-    }
-
-    /// The deadlines still ahead, as seconds from `now`, by notification.
-    public func pendingExpiries(now: Double) -> [(identifier: String, remaining: Double)] {
-        sessions.keys.sorted().flatMap { sessionID -> [(identifier: String, remaining: Double)] in
-            guard let record = sessions[sessionID], let deadline = record.expiresAt, deadline > now
-            else { return [] }
-            return record.notificationIDs.map { ($0, deadline - now) }
-        }
+        return (overdue, pending)
     }
 
     /// How many sessions are waiting on the user.

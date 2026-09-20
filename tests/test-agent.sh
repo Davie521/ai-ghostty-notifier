@@ -43,6 +43,7 @@ fi
 
 SANDBOX=$(mktemp -d)
 AGENT_PID=""
+STARTED=()
 stop_agent() {
     [[ -n "$AGENT_PID" ]] || return 0
     local pid="$AGENT_PID" i=0 result=0
@@ -86,6 +87,9 @@ cleanup() {
     fi
     # Reap even a hung test app before deleting its private state directory.
     stop_agent || echo "Test cleanup required a forced agent exit" >&2
+    # Every contender of section 1 too, should the run have ended in there.
+    local pid
+    for pid in ${STARTED[@]+"${STARTED[@]}"}; do kill -KILL "$pid" 2>/dev/null || true; done
     rm -rf "$SANDBOX"
 }
 trap cleanup EXIT
@@ -152,24 +156,45 @@ NATIVE_SID="deadbeef-2222-3333"
 EXPIRING="deadbeef-4444"
 KEPT="deadbeef-5555"
 
-# ── 1. The agent starts and claims its pidfile ─────────────────────────────
-"$BIN" >/dev/null 2>&1 &
-AGENT_PID=$!
+# ── 1. Three start together, one stays, and it claims its pidfile ──────────
+# launchd and `open -a` can start the agent at the same moment, and two of them
+# split the spool and overwrite each other's state.json. Started one after the
+# other they have always sorted themselves out through the pid file; started
+# together, every one of them used to stay. So: together.
+for _ in 1 2 3; do
+    "$BIN" >/dev/null 2>&1 &
+    STARTED+=("$!")
+done
+alive_agents() {
+    local pid
+    for pid in "${STARTED[@]}"; do
+        if kill -0 "$pid" 2>/dev/null; then printf '%s\n' "$pid"; fi
+    done
+    return 0
+}
+one_agent_left() { [[ "$(alive_agents | wc -l | tr -d ' ')" == 1 ]]; }
 check "agent starts and writes a pidfile" \
     wait_for 15 test -f "$ROOT/agent.pid"
+check "of three agents started together, exactly one stays" wait_for 10 one_agent_left
+AGENT_PID=$(cat "$ROOT/agent.pid" 2>/dev/null || true)
+# Whatever the check above said, the rest of this file needs exactly one agent,
+# and a contender that stayed must not outlive the test either. Killed before
+# it is waited for: waiting for a process that stays never returns.
+LEAVERS_OK=1
+for pid in "${STARTED[@]}"; do
+    [[ "$pid" == "$AGENT_PID" ]] && continue
+    if kill -0 "$pid" 2>/dev/null; then
+        kill -KILL "$pid" 2>/dev/null || true
+        LEAVERS_OK=0
+    fi
+    wait "$pid" 2>/dev/null || LEAVERS_OK=0
+done
+check "the others left by themselves with status 0, so launchd does not restart them" \
+    test "$LEAVERS_OK" = 1
+check "and said why" log_has "another agent is already running"
+check "the one that stays is the one in the pidfile" kill -0 "$AGENT_PID"
 check "agent logs its bundle identity (proves it is bundled, not a bare binary)" \
     wait_for 15 log_has "bundle=io.github.davie521.cgnotify"
-
-# One agent per HOME. launchd and `open -a` can start it at the same moment, and
-# two of them split the spool and overwrite each other's state.json.
-"$BIN" >/dev/null 2>&1 &
-SECOND_PID=$!
-second_gone() { ! kill -0 "$SECOND_PID" 2>/dev/null; }
-check "a second agent leaves by itself" wait_for 10 second_gone
-wait "$SECOND_PID" 2>/dev/null; SECOND_STATUS=$?
-check "and leaves with status 0, so launchd does not restart it" test "$SECOND_STATUS" = 0
-check "and says why" log_has "another agent is already running as $AGENT_PID"
-kill -KILL "$SECOND_PID" 2>/dev/null || true
 
 # Everything below is meaningless if the agent is not actually draining, so
 # establish that first with a request whose only effect is a log line.

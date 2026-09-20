@@ -56,7 +56,7 @@ class NativeInstallTests(unittest.TestCase):
         self.bin.mkdir()
         # No jq, notification backend or shell worker is available.
         for command in ("uname", "dirname", "id", "mkdir", "mktemp", "ditto", "codesign",
-                        "mv", "rm", "rmdir", "cp", "chmod", "cat", "sed", "plutil", "seq"):
+                        "mv", "rm", "rmdir", "cp", "chmod", "cat", "sed", "plutil", "seq", "awk"):
             executable = shutil.which(command, path="/usr/bin:/bin:/usr/sbin:/sbin")
             if executable is None:
                 raise RuntimeError("Missing installer utility " + command)
@@ -288,6 +288,18 @@ fi
 echo "launchctl $1" >> "$CALLS"
 ''')
         self.stub("lsregister", 'echo "lsregister $1" >> "$CALLS"\n')
+        # A worker of the previous version that needs three more polls to finish
+        # cleaning up after SIGTERM. The pid cannot exist, should it ever be signalled.
+        self.stub("ps", '''polls=$(($(cat "$CALLS.polls" 2>/dev/null || echo 0) + 1))
+echo "$polls" > "$CALLS.polls"
+if ((polls <= 3)); then
+    installed=no
+    [[ -e "$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app" ]] && installed=yes
+    echo "old worker still running; new bundle in place: $installed" >> "$CALLS"
+    echo "99999999 /somewhere/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent"
+fi
+echo "  501 /bin/zsh -c cat /x/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent.log"
+''')
         self.stub("pkill", 'echo pkill >> "$CALLS"\n')
         self.stub("sleep", "exit 0\n")
         # Stands in for the agent answering the permission prompt.
@@ -302,6 +314,12 @@ echo "launchctl $1" >> "$CALLS"
         recorded = calls.read_text().splitlines()
         self.assertEqual(recorded[0], "valid plist staged before the first service command")
         self.assertEqual(recorded[-1], "launchctl bootstrap")
+        # The old worker was waited for, and nothing was replaced under it. The
+        # shell that only mentions the path was not taken for one, or the wait
+        # would have run to its limit and the polls would not stop at four.
+        self.assertEqual(recorded.count("old worker still running; new bundle in place: no"), 3)
+        self.assertNotIn("old worker still running; new bundle in place: yes", recorded)
+        self.assertEqual((self.root / "full-install-calls.polls").read_text().strip(), "5")
         agent = plistlib.loads((home / "Library/LaunchAgents/io.github.davie521.cgnotify.plist").read_bytes())
         installed = home / "Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app"
         self.assertEqual(agent["ProgramArguments"], [str(installed / EXECUTABLE)])

@@ -94,16 +94,29 @@ struct BookkeepingTests {
         // The agent goes down at 120 and comes back at 200.
         var restored = StateCodec.decode(try StateCodec.encode(state))
         #expect(restored == state)
-        #expect(restored.takeExpired(now: 200) == ["claude-soon"])
+        let resumed = restored.resumeExpiries(now: 200)
+        #expect(resumed.overdue == ["claude-soon"])
         #expect(restored.sessions["soon"]?.expiresAt == nil)
-        let pending = restored.pendingExpiries(now: 200)
-        #expect(pending.map(\.identifier) == ["claude-later"])
-        #expect(pending.first?.remaining == 200)
+        #expect(resumed.pending.map(\.identifier) == ["claude-later"])
+        #expect(resumed.pending.first?.remaining == 200)
         #expect(restored.sessions["never"]?.notificationIDs == ["claude-never"])
 
         // A replacement notification does not inherit the old deadline.
         _ = restored.newNotification(sessionID: "later", now: 210)
-        #expect(restored.pendingExpiries(now: 210).isEmpty)
+        #expect(restored.resumeExpiries(now: 210).pending.isEmpty)
+    }
+
+    @Test func everyDeadlineIsEitherOverdueOrPendingWhateverTheMoment() {
+        // Judged against one reading of the clock. With two, a deadline between
+        // them was neither, and its notification kept no timer.
+        for now in [159.999, 160, 160.001] {
+            var state = SessionState()
+            _ = state.newNotification(sessionID: "edge", now: 100)
+            state.setExpiry(sessionID: "edge", at: 160)
+            let resumed = state.resumeExpiries(now: now)
+            #expect(resumed.overdue.count + resumed.pending.count == 1, "at \(now)")
+            #expect(resumed.overdue.isEmpty == (now < 160), "at \(now)")
+        }
     }
 
     @Test func stateWrittenBeforeDeadlinesExistedStillDecodes() {
