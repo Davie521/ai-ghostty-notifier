@@ -283,6 +283,8 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     private static let watchedGraceSeconds: Double = 3
+    /// How long after posting a notification is left out of reconciliation.
+    private static let deliverySettleSeconds: Double = 5
 
     private func deliver(_ notify: NotifyRequest) {
         let identifier = state.newNotification(
@@ -376,10 +378,14 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // dialog — neither belongs on a plain Cmd-Tab with nothing on screen.
         guard state.hasOutstandingNotifications else { return }
 
+        let asked = state.outstanding()
         Ghostty.selectedTabID { [weak self] selected in
-            guard let self else { return }
+            // The answer can take seconds. By then the user may have left
+            // Ghostty again, and a round may have finished meanwhile: neither
+            // that departure nor that notification is covered by the answer.
+            guard let self, self.frontmostIsGhostty else { return }
             let identifiers = self.state.takeNotifications(
-                for: .ghosttyActivated(selectedTabID: selected))
+                for: .ghosttyActivated(selectedTabID: selected), among: asked)
             if !identifiers.isEmpty {
                 self.cancelExpiry(identifiers)
                 self.notifier.withdraw(identifiers)
@@ -514,9 +520,13 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     /// waiting when nothing is.
     private func reconcileWithNotificationCenter() {
         guard state.hasOutstandingNotifications else { return }
+        // Not the newest: a notification handed to the center a moment ago may
+        // not be listed as delivered yet, and one posted while the list is on
+        // its way is not in it at all.
+        let asked = state.outstanding(postedBefore: Agent.now() - Agent.deliverySettleSeconds)
         notifier.deliveredIdentifiers { [weak self] delivered in
             guard let self else { return }
-            let gone = self.state.forgetNotifications(notIn: delivered)
+            let gone = self.state.forgetNotifications(notIn: delivered, among: asked)
             guard !gone.isEmpty else { return }
             self.cancelExpiry(gone)
             self.log("reconciled: \(gone.joined(separator: ",")) no longer on screen")

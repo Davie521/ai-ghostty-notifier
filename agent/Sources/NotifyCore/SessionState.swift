@@ -219,17 +219,39 @@ public struct SessionState: Equatable, Sendable {
         }
     }
 
+    /// What is on screen at this moment: each waiting session and when its
+    /// notification was posted. Both questions this process asks about its
+    /// notifications, which tab is selected and which are still delivered, are
+    /// answered later, from another thread's callback. The answer is applied
+    /// only to what was there when the question was put, so a notification
+    /// posted in between is never withdrawn or forgotten on stale evidence.
+    /// `postedBefore` leaves out the newest ones: posting is asynchronous, and a
+    /// notification handed over a moment ago may not count as delivered yet.
+    public func outstanding(postedBefore limit: Double = .infinity) -> [String: Double] {
+        sessions.filter { !$0.value.notificationIDs.isEmpty && $0.value.postedAt < limit }
+            .mapValues(\.postedAt)
+    }
+
+    private func unchanged(_ sessionID: String, since asked: [String: Double]?) -> Bool {
+        guard let asked else { return true }
+        return asked[sessionID] == sessions[sessionID]?.postedAt
+    }
+
     /// Forget every identifier that is no longer among `delivered`, and return
-    /// them.
+    /// them. With `among`, only for sessions unchanged since that snapshot.
     ///
     /// The user can clear a notification from Notification Center without this
     /// process hearing about it — most reliably while the agent is not running
     /// at all. Bookkeeping that outlives the notification used to be invisible;
     /// with a count on the menu bar it is a standing lie.
-    public mutating func forgetNotifications(notIn delivered: Set<String>) -> [String] {
+    public mutating func forgetNotifications(
+        notIn delivered: Set<String>, among asked: [String: Double]? = nil
+    ) -> [String] {
         var gone: [String] = []
         for sessionID in sessions.keys.sorted() {
-            guard var record = sessions[sessionID], !record.notificationIDs.isEmpty else {
+            guard var record = sessions[sessionID], !record.notificationIDs.isEmpty,
+                unchanged(sessionID, since: asked)
+            else {
                 continue
             }
             let missing = record.notificationIDs.filter { !delivered.contains($0) }
@@ -275,10 +297,15 @@ public struct SessionState: Equatable, Sendable {
     /// match — when the tab query fails we leave it alone rather than clear a
     /// notification for a tab the user is not on. A session that opted out of
     /// clear-on-focus is never withdrawn this way at all.
-    public mutating func takeNotifications(for event: FocusEvent) -> [String] {
+    ///
+    /// With `among`, only sessions unchanged since that snapshot.
+    public mutating func takeNotifications(
+        for event: FocusEvent, among asked: [String: Double]? = nil
+    ) -> [String] {
         guard case .ghosttyActivated(let selectedTabID) = event else { return [] }
         // Deterministic order so assertions do not depend on dictionary layout.
         return sessionsMatching(selectedTabID: selectedTabID)
+            .filter { unchanged($0, since: asked) }
             .flatMap { takeNotifications(sessionID: $0) }
     }
 

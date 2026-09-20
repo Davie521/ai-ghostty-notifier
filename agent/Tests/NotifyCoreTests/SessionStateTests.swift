@@ -77,6 +77,48 @@ struct BookkeepingTests {
         #expect(state.sessionID(forNotification: "claude-nobody") == nil)
     }
 
+    @Test func aLateTabAnswerDoesNotWithdrawWhatArrivedWhileItWasPending() {
+        var state = SessionState()
+        state.anchor(sessionID: "old", tabID: "TAB-1", now: 1)
+        _ = state.newNotification(sessionID: "old", now: 10)
+        let asked = state.outstanding()
+        // The tab query is on its way. A round finishes in the same tab, and
+        // another session replaces the notification it already had.
+        state.anchor(sessionID: "new", tabID: "TAB-1", now: 11)
+        _ = state.newNotification(sessionID: "new", now: 11)
+        var replaced = state
+        _ = replaced.newNotification(sessionID: "old", now: 12)
+
+        let taken = state.takeNotifications(
+            for: .ghosttyActivated(selectedTabID: "TAB-1"), among: asked)
+        #expect(taken == ["claude-old"])
+        #expect(state.sessions["new"]?.notificationIDs == ["claude-new"])
+        #expect(
+            replaced.takeNotifications(
+                for: .ghosttyActivated(selectedTabID: "TAB-1"), among: asked) == [])
+        // Without the snapshot the answer is applied to everything, which is
+        // how a notification nobody had seen used to disappear.
+        var unscoped = replaced
+        #expect(
+            unscoped.takeNotifications(for: .ghosttyActivated(selectedTabID: "TAB-1"))
+                == ["claude-new", "claude-old"])
+    }
+
+    @Test func aLateDeliveredListDoesNotForgetWhatItCouldNotHaveListed() {
+        var state = SessionState()
+        _ = state.newNotification(sessionID: "cleared", now: 10)
+        _ = state.newNotification(sessionID: "just-posted", now: 99)
+        // Asked at 100 with five seconds to settle: 99 is too new to judge.
+        let asked = state.outstanding(postedBefore: 95)
+        #expect(asked == ["cleared": 10])
+        _ = state.newNotification(sessionID: "during", now: 100.5)
+
+        let gone = state.forgetNotifications(notIn: [], among: asked)
+        #expect(gone == ["claude-cleared"])
+        #expect(state.sessions["just-posted"]?.notificationIDs == ["claude-just-posted"])
+        #expect(state.sessions["during"]?.notificationIDs == ["claude-during"])
+    }
+
     @Test func pruningDropsStaleSessionsAndReportsOrphans() {
         var state = SessionState()
         _ = state.newNotification(sessionID: "old", now: 0)
