@@ -173,8 +173,9 @@ struct WaitingSessionTests {
     // State written before the text was recorded leaves a row with nothing to
     // say. It still has to be visible: the session is waiting on the user.
     @Test func aRowWithNoTextStillNamesItsSession() {
-        #expect(session(id: "0123456789ab", title: "", subtitle: "", body: "").fallbackLabel
-            == "Session 01234567")
+        #expect(
+            session(id: "0123456789ab", title: "", subtitle: "", body: "").fallbackLabel
+                == "Session 01234567")
     }
 }
 

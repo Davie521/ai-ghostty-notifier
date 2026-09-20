@@ -80,7 +80,7 @@ published. Manual release acceptance remains separate below. The prior
 | Work | Native implementation |
 | --- | --- |
 | Read/validate hook JSON and sender settings, capture CLI ancestry and TTY | `HookIntake`, `ProcessIdentity`, `NativeHookRuntime` |
-| Synchronous round/start capture, owner invalidation and shared rate journal | `RoundJournal`, `DirectoryLease` |
+| Synchronous round/start capture, owner invalidation and shared rate journal | `RoundJournal`, `FileLease` (flock; replaced the mkdir-based `DirectoryLease` on 2026-09-20), `PrivateFile` |
 | Capability checks and atomic spool publication | `HookTransport`, `AtomicSpool` |
 | OSC marker transaction, restoration, cache, backoff and retries | `NativeTerminalBinding`, `MacTerminalAutomation` |
 | Notification policy, titles, settling and continuation | `HookEvent`, `HookProcessor`, `SessionContent` (SQLite C API) |

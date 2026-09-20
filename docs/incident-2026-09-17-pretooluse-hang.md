@@ -87,6 +87,15 @@ at all; several stayed hung for one to two hours.
    back as though it had been a title. That holds for any session's marker: one
    captured as a baseline is replaced by the empty title, for which Ghostty
    shows its default until the program in that tab sets its own.
+   Recovery gives the terminal 0.15 s to show the restored title and removes
+   the record only once the marker is seen to be gone. Without that wait it
+   took the next baseline too early, set its own leftover aside, wrote the
+   identical marker onto the same tab and deleted the record with the marker
+   still up. That path was unreachable for two minutes after a hook was killed,
+   while the dead hook's directory lock was honoured, and became reachable at
+   once when the lock became a `flock`, which the kernel releases with its
+   holder. Killing hooks with the marker showing on a real tab then stranded it
+   3 times out of 3, and 0 times out of 9 with the wait.
 5. **The process is bounded unconditionally.** `NativeLifecycle` arms a deadline
    on its own queue before stdin is read and ends the process with `_exit(0)`:
    12 s for a hook (`GHOSTTY_NOTIFY_HOOK_DEADLINE`), the event lifetime plus 30 s
@@ -109,8 +118,8 @@ query. The unit fixture always answered at once. CI has no Ghostty.
   tabs open and undone by the next attempt; a record about another Ghostty
   process; a session resumed in another tab, whose old tab gets its title back
   while the new one is bound; a leftover marker, or another session's, which is
-  neither bound nor written back as a title. Each fails with its part of the
-  fix removed.
+  neither bound nor written back as a title; a terminal that shows a restored
+  title late. Each fails with its part of the fix removed.
 - `QueryDeadlineTests`: work that ignores cancellation is abandoned, not
   awaited; a cancelled caller waits only the shorter limit, and still receives
   an answer that arrives inside it.
