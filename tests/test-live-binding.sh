@@ -7,9 +7,15 @@
 # reaches it: it needs a real Ghostty answering real Apple Events, from a
 # short-lived process. It briefly retitles one tab, as every real hook does.
 #
-# Usage: run inside the Ghostty tab to test, or name its terminal:
+# Usage: open a new Ghostty tab for this, a plain shell with nothing drawing in
+# it, and run the check there (or name that tab's terminal from elsewhere):
 #   bash tests/test-live-binding.sh
 #   GHOSTTY_NOTIFY_TTY=/dev/ttys012 bash tests/test-live-binding.sh
+# The tab is the fixture. It is given a title of its own for the duration and
+# Ghostty's default title at the end, whatever it said before. A program that
+# sets the tab's title while the check runs, as Claude Code does twice a second,
+# overwrites the markers: the runs then fail, and its title is lost.
+#
 # RUNS (20), MAX_SECONDS per hook (3) and LIMIT_SECONDS before a hook is
 # declared hung (8) are overridable. A build is selected the same way as for
 # tests/test-live-worker.py, so that one setting cannot leave the two checks
@@ -37,91 +43,25 @@ osascript -e 'tell application "System Events" to return exists (application pro
 now() { /usr/bin/perl -MTime::HiRes=time -e 'printf "%.3f\n", time'; }
 
 FIXTURE=$(mktemp -d /tmp/ghostty-live-binding.XXXXXX)
-# Hex and dashes only: intake silently ignores any other session id. Unique per
-# invocation, so the cleanup below only ever acts on markers this run wrote: two
-# overlapping runs would otherwise restore each other's tabs into their own.
+# Hex and dashes only: intake silently ignores any other session id.
 SESSION_PREFIX=$(uuidgen | tr 'A-F' 'a-f' | cut -c1-13)
 [[ "$SESSION_PREFIX" =~ ^[0-9a-f]{8}-[0-9a-f]{4}$ ]] || { echo "uuidgen gave no usable prefix" >&2; exit 2; }
 HOOK_PID=""
+TITLE="ghostty-notify live check"
+
+set_title() { printf '\033]2;%s\033\\' "$1" >"$TTY_PATH"; }
 
 payload_for() {
     jq -nc --arg id "$1" --arg cwd "$PWD" '{session_id:$id,hook_event_name:"PreToolUse",cwd:$cwd}'
 }
 
-outstanding_records() {
-    local record
-    for record in "$FIXTURE"/*.marker.json; do
-        [[ -e "$record" ]] && printf '%s\n' "$record"
-    done
-    return 0
-}
-
-# Ids of the tabs still titled with a marker from this run. Fails when Ghostty
-# cannot be asked, which is not the same as "none".
-marked_tabs() {
-    osascript <<APPLESCRIPT 2>/dev/null
-with timeout of 5 seconds
-    tell application "Ghostty"
-        set found to ""
-        repeat with w in windows
-            repeat with t in tabs of w
-                if (name of t as text) contains "_TAB_MARKER_${SESSION_PREFIX}-" then
-                    set found to found & (id of t as text) & linefeed
-                end if
-            end repeat
-        end repeat
-        return found
-    end tell
-end timeout
-APPLESCRIPT
-}
-
-# Every marker of this run went to TTY_PATH, so a tab showing one is that
-# terminal's tab and its title can be written back there.
-restore_titles() {
-    local tab record title
-    while IFS= read -r tab; do
-        [[ -n "$tab" ]] || continue
-        title=""
-        # Runs share a tab, so a later record may hold an earlier run's marker
-        # as the "title". The earliest record that knew the tab has the real one.
-        while IFS= read -r record; do
-            title=$(jq -r --arg id "$tab" \
-                '[.tabs[] | select(.id == $id) | .title | select(test("_TAB_MARKER_") | not)][0] // ""' \
-                "$record" 2>/dev/null || true)
-            if [[ -n "$title" ]]; then break; fi
-        done < <(outstanding_records)
-        [[ -n "$title" ]] || continue
-        # The runtime's packet: no control characters inside the OSC sequence.
-        title=$(printf '%s' "$title" | /usr/bin/perl -CSD -pe 's/[\x{00}-\x{1f}\x{7f}\x{9c}]//g')
-        printf '\033]2;%s\033\\' "$title" >"$TTY_PATH"
-    done
-}
-
 cleanup() {
-    local marked
     if [[ -n "$HOOK_PID" ]]; then
         kill -KILL "$HOOK_PID" 2>/dev/null || true
         wait "$HOOK_PID" 2>/dev/null || true
     fi
-    # A hook that was killed or gave up mid-lookup can leave its marker on a
-    # real tab, and the only copy of that tab's title is a record in this
-    # fixture. Put the title back before anything is deleted. Asking the runtime
-    # to recover would not do: it honours a killed hook's lease for two minutes,
-    # and a record taken while an earlier marker was showing names that marker.
-    if [[ -n "$(outstanding_records)" ]]; then
-        marked=$(marked_tabs) || marked="unknown"
-        if [[ -n "$marked" && "$marked" != "unknown" ]]; then
-            restore_titles <<<"$marked"
-            sleep 0.3
-            marked=$(marked_tabs) || marked="unknown"
-        fi
-        if [[ -n "$marked" ]]; then
-            echo "A tab may still show a binding marker as its title." >&2
-            echo "The records holding its real title were kept in $FIXTURE" >&2
-            return
-        fi
-    fi
+    # Whatever a killed hook left showing, the tab goes back to Ghostty's default.
+    set_title ""
     rm -rf "$FIXTURE"
 }
 trap cleanup EXIT
@@ -130,6 +70,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
+set_title "$TITLE"
 
 # A private session directory: never the user's bindings, and no stall stamp or
 # permission sentinel left behind by this run can affect real sessions.
@@ -138,34 +79,25 @@ export GHOSTTY_NOTIFY_AGENT_APP="" TERM_PROGRAM=ghostty
 
 failures=0
 slowest=0
-missed=0
 bound_tab=""
 for ((run = 1; run <= RUNS; run++)); do
     session=$(printf '%s-%04d' "$SESSION_PREFIX" "$run")
     payload=$(payload_for "$session")
     problem=""
-    tab=""
-    # A lookup can miss without anything being wrong: a TUI that redraws its
-    # title in the 0.15 s between marker and lookup overwrites the marker, and
-    # Claude Code animates its title twice a second while it works. The runtime
-    # then restores nothing, counts an attempt and tries again on the next tool
-    # call, up to three times. One session therefore gets the same three tries.
-    for ((attempt = 1; attempt <= 3; attempt++)); do
-        started=$(now)
-        "$BIN" --hook claude PreToolUse <<<"$payload" >/dev/null 2>"$FIXTURE/stderr" &
-        HOOK_PID=$!
-        hung=1
-        for ((tick = 0; tick < LIMIT_SECONDS * 20; tick++)); do
-            if ! kill -0 "$HOOK_PID" 2>/dev/null; then hung=0; break; fi
-            sleep 0.05
-        done
-        if [[ "$hung" == 1 ]]; then
-            kill -KILL "$HOOK_PID" 2>/dev/null || true
-            wait "$HOOK_PID" 2>/dev/null || true
-            HOOK_PID=""
-            problem="hook still running after ${LIMIT_SECONDS}s"
-            break
-        fi
+    started=$(now)
+    "$BIN" --hook claude PreToolUse <<<"$payload" >/dev/null 2>"$FIXTURE/stderr" &
+    HOOK_PID=$!
+    hung=1
+    for ((tick = 0; tick < LIMIT_SECONDS * 20; tick++)); do
+        if ! kill -0 "$HOOK_PID" 2>/dev/null; then hung=0; break; fi
+        sleep 0.05
+    done
+    if [[ "$hung" == 1 ]]; then
+        kill -KILL "$HOOK_PID" 2>/dev/null || true
+        wait "$HOOK_PID" 2>/dev/null || true
+        HOOK_PID=""
+        problem="hook still running after ${LIMIT_SECONDS}s"
+    else
         status=0
         wait "$HOOK_PID" || status=$?
         HOOK_PID=""
@@ -175,22 +107,15 @@ for ((run = 1; run <= RUNS; run++)); do
         /usr/bin/perl -e 'exit($ARGV[0] <= $ARGV[1] ? 0 : 1)' "$elapsed" "$MAX_SECONDS" ||
             problem="${problem:+$problem, }took ${elapsed}s (limit ${MAX_SECONDS}s)"
         tab=$(jq -r '.tab_id // ""' "$FIXTURE/$session.json" 2>/dev/null || true)
-        if [[ -n "$problem" || -n "$tab" ]]; then break; fi
-        missed=$((missed + 1))
-    done
-    if [[ -z "$problem" && -z "$tab" ]]; then
-        problem="no tab was bound in three attempts: $(tr '\n' ' ' <"$FIXTURE/stderr")"
+        [[ -n "$tab" ]] ||
+            problem="${problem:+$problem, }no tab was bound: $(tr '\n' ' ' <"$FIXTURE/stderr")"
     fi
     if [[ -n "$problem" ]]; then
         echo "FAIL run $run: $problem" >&2
         failures=$((failures + 1))
     else
         bound_tab=$tab
-        if ((attempt > 1)); then
-            echo "  ok  run $run: ${elapsed}s -> $tab (attempt $attempt)"
-        else
-            echo "  ok  run $run: ${elapsed}s -> $tab"
-        fi
+        echo "  ok  run $run: ${elapsed}s -> $tab"
     fi
 done
 
@@ -206,19 +131,14 @@ tell application "Ghostty"
 end tell
 APPLESCRIPT
     )
-    if [[ "$title" == *TAB_MARKER* ]]; then
-        echo "FAIL: the tab title was left as a marker: $title" >&2
+    if [[ "$title" != "$TITLE" ]]; then
+        echo "FAIL: the tab's title was not put back: $title" >&2
         failures=$((failures + 1))
     fi
 fi
 
 if [[ "$failures" != 0 ]]; then
-    echo "FAIL: $failures of $RUNS hooks hung, were slow or did not bind" >&2
+    echo "FAIL: $failures of $RUNS hooks hung, were slow, did not bind or lost the title" >&2
     exit 1
 fi
-# Retried misses are normal; a lookup that misses most of the time is not.
-if ((missed * 2 > RUNS)); then
-    echo "FAIL: $missed lookups missed their marker in $RUNS runs" >&2
-    exit 1
-fi
-echo "PASS: $RUNS unbound PreToolUse hooks bound $bound_tab, slowest ${slowest}s, $missed lookups retried"
+echo "PASS: $RUNS unbound PreToolUse hooks bound $bound_tab, slowest ${slowest}s"

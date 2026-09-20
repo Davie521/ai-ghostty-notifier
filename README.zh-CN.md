@@ -255,20 +255,19 @@ bash tests/test-agent.sh
 部署任何改动了 Apple Events 或原生进程启动流程的构建之前，先跑一遍：
 
 ```bash
-GHOSTTY_NOTIFY_TTY=/dev/ttys012 bash tests/test-live-binding.sh
-GHOSTTY_NOTIFY_TTY=/dev/ttys012 python3 tests/test-live-worker.py
+bash tests/test-live-binding.sh
+python3 tests/test-live-worker.py
 ```
 
-`GHOSTTY_NOTIFY_TTY` 是某个 Ghostty 标签页的终端设备，在标签页里运行 `tty` 即可得到。
+为它们新开一个 Ghostty 标签页，里面只有普通 shell、没有任何程序在画界面，就在那里运行。
+要从别处运行，就用 `GHOSTTY_NOTIFY_TTY=/dev/ttys012` 指明那个标签页的终端设备，在标签页里运行 `tty` 即可得到。
 第一项让尚未绑定的 `PreToolUse` hook 走一遍真实的标签页查找。
 第二项在 `--worker` 进程里做同样的事，通知后端换成只记录调用的替身，不会弹出通知。
 两者默认测试已安装的 App。要测某个构建时，两个脚本认的是同一组设置，所以不会出现只设了一个、另一个脚本却还在测已安装版本的情况：
 `GHOSTTY_NOTIFY_NATIVE_APP` 指向 App 包，例如 `"$PWD/build/ClaudeGhosttyNotify.app"`；`NATIVE_TEST_BINARY` 指向可执行文件；两个都设时以可执行文件为准。
 每个脚本一开始都会打印它实际测试的二进制。
-运行时会短暂地把标记写进该标签页的标题，随后恢复原标题。
-如果该标签页里的 TUI 恰好在这一刻重绘标题，查找会落空，Claude Code 工作时就会这样；运行时会在下一次工具调用时重试，所以这两项检查同样给每个会话三次机会，并报告用掉了几次。
-运行失败，或被 Ctrl-C、SIGTERM、SIGHUP 中止时也一样；如果无法确认标题已恢复，脚本会说明保存着原标题的记录放在哪里。
-脚本被 SIGKILL 强杀时无法收尾。
+这个标签页就是测试夹具：检查会反复把标记写进它的标题，要求每次查找都找到，结束时把标题重置为 Ghostty 的默认标题，不管原来是什么。
+所以它必须空闲：检查期间有程序设置标题的话，例如 Claude Code 工作时每秒两次，标记会被覆盖，检查失败，那个程序自己的标题也会丢。
 来龙去脉见 `docs/incident-2026-09-17-pretooluse-hang.md`。
 
 ## 卸载
