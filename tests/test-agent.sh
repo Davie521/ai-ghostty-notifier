@@ -24,6 +24,9 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
 APP="${GHOSTTY_NOTIFY_AGENT_APP:-$REPO/build/ClaudeGhosttyNotify.app}"
 BIN="$APP/Contents/MacOS/ghostty-notify-agent"
+# Before HOME becomes the sandbox: where the copy that must stay registered lives.
+INSTALLED_APP="$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app"
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
 command -v jq >/dev/null 2>&1 || { echo "FATAL: jq required" >&2; exit 2; }
 
@@ -91,6 +94,15 @@ cleanup() {
     # before they were collected.
     local pid
     for pid in ${STARTED[@]+"${STARTED[@]}"}; do kill -KILL "$pid" 2>/dev/null || true; done
+    # Starting the agent from a bundle registers that bundle with LaunchServices,
+    # and it stays registered after the process has gone. macOS resolves a click
+    # on a notification by bundle identifier, so the next click could start
+    # this build, with the user's real HOME, beside or instead of the installed
+    # app: on 2026-09-20 one did, and two residents drained the same spool. A
+    # build must not be left as a candidate. The installed copy is never touched.
+    if [[ "$APP" != "$INSTALLED_APP" && -x "$LSREGISTER" ]]; then
+        "$LSREGISTER" -u "$APP" >/dev/null 2>&1 || true
+    fi
     rm -rf "$SANDBOX"
 }
 trap cleanup EXIT

@@ -277,6 +277,17 @@ python3 -m unittest discover -s tests -p 'test_native_install.py'
 bash tests/test-agent.sh
 ```
 
+Starting the agent from a bundle registers that bundle with LaunchServices, and
+it stays registered. macOS resolves a click on a notification by bundle
+identifier, so a registered build can be started by the next click, with your
+real HOME, beside or instead of the installed app. `tests/test-agent.sh`
+unregisters the build it ran. After starting a build's binary by hand, do the
+same:
+
+```bash
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$PWD/build/ClaudeGhosttyNotify.app"
+```
+
 The resident integration suite requires Aqua and test-only jq; it explicitly
 reports SKIP without Aqua. Installation tests use private homes, the real signed
 bundle and service-command tripwires. They do not install a LaunchAgent or test

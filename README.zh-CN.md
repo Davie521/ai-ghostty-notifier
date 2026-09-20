@@ -246,6 +246,14 @@ python3 -m unittest discover -s tests -p 'test_native_install.py'
 bash tests/test-agent.sh
 ```
 
+从某个 App 包里启动过常驻进程，这个包就会登记进 LaunchServices，进程退出后登记仍在。
+macOS 按 bundle id 解析通知点击，所以下一次点击可能拉起的是这份构建，用的还是你真实的 HOME，与已安装的 App 并存甚至取而代之。
+`tests/test-agent.sh` 结束时会注销它用过的构建；手动启动过构建里的二进制之后，也要同样处理：
+
+```bash
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$PWD/build/ClaudeGhosttyNotify.app"
+```
+
 常驻集成测试需要 Aqua 和仅供测试使用的 jq；没有 Aqua 时会明确输出 SKIP。
 安装测试使用私有 HOME、真实签名 App 和拦截服务命令的保护桩；
 不注册 LaunchAgent，也不测试需要人工应答的权限流程。
