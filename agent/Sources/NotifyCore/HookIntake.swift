@@ -65,7 +65,7 @@ public enum HookIntake {
         var settings = env.filter {
             $0.key.hasPrefix("GHOSTTY_NOTIFY_") && !$0.value.contains("\0")
         }
-        for key in ["GHOSTTY_NOTIFY_ALERTER", "GHOSTTY_NOTIFY_AGENT_APP"] {
+        for key in ["GHOSTTY_NOTIFY_AGENT_APP"] {
             if let value = settings[key], !value.isEmpty {
                 settings[key] = absolute(value, fallback: value, home: home, cwd: cwd)
             }

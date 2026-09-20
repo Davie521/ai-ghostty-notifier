@@ -43,16 +43,11 @@ private struct FinishedCommand: RunningCommand {
 private final class RecordingCommands: CommandLaunching, @unchecked Sendable {
     private let lock = NSLock()
     private var calls: [(String, [String])] = []
-    let alerterStatus: Int32
     let terminalStatus: Int32
     let action: String
     let failLaunch: Bool
     var recorded: [(String, [String])] { lock.withLock { calls } }
-    init(
-        alerterStatus: Int32 = 0, terminalStatus: Int32 = 0, action: String = "Dismiss",
-        failLaunch: Bool = false
-    ) {
-        self.alerterStatus = alerterStatus
+    init(terminalStatus: Int32 = 0, action: String = "Dismiss", failLaunch: Bool = false) {
         self.terminalStatus = terminalStatus
         self.action = action
         self.failLaunch = failLaunch
@@ -60,17 +55,11 @@ private final class RecordingCommands: CommandLaunching, @unchecked Sendable {
     func start(executable: String, arguments: [String]) throws -> any RunningCommand {
         let name = URL(fileURLWithPath: executable).lastPathComponent
         lock.withLock { calls.append((name, arguments)) }
-        if arguments == ["--help"] {
-            return FinishedCommand(value: .init(status: 0, output: "--close-label --remove"))
-        }
         if arguments.first?.contains("remove") == true {
             return FinishedCommand(value: .init(status: 0))
         }
         if failLaunch { throw CocoaError(.executableNotLoadable) }
-        return FinishedCommand(
-            value: .init(
-                status: name == "alerter" ? alerterStatus : terminalStatus,
-                output: action))
+        return FinishedCommand(value: .init(status: terminalStatus, output: action))
     }
 }
 private final class ProcessAndSignalFixture: ProcessInspecting, ProcessSignalling,
@@ -101,14 +90,11 @@ struct ExternalNotificationTests {
         throws -> HookEvent
     {
         var event = try sandbox.event()
-        for file in ["alerter", "terminal-notifier"] {
-            try sandbox.write(file, "fixture")
-            try FileManager.default.setAttributes(
-                [.posixPermissions: 0o755], ofItemAtPath: sandbox.root.path + "/" + file)
-        }
+        try sandbox.write("terminal-notifier", "fixture")
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: sandbox.root.path + "/terminal-notifier")
         event.homeDirectory = sandbox.root.path
         event.searchPath = sandbox.root.path
-        event.settings["GHOSTTY_NOTIFY_ALERTER"] = sandbox.root.path + "/alerter"
         event.settings["GHOSTTY_NOTIFY_BACKEND"] = backend
         event.settings["GHOSTTY_NOTIFY_CLEAR_ON_FOCUS"] = clear ? "1" : "0"
         event.settings["GHOSTTY_NOTIFY_TIMEOUT"] = "1"
@@ -192,37 +178,41 @@ struct ExternalNotificationTests {
         await external.clear(event, force: true)
         #expect(commands.recorded.contains { $0.1.first == "-remove" })
     }
-    @Test func completedMigrationDoesNotProbeBackendsEveryPrompt() async throws {
+    @Test func aPromptWithNothingOnScreenStartsNoCommand() async throws {
         let sandbox = try HookSandbox()
         let event = try event(sandbox, clear: true)
         let commands = RecordingCommands()
         let external = ExternalNotifications(
             automation: FocusFixture(), launcher: commands, clock: TickClock())
         await external.clear(event)
-        let firstCount = commands.recorded.count
-        #expect(firstCount > 0)
-        await external.clear(event)
-        #expect(commands.recorded.count == firstCount)
+        await external.clear(event, force: true)
+        #expect(commands.recorded.isEmpty)
     }
-    @Test(arguments: ["same", "different-group", "reused-pid"])
-    func legacyPIDRequiresExactGroupAndUnchangedBirth(_ scenario: String) async throws {
+    @Test(arguments: ["same", "different-group", "reused-pid", "another-executable"])
+    func aRecordedBackendIsSignalledOnlyWhenItIsStillThatProcess(_ scenario: String)
+        async throws
+    {
         let sandbox = try HookSandbox()
-        var event = try event(sandbox, clear: true)
-        event.occurredAt = Date().timeIntervalSince1970 + 1
-        try sandbox.write("abc-123.alerter-pid", "456789\n")
+        let event = try event(sandbox, clear: true)
+        let backend = sandbox.root.path + "/terminal-notifier"
+        try sandbox.write(
+            "abc-123.native-notice.json",
+            #"{"token":"t","round":"earlier","postedAt":0,"executable":""# + backend
+                + #"","childPID":456789,"childBirth":"old"}"#)
         let process = ProcessAndSignalFixture()
         process.value = HostProcess(
-            pid: 456789, parent: 1, name: "alerter", executable: sandbox.root.path + "/alerter",
+            pid: 456789, parent: 1, name: "terminal-notifier",
+            executable: scenario == "another-executable" ? "/usr/bin/true" : backend,
             tty: nil, birth: "old")
         process.argv = [
-            "alerter", "--group",
+            "terminal-notifier", "-group",
             scenario == "different-group" ? "other-session" : "ghostty-notify-abc-123",
         ]
         process.changesBirth = scenario == "reused-pid"
         let external = ExternalNotifications(
             automation: FocusFixture(), launcher: RecordingCommands(),
             inspector: process, signaller: process, clock: TickClock())
-        await external.clear(event)
+        await external.clear(event, force: true)
         #expect(process.terminated == (scenario == "same" ? [456789] : []))
     }
     @Test func pruningIsHourlyAcrossProcessesNotOncePerHook() async throws {

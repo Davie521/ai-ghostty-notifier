@@ -236,7 +236,7 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
         let value = cached(event, pid: pid)?.tabID
         return value?.isEmpty == false ? value : nil
     }
-    public func clearLegacy(_ event: HookEvent) async {
+    public func clearExternal(_ event: HookEvent) async {
         if event.options.clearOnFocus { await clear(event) }
     }
     public func resolve(_ event: HookEvent) async -> String? {

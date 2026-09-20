@@ -113,10 +113,8 @@ struct NativeHookTests {
             try parse(
                 #"{"session_id":"abc","hook_event_name":"Stop"}"#,
                 environment: [
-                    "GHOSTTY_NOTIFY_ALERTER": "bin/alerter",
-                    "GHOSTTY_NOTIFY_AGENT_APP": "../Native.app",
+                    "GHOSTTY_NOTIFY_AGENT_APP": "../Native.app"
                 ]))
-        #expect(event.settings["GHOSTTY_NOTIFY_ALERTER"] == "/work/project/bin/alerter")
         #expect(event.settings["GHOSTTY_NOTIFY_AGENT_APP"] == "/work/Native.app")
         let disabled = try #require(
             try parse(
