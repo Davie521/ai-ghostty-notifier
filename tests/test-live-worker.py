@@ -137,6 +137,10 @@ def main():
     try:
         return run_all()
     except KeyboardInterrupt:
+        # Once is enough: a second interrupt here would skip the rest, and leave
+        # a worker alive to retitle the tab after it has been reset.
+        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            signal.signal(signum, signal.SIG_IGN)
         # unittest skips a test's cleanups when it is interrupted.
         test = LiveWorker.current
         if test is not None:
