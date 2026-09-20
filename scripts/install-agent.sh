@@ -149,48 +149,90 @@ still_running() {
 # must not work on the same session files side by side. Their own watchdogs
 # end them; what is left after about twenty seconds is killed.
 #
-# Only the processes listed at the start are waited for and, if need be,
-# killed, each only for as long as it is still the process that was listed. A
-# hook that a running session starts meanwhile is none of them: it lives for
-# milliseconds and is left to finish. A resident that such a hook starts is
-# dealt with where it matters, at the handover to launchd below.
+# A process is only ever signalled while it is still the process that was
+# listed, the first time included: the listing is a moment old by then.
+#
+# Then the list is made again, and this only returns true once a list has
+# nothing running in it. With the way in shut (see close_admission) the second
+# list is empty and costs one `ps`; without that it would be a chase.
 terminate_owned() {
-    local list line left waited=0
-    if ! list=$(owned_processes); then
-        # Too late to turn back when something has been stopped already, so
-        # allow the longest grace there is instead of confirming the exits.
-        echo "  warning: cannot list processes; waiting 10 s instead of confirming that the previous version has exited" >&2
-        # By name, the closest thing left. It cannot tell this installation's
-        # processes from another checkout's, which the listing above can.
-        pkill -x ghostty-notify-agent 2>/dev/null || true
-        sleep 10
-        return 0
-    fi
-    while IFS= read -r line; do
-        [[ -n "$line" ]] && kill -TERM "${line%% *}" 2>/dev/null || true
-    done <<<"$list"
-    while [[ -n "$list" ]] && ((waited < 80)); do
-        left=""
+    local list line live left waited
+    for _ in 1 2 3; do
+        if ! list=$(owned_processes); then
+            # Too late to turn back when something has been stopped already, so
+            # allow the longest grace there is instead of confirming the exits.
+            echo "  warning: cannot list processes; waiting 10 s instead of confirming that the previous version has exited" >&2
+            # By name, the closest thing left. It cannot tell this installation's
+            # processes from another checkout's, which the listing above can.
+            pkill -x ghostty-notify-agent 2>/dev/null || true
+            sleep 10
+            return 0
+        fi
+        live=""
         while IFS= read -r line; do
             [[ -n "$line" ]] || continue
-            if still_running "${line%% *}" "${line#* }"; then left="$left$line"$'\n'; fi
+            if still_running "${line%% *}" "${line#* }"; then
+                kill -TERM "${line%% *}" 2>/dev/null || true
+                live="$live$line"$'\n'
+            fi
         done <<<"$list"
-        # What has been seen to go is never looked at again.
-        list=$left
-        [[ -z "$list" ]] && return 0
-        sleep 0.25
-        waited=$((waited + 1))
+        [[ -z "$live" ]] && return 0
+        waited=0
+        while [[ -n "$live" ]] && ((waited < 80)); do
+            sleep 0.25
+            waited=$((waited + 1))
+            left=""
+            while IFS= read -r line; do
+                [[ -n "$line" ]] || continue
+                if still_running "${line%% *}" "${line#* }"; then left="$left$line"$'\n'; fi
+            done <<<"$live"
+            # What has been seen to go is never looked at again.
+            live=$left
+        done
+        while IFS= read -r line; do
+            [[ -n "$line" ]] || continue
+            if still_running "${line%% *}" "${line#* }"; then kill -KILL "${line%% *}" 2>/dev/null || true; fi
+        done <<<"$live"
     done
-    while IFS= read -r line; do
-        [[ -n "$line" ]] || continue
-        if still_running "${line%% *}" "${line#* }"; then kill -KILL "${line%% *}" 2>/dev/null || true; fi
-    done <<<"$list"
+    return 1
+}
+
+# The liveness markers go with the processes they describe, and only then: a
+# resident that is still there after all that needs them, and `open` would
+# hand the permission check to it and wait two minutes for an answer it has
+# already given.
+stop_owned() {
+    if terminate_owned; then
+        rm -f "$STATE/agent.pid" "$STATE/ready" "$STATE/capabilities" "$STATE/native-hook-ready"
+    else
+        echo "  warning: processes of this installation kept appearing while they were being stopped" >&2
+    fi
+}
+
+# Shut the way in. A session in use fires hooks all the time, and a hook that
+# finds no resident starts one, and a worker that lives for minutes. Started
+# while the previous version is being stopped, they are in nobody's list and
+# run the old code beside the new. Without the owner's execute bit nothing can
+# start this binary: the hook launcher and the app both test for it and do
+# nothing, a hook that is running cannot spawn a worker, and LaunchServices
+# cannot launch the bundle. What is running is not affected, and the signature
+# does not cover the mode. For those seconds hooks notify nobody; the
+# alternative was that they notify through a version that is being removed.
+#
+# Opened again by cleanup_stage if the previous version stays after all.
+CLOSED=""
+close_admission() {
+    [[ -f "$BIN" ]] || return 0
+    chmod u-x "$BIN" || {
+        echo "FATAL: cannot change $BIN; nothing was stopped or changed." >&2
+        exit 2
+    }
+    CLOSED=1
 }
 
 # A running agent keeps executing from the old inode after the bundle is
 # replaced, and readiness checks would confirm that stale process as healthy,
-# so nothing would ever start the new copy. The liveness markers go too: a
-# recycled pid is exactly what the process check there defends against.
+# so nothing would ever start the new copy.
 stop_agents() {
     # Asked before anything is stopped: if processes cannot be listed, this is
     # the moment to find out, while the previous service is still running.
@@ -198,9 +240,9 @@ stop_agents() {
         echo "FATAL: cannot list running processes (ps failed); nothing was stopped or changed." >&2
         exit 2
     }
+    close_admission
     unload
-    terminate_owned
-    rm -f "$STATE/agent.pid" "$STATE/ready" "$STATE/capabilities" "$STATE/native-hook-ready"
+    stop_owned
 }
 
 # Read-only: the LaunchAgent a full install would write for this HOME.
@@ -265,6 +307,8 @@ cleanup_stage() {
     if [[ -e "$PREVIOUS" && ! -e "$APP" ]]; then
         mv "$PREVIOUS" "$APP" || return
     fi
+    # The previous version is staying after all: let it start again.
+    if [[ -n "$CLOSED" ]]; then chmod u+x "$BIN" || true; fi
     rm -rf "$STAGING"
 }
 trap cleanup_stage EXIT
@@ -286,6 +330,7 @@ fi
 if [[ "$START" == 1 ]]; then stop_agents; fi
 if [[ -e "$APP" ]]; then mv "$APP" "$PREVIOUS"; fi
 mv "$STAGED" "$APP"
+CLOSED=""
 # The copy must carry the build's signature: TCC keys the notification and
 # Automation grants to it, so a copy that lost it would be asked again — or,
 # for notifications, would silently display nothing.
@@ -341,7 +386,7 @@ prompt_once() {
         sleep 1
     done
     ANSWER=$(cat "$READY" 2>/dev/null || true)
-    terminate_owned
+    stop_owned
 }
 
 echo "==> Checking notification permission (a dialog appears the first time)"
@@ -393,17 +438,22 @@ supervised() {
     mine=$(launchd_pid)
     [[ -n "$mine" && "$mine" == "$(cat "$STATE/agent.pid" 2>/dev/null || true)" ]]
 }
-for attempt in 1 2 3; do
+# The app publishes its pid a moment after it starts, so every start is given
+# the same ten seconds, the last restart like the first.
+wait_supervised() {
     for _ in $(seq 1 20); do
-        supervised && break
+        supervised && return 0
         sleep 0.5
     done
-    supervised && break
+    return 1
+}
+attempt=0
+until wait_supervised || ((attempt == 3)); do
+    attempt=$((attempt + 1))
     if [[ -s "$STATE/agent.pid" ]]; then
         echo "    the resident that is running was not started by launchd; replacing it (attempt $attempt of 3)"
     fi
-    terminate_owned
-    rm -f "$STATE/agent.pid" "$STATE/ready" "$STATE/capabilities" "$STATE/native-hook-ready"
+    stop_owned
     launchctl kickstart "$DOMAIN/$LABEL" 2>/dev/null || true
 done
 if supervised; then

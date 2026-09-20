@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import plistlib
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -284,7 +285,7 @@ echo ready > "$mark.ready"
 while :; do /bin/sleep 0.05; done
 '''
 
-    def full_install(self, home, ps_stub, launchd=""):
+    def start_full_install(self, home, ps_stub, launchd=""):
         """The whole install, with a stand-in for every service command.
 
         `launchd` is shell that runs inside the launchctl stand-in after the
@@ -304,15 +305,36 @@ STATE="$HOME/.claude/notifications/ghostty-agent"
         # Only the wait for processes to exit really waits; the rest would take a minute.
         self.stub("sleep", '[[ "$1" == 0.25 ]] && exec /bin/sleep 0.05\nexit 0\n')
         # Stands in for the agent answering the permission prompt.
-        self.stub("open", 'mkdir -p "$HOME/.claude/notifications/ghostty-agent" && '
-                  'echo authorized > "$HOME/.claude/notifications/ghostty-agent/ready"\n')
+        self.stub("open", 'STATE="$HOME/.claude/notifications/ghostty-agent"\n'
+                  '[[ -e "$STATE/agent.pid" ]] && echo "agent.pid was there at the permission check" >> "$CALLS"\n'
+                  'mkdir -p "$STATE" && echo authorized > "$STATE/ready"\n')
         self.stub("ps", ps_stub)
-        result = subprocess.run(
+        return subprocess.Popen(
             ["/bin/bash", str(self.checkout / "scripts/install-agent.sh")], cwd=self.checkout,
             env={**self.env, "HOME": str(home), "CALLS": str(calls),
                  "GHOSTTY_NOTIFY_LSREGISTER": str(self.bin / "lsregister")},
-            capture_output=True, text=True, timeout=60)
-        return result, (calls.read_text().splitlines() if calls.exists() else [])
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            # A group of its own, so that a test can press Ctrl-C on it.
+            start_new_session=True)
+
+    def full_install(self, home, ps_stub, launchd=""):
+        installer = self.start_full_install(home, ps_stub, launchd)
+        self.addCleanup(installer.kill)
+        output, errors = installer.communicate(timeout=60)
+        calls = self.root / "full-install-calls"
+        return (subprocess.CompletedProcess(installer.args, installer.returncode, output, errors),
+                calls.read_text().splitlines() if calls.exists() else [])
+
+    def previous_version(self, home):
+        """An installed bundle of the previous version that says so when it is started."""
+        installed = home / "Library/Application Support/claude-ghostty-notify" / BUNDLE
+        (installed / "Contents/MacOS").mkdir(parents=True)
+        (installed / "Contents/Resources").mkdir()
+        (installed / MARKER).write_text("")
+        started = self.root / "the-previous-version-was-started"
+        (installed / EXECUTABLE).write_text('#!/bin/bash\necho started >> "{}"\n'.format(started))
+        (installed / EXECUTABLE).chmod(0o755)
+        return installed, started
 
     def stand_in(self, name, script, installed):
         """A real process for the installer to find. Returns (process, mark file)."""
@@ -437,6 +459,174 @@ esac
         self.assertEqual(interloper.wait(timeout=5), 0)
         self.assertIsNone(launchds.poll(), "the resident launchd started was stopped as well")
         self.assertIn("running under launchd as pid {}".format(launchds.pid), result.stdout)
+
+    BUSY_HOOK = '''#!/bin/bash
+# Stands for a hook of a session in use: asked to stop, it does what the session
+# does next and runs a registered hook, through the real launcher.
+mark=$1
+trap '/usr/bin/env -i HOME="{home}" PATH=/usr/bin:/bin /bin/bash "{hooks}/ghostty-notify.sh" </dev/null 2>"$mark.stderr"; echo "hook exit $?" > "$mark"; exit 0' TERM
+echo ready > "$mark.ready"
+while :; do /bin/sleep 0.05; done
+'''
+
+    STUBBORN = '''#!/bin/bash
+trap '' TERM
+echo ready > "$1.ready"
+while :; do /bin/sleep 0.05; done
+'''
+
+    def test_nothing_can_start_the_previous_version_while_it_is_being_stopped(self):
+        # A session in use fires hooks all the time. One that starts while the
+        # previous version is being stopped is not in the list that is waited
+        # for, and what it starts (a worker lives for minutes, a resident for
+        # good) would run the old code beside the new. So the way in is shut
+        # before the list is made.
+        home = self.root / "home with a session in use"
+        installed, started = self.previous_version(home)
+        hooks = self.root / "registered-hooks"  # As install.sh leaves them: no build beside them.
+        shutil.copytree(REPO / "hooks", hooks)
+        busy = self.root / "busy-hook"
+        busy.write_text(self.BUSY_HOOK.format(home=home, hooks=hooks))
+        busy.chmod(0o755)
+        process, mark = self.stand_in("hook of a session in use", busy, installed)
+        (self.root / "process-table").write_text(self.listed(process, installed / EXECUTABLE))
+        result, _ = self.full_install(
+            home, self.REAL_PS_FOR_ONE_PID + 'cat "{}"\n'.format(self.root / "process-table"))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(mark.read_text(), "hook exit 0\n")
+        self.assertFalse(started.exists(), "a hook started the previous version while it was being stopped")
+        self.assertIn("native runtime missing", Path(str(mark) + ".stderr").read_text())
+        # And open again, as the new version.
+        self.assertTrue(os.access(installed / EXECUTABLE, os.X_OK))
+        version = subprocess.check_output([str(installed / EXECUTABLE), "--hook-runtime-version"], text=True)
+        self.assertEqual(version.strip(), "native-hook-v1")
+
+    def test_the_previous_version_can_start_again_when_the_install_fails(self):
+        home = self.root / "home-where-the-swap-fails"
+        installed, _ = self.previous_version(home)
+        before = (installed / EXECUTABLE).read_bytes()
+        self.stub("mv", '[[ "${!#}" == */previous.app ]] && { echo "mv: staged failure" >&2; exit 1; }\n'
+                  'exec /bin/mv "$@"\n')
+        result, _ = self.full_install(home, self.REAL_PS_FOR_ONE_PID)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("staged failure", result.stderr)
+        self.assertEqual((installed / EXECUTABLE).read_bytes(), before)
+        self.assertTrue(os.access(installed / EXECUTABLE, os.X_OK), "the previous version was left unable to start")
+        self.assertEqual(list(installed.parent.glob(".native-install.*")), [])
+
+    def test_the_previous_version_can_start_again_when_the_install_is_interrupted(self):
+        # Interrupted while it waits for a process that will not go: by a
+        # signal to the installer, and by Ctrl-C, which goes to its whole group.
+        stubborn = self.root / "stubborn"
+        stubborn.write_text(self.STUBBORN)
+        stubborn.chmod(0o755)
+        interruptions = {"SIGTERM": lambda installer: installer.terminate(),
+                         "Ctrl-C": lambda installer: os.killpg(installer.pid, signal.SIGINT)}
+        for name, interrupt in interruptions.items():
+            with self.subTest(name):
+                home = self.root / ("home-of-an-install-interrupted-by-" + name)
+                installed, _ = self.previous_version(home)
+                process, _ = self.stand_in("hook that will not stop for " + name, stubborn, installed)
+                (self.root / "process-table").write_text(self.listed(process, installed / EXECUTABLE))
+                installer = self.start_full_install(
+                    home, self.REAL_PS_FOR_ONE_PID + 'cat "{}"\n'.format(self.root / "process-table"))
+                self.addCleanup(installer.kill)
+                deadline = time.monotonic() + 10
+                while os.access(installed / EXECUTABLE, os.X_OK) and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertFalse(os.access(installed / EXECUTABLE, os.X_OK), "the way in was never shut")
+                interrupt(installer)
+                installer.communicate(timeout=30)
+                self.assertNotEqual(installer.returncode, 0)
+                self.assertTrue(os.access(installed / EXECUTABLE, os.X_OK),
+                                "the previous version was left unable to start")
+                self.assertEqual(list(installed.parent.glob(".native-install.*")), [])
+
+    def test_a_process_is_not_even_asked_to_stop_once_its_pid_is_another_process(self):
+        # The same reuse, earlier: between the listing and the first signal.
+        home = self.root / "home-with-a-pid-reused-early"
+        installed = home / "Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app"
+        helper = self.root / "previous-version"
+        helper.write_text(self.HELPER)
+        helper.chmod(0o755)
+        bystander, asked_to_stop = self.stand_in("bystander with a pid reused early", helper, installed)
+        (self.root / "process-table").write_text(self.listed(bystander, installed / EXECUTABLE))
+        ps_stub = ('if [[ " $* " == *" -p "* ]]; then echo "S    Thu  1 Jan 00:00:00 1970"; exit 0; fi\n'
+                   'cat "{}"\n'.format(self.root / "process-table"))
+        result, _ = self.full_install(home, ps_stub)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(asked_to_stop.exists(), "a process that only shares a pid with a listed one was signalled")
+        self.assertIsNone(bystander.poll())
+
+    def listings(self, *tables):
+        """A ps whose successive listings are `tables`, and empty after the last.
+
+        The first is the one the installer asks for before it stops anything.
+        """
+        for number, table in enumerate(tables, start=1):
+            (self.root / "listing-{}".format(number)).write_text(table)
+        return self.REAL_PS_FOR_ONE_PID + '''number=$(($(cat "$CALLS.listings" 2>/dev/null || echo 0) + 1))
+echo "$number" > "$CALLS.listings"
+cat "{}/listing-$number" 2>/dev/null || true
+'''.format(self.root)
+
+    def previous_versions(self, installed, *names):
+        helper = self.root / "previous-version"
+        helper.write_text(self.HELPER)
+        helper.chmod(0o755)
+        running = [self.stand_in(name, helper, installed) for name in names]
+        return running, [self.listed(process, installed / EXECUTABLE) for process, _ in running]
+
+    def test_what_appears_while_the_others_are_stopped_is_stopped_before_the_bundle_is_replaced(self):
+        # Shutting the way in covers the installed binary. A resident from
+        # somewhere else can still turn up, so the list is made again until
+        # nothing in it is running.
+        home = self.root / "home-with-a-latecomer"
+        installed = home / "Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app"
+        running, lines = self.previous_versions(installed, "listed from the start", "latecomer")
+        result, _ = self.full_install(home, self.listings(lines[0], lines[0], lines[0] + lines[1]))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for process, mark in running:
+            self.assertEqual(mark.read_text().splitlines(),
+                             ["asked to stop; new bundle in place: no", "finished; new bundle in place: no"])
+            self.assertEqual(process.wait(timeout=5), 0)
+        self.assertNotIn("kept appearing", result.stderr)
+
+    def test_liveness_markers_stay_when_it_cannot_be_confirmed_that_nothing_is_left(self):
+        # Something new in every list: the markers may describe a resident that
+        # is still there, and the permission check would wait two minutes for
+        # an answer that resident has already given.
+        home = self.root / "home-where-something-keeps-appearing"
+        installed = home / "Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app"
+        state = home / ".claude/notifications/ghostty-agent"
+        state.mkdir(parents=True)
+        (state / "agent.pid").write_text("1\n")
+        _, lines = self.previous_versions(installed, "first", "second", "third")
+        result, recorded = self.full_install(home, self.listings("", lines[0], lines[1], lines[2]))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("kept appearing", result.stderr)
+        self.assertIn("agent.pid was there at the permission check", recorded)
+
+    LATE_LAUNCHD = '''case "$1" in
+    kickstart) echo $(($(cat "$CALLS.restarts" 2>/dev/null || echo 0) + 1)) > "$CALLS.restarts"; echo 0 > "$CALLS.looks" ;;
+    print)
+        if [[ "$(cat "$CALLS.restarts" 2>/dev/null)" == 3 ]]; then
+            looks=$(($(cat "$CALLS.looks") + 1)); echo "$looks" > "$CALLS.looks"
+            if ((looks >= 3)); then mkdir -p "$STATE"; echo PID > "$STATE/agent.pid"; printf '\\tpid = PID\\n'; exit 0; fi
+        fi
+        printf '\\tstate = not running\\n' ;;
+esac
+'''
+
+    def test_the_last_restart_is_waited_for_like_the_others(self):
+        # The app publishes its pid a moment after it starts. Here launchd's
+        # copy only stays on the third restart, and is seen on the third look.
+        home = self.root / "home-where-the-third-restart-works"
+        result, recorded = self.full_install(
+            home, self.REAL_PS_FOR_ONE_PID, self.LATE_LAUNCHD.replace("PID", str(os.getpid())))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(recorded.count("launchctl kickstart"), 3)
+        self.assertIn("running under launchd as pid {}".format(os.getpid()), result.stdout)
 
     def test_full_install_stops_nothing_when_processes_cannot_be_listed(self):
         # An empty list and a failed listing used to look the same, and the

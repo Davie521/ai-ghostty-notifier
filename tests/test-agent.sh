@@ -102,8 +102,9 @@ cleanup() {
     # Unregistering undoes what running it did, and no more than that: a bundle
     # in a directory Spotlight indexes is found again within a minute, whether
     # it ever ran or not. See "Builds and notification clicks" in the README.
-    # The installed copy is never touched.
-    if [[ "$APP" != "$INSTALLED_APP" && -x "$LSREGISTER" ]]; then
+    # The installed copy is never touched, by whatever name it was given: a
+    # trailing slash or a symlink is another string and the same bundle.
+    if [[ ! "$APP" -ef "$INSTALLED_APP" && -x "$LSREGISTER" ]]; then
         "$LSREGISTER" -u "$APP" >/dev/null 2>&1 || true
     fi
     rm -rf "$SANDBOX"
