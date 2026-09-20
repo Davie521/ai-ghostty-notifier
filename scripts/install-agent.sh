@@ -100,40 +100,92 @@ unload() {
     launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
 }
 
-# Stop every agent instance, wherever it was launched from. A running agent
-# keeps executing from the old inode after the bundle is replaced, and
-# readiness checks would confirm that stale process as
-# healthy — so nothing would ever start the new copy. The liveness markers go
-# too: a recycled pid is exactly what the ps check there defends against.
-# Processes whose executable is the bundled binary, wherever the bundle lives:
-# the resident, and every hook and worker, which run the same file. By
-# executable, not by command line: a shell that merely mentions the path is not
-# one of them.
-agent_pids() {
-    ps -axww -o pid=,comm= 2>/dev/null |
-        awk -v suffix="/$BUNDLE_NAME/Contents/MacOS/ghostty-notify-agent" '
-            { pid = $1; sub(/^[ ]*[0-9]+[ ]+/, "") }
-            length($0) >= length(suffix) && substr($0, length($0) - length(suffix) + 1) == suffix { print pid }'
+# The processes this installation owns, one pid per line.
+#
+# Whatever runs the installed binary: the resident, and every hook and worker,
+# which run the same file. And the resident that serves this HOME when it was
+# started from somewhere else, a checkout's build for instance, since it holds
+# the state the new agent needs. By executable, never by command line: a shell
+# that mentions the path is not one of them, and neither is a test agent that
+# another checkout runs against a home of its own.
+#
+# Fails when processes cannot be listed, which is not the same as there being
+# none.
+owned_pids() {
+    local table resident
+    table=$(ps -axww -o pid=,comm=) || return 1
+    resident=$(cat "$STATE/agent.pid" 2>/dev/null || true)
+    printf '%s\n' "$table" |
+        awk -v bin="$BIN" -v resident="$resident" \
+            -v suffix="/$BUNDLE_NAME/Contents/MacOS/ghostty-notify-agent" '
+            { pid = $1; path = $0; sub(/^[ ]*[0-9]+[ ]+/, "", path) }
+            path == bin { print pid; next }
+            pid == resident && length(path) >= length(suffix) &&
+                substr(path, length(path) - length(suffix) + 1) == suffix { print pid }'
 }
 
-stop_agents() {
-    unload
-    pkill -f "/$BUNDLE_NAME/Contents/MacOS/ghostty-notify-agent" 2>/dev/null || true
-    rm -f "$STATE/agent.pid" "$STATE/ready" "$STATE/capabilities" "$STATE/native-hook-ready"
-    # Wait for them to be gone, not for a second. After SIGTERM a hook takes up
-    # to four seconds to put a tab title back and a worker up to ten to reap its
-    # notification backend, and a version may change how processes exclude each
-    # other (the locks became flock files in 2026-09): old and new must not
-    # work on the same session files side by side. Their own watchdogs end
-    # them; whatever is left after that is killed. A hook that starts from the
-    # old bundle during this wait lives for milliseconds, which is the overlap
-    # that remains.
-    local waited=0 pids pid
-    while pids=$(agent_pids) && [[ -n "$pids" ]] && ((waited < 60)); do
+# Ask them to stop, and wait until they have, not for a second. After SIGTERM a
+# hook takes up to four seconds to put a tab title back and a worker up to ten
+# to reap its notification backend, and a version may change how processes
+# exclude each other (the locks became flock files in 2026-09): old and new
+# must not work on the same session files side by side, and launchd must not
+# be handed a new agent while the previous one still holds its place, or the
+# new one bows out and nothing is left running. Their own watchdogs end them;
+# what is left after about twenty seconds is killed.
+#
+# Only the processes listed at the start are waited for and, if need be,
+# killed. A hook that a running session starts meanwhile is none of them: it
+# lives for milliseconds and is left to finish.
+# kill -0 alone also answers for a process that has exited and is waiting for
+# its parent to collect it. Such a process holds no lock and writes nothing, and
+# a parent that is slow to collect must not cost the full wait below.
+still_running() {
+    local state
+    kill -0 "$1" 2>/dev/null || return 1
+    # It existed a moment ago, so a ps that fails here says nothing: keep waiting.
+    state=$(ps -o stat= -p "$1" 2>/dev/null) || return 0
+    [[ "$state" != Z* ]]
+}
+
+terminate_owned() {
+    local pids pid left="" waited=0
+    if ! pids=$(owned_pids); then
+        # Too late to turn back when something has been stopped already, so
+        # allow the longest grace there is instead of confirming the exits.
+        echo "  warning: cannot list processes; waiting 10 s instead of confirming that the previous version has exited" >&2
+        # By name, the closest thing left. It cannot tell this installation's
+        # processes from another checkout's, which the listing above can.
+        pkill -x ghostty-notify-agent 2>/dev/null || true
+        sleep 10
+        return 0
+    fi
+    for pid in $pids; do kill -TERM "$pid" 2>/dev/null || true; done
+    while ((waited < 80)); do
+        left=""
+        for pid in $pids; do
+            if still_running "$pid"; then left="$left $pid"; fi
+        done
+        [[ -z "$left" ]] && return 0
         sleep 0.25
         waited=$((waited + 1))
     done
-    for pid in $(agent_pids); do kill -KILL "$pid" 2>/dev/null || true; done
+    for pid in $left; do kill -KILL "$pid" 2>/dev/null || true; done
+}
+
+# A running agent keeps executing from the old inode after the bundle is
+# replaced, and readiness checks would confirm that stale process as healthy,
+# so nothing would ever start the new copy. The liveness markers go too: a
+# recycled pid is exactly what the process check there defends against.
+stop_agents() {
+    # Asked before anything is stopped: if processes cannot be listed, this is
+    # the moment to find out, while the previous service is still running.
+    owned_pids >/dev/null || {
+        echo "FATAL: cannot list running processes (ps failed); nothing was stopped or changed." >&2
+        exit 2
+    }
+    unload
+    terminate_owned
+    rm -f "$STATE/agent.pid" "$STATE/ready" "$STATE/capabilities" "$STATE/native-hook-ready"
 }
 
 # Read-only: the LaunchAgent a full install would write for this HOME.
@@ -274,8 +326,7 @@ prompt_once() {
         sleep 1
     done
     ANSWER=$(cat "$READY" 2>/dev/null || true)
-    pkill -f "/$BUNDLE_NAME/Contents/MacOS/ghostty-notify-agent" 2>/dev/null || true
-    sleep 1
+    terminate_owned
 }
 
 echo "==> Checking notification permission (a dialog appears the first time)"

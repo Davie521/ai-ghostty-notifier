@@ -87,7 +87,8 @@ cleanup() {
     fi
     # Reap even a hung test app before deleting its private state directory.
     stop_agent || echo "Test cleanup required a forced agent exit" >&2
-    # Every contender of section 1 too, should the run have ended in there.
+    # Every contender of section 1 too, should the run have ended in there,
+    # before they were collected.
     local pid
     for pid in ${STARTED[@]+"${STARTED[@]}"}; do kill -KILL "$pid" 2>/dev/null || true; done
     rm -rf "$SANDBOX"
@@ -189,6 +190,10 @@ for pid in "${STARTED[@]}"; do
     fi
     wait "$pid" 2>/dev/null || LEAVERS_OK=0
 done
+# All collected, and the one that stays is AGENT_PID's business from here on.
+# The exit trap must not signal these numbers again later: by then they may
+# belong to someone else.
+STARTED=()
 check "the others left by themselves with status 0, so launchd does not restart them" \
     test "$LEAVERS_OK" = 1
 check "and said why" log_has "another agent is already running"

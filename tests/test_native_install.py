@@ -274,11 +274,18 @@ class NativeInstallTests(unittest.TestCase):
         self.assertEqual(agent["Label"], "io.github.davie521.cgnotify")
         self.assertFalse(home.exists())
 
-    def test_full_install_checks_its_launch_agent_before_stopping_anything(self):
-        # The only test of the path that starts a service. Every service command
-        # is a stand-in, LaunchServices included, and HOME has the characters
-        # that used to break the plist after the old agent had been stopped.
-        home = self.root / "a&b <c>"
+    HELPER = '''#!/bin/bash
+# Stands for a process of the previous version: on SIGTERM it says whether the
+# new bundle is already in place, takes a second to clean up, and says it again.
+mark=$1; app=$2
+seen() { [[ -e "$app" ]] && echo yes || echo no; }
+trap 'echo "asked to stop; new bundle in place: $(seen)" > "$mark"; /bin/sleep 1; echo "finished; new bundle in place: $(seen)" >> "$mark"; exit 0' TERM
+echo ready > "$mark.ready"
+while :; do /bin/sleep 0.05; done
+'''
+
+    def full_install(self, home, ps_stub):
+        """The whole install, with a stand-in for every service command."""
         calls = self.root / "full-install-calls"
         self.stub("launchctl", '''if [[ ! -e "$CALLS" ]]; then
     for staged in "$HOME/Library/Application Support/claude-ghostty-notify"/.native-install.*/*.plist; do
@@ -288,43 +295,87 @@ fi
 echo "launchctl $1" >> "$CALLS"
 ''')
         self.stub("lsregister", 'echo "lsregister $1" >> "$CALLS"\n')
-        # A worker of the previous version that needs three more polls to finish
-        # cleaning up after SIGTERM. The pid cannot exist, should it ever be signalled.
-        self.stub("ps", '''polls=$(($(cat "$CALLS.polls" 2>/dev/null || echo 0) + 1))
-echo "$polls" > "$CALLS.polls"
-if ((polls <= 3)); then
-    installed=no
-    [[ -e "$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app" ]] && installed=yes
-    echo "old worker still running; new bundle in place: $installed" >> "$CALLS"
-    echo "99999999 /somewhere/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent"
-fi
-echo "  501 /bin/zsh -c cat /x/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent.log"
-''')
-        self.stub("pkill", 'echo pkill >> "$CALLS"\n')
-        self.stub("sleep", "exit 0\n")
+        self.stub("pkill", 'echo "pkill $*" >> "$CALLS"\n')
+        # Only the wait for processes to exit really waits; the rest would take a minute.
+        self.stub("sleep", '[[ "$1" == 0.25 ]] && exec /bin/sleep 0.25\nexit 0\n')
         # Stands in for the agent answering the permission prompt.
         self.stub("open", 'mkdir -p "$HOME/.claude/notifications/ghostty-agent" && '
                   'echo authorized > "$HOME/.claude/notifications/ghostty-agent/ready"\n')
+        self.stub("ps", ps_stub)
         result = subprocess.run(
             ["/bin/bash", str(self.checkout / "scripts/install-agent.sh")], cwd=self.checkout,
             env={**self.env, "HOME": str(home), "CALLS": str(calls),
                  "GHOSTTY_NOTIFY_LSREGISTER": str(self.bin / "lsregister")},
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True, timeout=60)
+        return result, (calls.read_text().splitlines() if calls.exists() else [])
+
+    def test_full_install_waits_for_its_own_processes_and_touches_no_others(self):
+        # The only test of the path that starts a service. HOME has the
+        # characters that used to break the plist after the old agent had been
+        # stopped, and three real processes stand for what may be running.
+        home = self.root / "a&b <c>"
+        installed = home / "Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app"
+        helper = self.root / "previous-version"
+        helper.write_text(self.HELPER)
+        helper.chmod(0o755)
+        names = ("hook of this installation", "resident started from a checkout", "test agent of another checkout")
+        running = {}
+        for name in names:
+            mark = self.root / (name.replace(" ", "-") + ".mark")
+            process = subprocess.Popen([str(helper), str(mark), str(installed)])
+            self.addCleanup(process.wait)
+            self.addCleanup(process.kill)
+            running[name] = (process, mark)
+        for process, mark in running.values():
+            deadline = time.monotonic() + 5
+            while not Path(str(mark) + ".ready").exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+        state = home / ".claude/notifications/ghostty-agent"
+        state.mkdir(parents=True)
+        (state / "agent.pid").write_text("{}\n".format(running[names[1]][0].pid))
+        elsewhere = "/another/checkout/build/ClaudeGhosttyNotify.app/" + EXECUTABLE
+        table = "".join("{:>5} {}\n".format(pid, path) for pid, path in (
+            (running[names[0]][0].pid, installed / EXECUTABLE),
+            (running[names[1]][0].pid, elsewhere),
+            (running[names[2]][0].pid, elsewhere),
+            # A shell that only mentions the binary, as `ps` shows it: by its executable.
+            (501, "/bin/zsh"),
+        ))
+        (self.root / "process-table").write_text(table)
+        # The listing is staged; a question about one pid goes to the real ps,
+        # since the stand-ins are real processes.
+        result, recorded = self.full_install(
+            home, 'if [[ " $* " == *" -p "* ]]; then exec /bin/ps "$@"; fi\ncat "{}"\n'.format(
+                self.root / "process-table"))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        recorded = calls.read_text().splitlines()
         self.assertEqual(recorded[0], "valid plist staged before the first service command")
         self.assertEqual(recorded[-1], "launchctl bootstrap")
-        # The old worker was waited for, and nothing was replaced under it. The
-        # shell that only mentions the path was not taken for one, or the wait
-        # would have run to its limit and the polls would not stop at four.
-        self.assertEqual(recorded.count("old worker still running; new bundle in place: no"), 3)
-        self.assertNotIn("old worker still running; new bundle in place: yes", recorded)
-        self.assertEqual((self.root / "full-install-calls.polls").read_text().strip(), "5")
+        # Signalled by pid, from the list of executables: nothing is matched by command line any more.
+        self.assertEqual([line for line in recorded if line.startswith("pkill")], [])
+        for name in names[:2]:
+            process, mark = running[name]
+            # Asked to stop, given the second it needed, and nothing replaced under it meanwhile.
+            self.assertEqual(mark.read_text().splitlines(),
+                             ["asked to stop; new bundle in place: no", "finished; new bundle in place: no"], name)
+            self.assertEqual(process.wait(timeout=5), 0, name + " was killed rather than waited for")
+        bystander, mark = running[names[2]]
+        self.assertFalse(mark.exists(), "another checkout's test agent was signalled")
+        self.assertIsNone(bystander.poll())
         agent = plistlib.loads((home / "Library/LaunchAgents/io.github.davie521.cgnotify.plist").read_bytes())
-        installed = home / "Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app"
         self.assertEqual(agent["ProgramArguments"], [str(installed / EXECUTABLE)])
         self.assertTrue((installed / MARKER).is_file())
         self.assertEqual(list(installed.parent.glob(".native-install.*")), [])
+
+    def test_full_install_stops_nothing_when_processes_cannot_be_listed(self):
+        # An empty list and a failed listing used to look the same, and the
+        # install went on to replace the bundle under whatever was running.
+        home = self.root / "home-without-ps"
+        result, recorded = self.full_install(home, 'echo "ps: cannot get process list" >&2\nexit 1\n')
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("cannot list running processes", result.stderr)
+        self.assertEqual(recorded, [])
+        self.assertFalse((home / "Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app").exists())
+        self.assertFalse((home / "Library/LaunchAgents").exists())
 
     def test_unknown_option_aborts_without_writes(self):
         self.run_script("scripts/install-agent.sh", "--typo", success=False)
