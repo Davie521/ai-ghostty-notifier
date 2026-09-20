@@ -1,5 +1,10 @@
 # Codex hooks verification
 
+> The frozen shell baseline (`tests/fixtures/shell-baseline/`), the suites that drove it
+> (`tests/test_codex_hooks.py`, four `tests/test-*.sh` files) and `tests/benchmark-hooks.py`
+> were removed on 2026-09-20; the last commit that has them is `0f1ba95`. What follows is a
+> record of what was measured at the time.
+
 Verified on 2026-09-15 with Codex CLI 0.153.4, Ghostty 1.3.1, alerter 26.5,
 macOS 26. Two real Ghostty tabs were opened over AppleScript, driven, and
 closed again; nothing else on the machine was touched.

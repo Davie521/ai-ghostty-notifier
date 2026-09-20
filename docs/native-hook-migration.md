@@ -94,7 +94,9 @@ same binary's worker, and invoking the selected external notification backend
 with literal argv. No runtime helper launches Bash, jq, ps, osascript, sleep or
 the sqlite3 CLI. Bash remains in compatibility entrypoints and build/install
 glue; Python remains in the existing installer and test harness, not per-hook
-runtime. Frozen shell fixtures are never installed and are not native coverage.
+runtime. The frozen shell fixtures that the results below mention were never
+installed and were removed on 2026-09-20; the last commit that has them is
+`0f1ba95`.
 
 ## Verification on 2026-09-16
 

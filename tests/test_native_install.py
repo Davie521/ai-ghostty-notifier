@@ -228,20 +228,26 @@ class NativeInstallTests(unittest.TestCase):
         self.install_app()
         self.assertTrue((self.app / MARKER).is_file())
 
+    def registered_hooks(self):
+        # An earlier install that a failed one must leave byte for byte as it was.
+        destination = self.home / ".claude/hooks"
+        destination.mkdir(parents=True)
+        for source in (REPO / "hooks").glob("*.sh"):
+            (destination / source.name).write_text("#!/bin/bash\n# registered by an earlier install\n")
+        return {p.name: p.read_bytes() for p in destination.iterdir()}
+
     def test_failed_bootstrap_copy_preserves_registered_claude_hooks(self):
         self.install_app()
+        before = self.registered_hooks()
         destination = self.home / ".claude/hooks"
-        shutil.copytree(REPO / "tests/fixtures/shell-baseline/hooks", destination)
-        before = {p.name: p.read_bytes() for p in destination.iterdir()}
         self.stub("cp", 'case "$1" in */native-hook.sh) exit 23 ;; esac\nexec /bin/cp "$@"\n')
         self.run_script("install.sh", success=False)
         self.assertEqual({p.name: p.read_bytes() for p in destination.iterdir()}, before)
 
     def test_failed_download_preserves_registered_claude_hooks(self):
         self.install_app()
+        before = self.registered_hooks()
         destination = self.home / ".claude/hooks"
-        shutil.copytree(REPO / "tests/fixtures/shell-baseline/hooks", destination)
-        before = {p.name: p.read_bytes() for p in destination.iterdir()}
         # Absence of local source hooks selects the existing download workflow.
         (self.checkout / "hooks").rename(self.checkout / "source-hooks")
         self.stub("curl", "exit 22\n")
@@ -250,9 +256,8 @@ class NativeInstallTests(unittest.TestCase):
 
     def test_invalid_staged_script_preserves_registered_claude_hooks(self):
         self.install_app()
+        before = self.registered_hooks()
         destination = self.home / ".claude/hooks"
-        shutil.copytree(REPO / "tests/fixtures/shell-baseline/hooks", destination)
-        before = {p.name: p.read_bytes() for p in destination.iterdir()}
         (self.checkout / "hooks/ghostty-tab-save.sh").write_text("#!/bin/bash\nif\n")
         self.run_script("install.sh", success=False)
         self.assertEqual({p.name: p.read_bytes() for p in destination.iterdir()}, before)

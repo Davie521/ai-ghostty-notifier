@@ -232,8 +232,10 @@ business helper launches Bash, jq, ps, osascript, sleep or the sqlite3 CLI.
 SQLite lookup uses its read-only C API. Build/install scripts can remain shell.
 
 See [responsibilities and verification](docs/native-hook-migration.md).
-The [first migration stage](docs/hook-migration.md) and frozen shell fixtures
-are historical comparisons, not an installed fallback.
+The [first migration stage](docs/hook-migration.md) is a historical record. The
+shell implementation it describes is not an installed fallback; it and the
+suites that compared against it were removed after the migration and remain in
+the git history.
 
 ## Troubleshooting and limits
 
@@ -278,8 +280,7 @@ bash tests/test-agent.sh
 The resident integration suite requires Aqua and test-only jq; it explicitly
 reports SKIP without Aqua. Installation tests use private homes, the real signed
 bundle and service-command tripwires. They do not install a LaunchAgent or test
-the human permission flow. Historical shell fixture tests still require jq;
-this is not a production hook dependency.
+the human permission flow. jq is not a production hook dependency.
 
 Two further checks are opt-in, because they need a running Ghostty and CI has
 none. Run them before deploying a build that touches Apple Events or native

@@ -54,8 +54,8 @@ accept `GHOSTTY_NOTIFY_PROCESS_NAME=codex` to select Codex state.
 Swift tests cover settings, sender paths, ASCII session IDs, safe pruning and
 invalid/nonfinite start records. Real executable tests prove empty backend
 selection, empty branding/group defaults and direct clear with an empty session
-directory. Historical shell fixtures establish the compared behavior; their
-passing tests are not counted as native runtime validation.
+directory. The historical shell fixtures that established the compared behavior
+were removed on 2026-09-20 and remain in the git history.
 
 Native terminal tests cover transient query failures, permission backoff expiry,
 empty snapshots, TUI redraws, retry snapshots, negative-cache invalidation,

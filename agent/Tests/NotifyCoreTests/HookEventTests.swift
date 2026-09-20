@@ -152,56 +152,8 @@ final class HookSandbox: @unchecked Sendable {
     }
 }
 
-@Suite("Shared journal across native and compatibility backends")
+@Suite("Round and rate journal")
 struct RoundJournalTests {
-    @Test(arguments: ["C", "en_US.UTF-8"])
-    func realShellAndSwiftShareRateLimitInBothDirections(_ locale: String) async throws {
-        let sandbox = try HookSandbox()
-        var event = try sandbox.event()
-        event.occurredAt = floor(Date().timeIntervalSince1970)
-        event.startedAt = event.occurredAt - 1000
-        let hooks = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(
-                "tests/fixtures/shell-baseline/hooks")
-        try sandbox.write(
-            "terminal-notifier", "#!/bin/bash\nprintf 'posted\\n' >> \"$FIXTURE_DELIVERIES\"\n")
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o755],
-            ofItemAtPath: sandbox.root.appendingPathComponent("terminal-notifier").path)
-        var env = ProcessInfo.processInfo.environment.filter {
-            !$0.key.hasPrefix("GHOSTTY_NOTIFY_")
-        }
-        env["PATH"] = sandbox.root.path + ":" + (env["PATH"] ?? "/usr/bin:/bin")
-        env["LC_ALL"] = locale
-        env["TERM_PROGRAM"] = "ghostty"
-        env["GHOSTTY_NOTIFY_BACKEND"] = "terminal-notifier"
-        env["GHOSTTY_NOTIFY_CLEAR_ON_FOCUS"] = "0"
-        env["GHOSTTY_NOTIFY_SESSION_DIR"] = event.sessionDirectory
-        env["GHOSTTY_NOTIFY_RATE_DIR"] = event.rateDirectory
-        env["GHOSTTY_NOTIFY_ROUND_ID"] = event.roundID
-        env["GHOSTTY_NOTIFY_ROUND_START"] = String(Int(event.startedAt))
-        env["GHOSTTY_NOTIFY_EVENT_AT"] = String(Int(event.occurredAt))
-        env["FIXTURE_DELIVERIES"] = sandbox.root.appendingPathComponent("delivered").path
-        let input = try JSONEncoder().encode(event.payload)
-        let journal = DiskRoundJournal()
-        #expect(await journal.claimRate(event, now: event.occurredAt))
-        _ = await ChildCommand.output(
-            executable: "/bin/bash",
-            arguments: [hooks.appendingPathComponent("legacy-notify.sh").path],
-            environment: env, input: input)
-        #expect(DiskRoundJournal.read(env["FIXTURE_DELIVERIES"]!).isEmpty)
-
-        // Now let the real compatibility backend reserve and deliver first.
-        try FileManager.default.removeItem(atPath: DiskRoundJournal.rateFile(event))
-        _ = await ChildCommand.output(
-            executable: "/bin/bash",
-            arguments: [hooks.appendingPathComponent("legacy-notify.sh").path],
-            environment: env, input: input)
-        #expect(DiskRoundJournal.read(env["FIXTURE_DELIVERIES"]!) == "posted")
-        #expect(!(await DiskRoundJournal().claimRate(event, now: event.occurredAt)))
-    }
-
     @Test func oldCompletionCannotRemoveANewerStart() async throws {
         let sandbox = try HookSandbox()
         let journal = DiskRoundJournal()
