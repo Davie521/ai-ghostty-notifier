@@ -68,6 +68,15 @@ public struct AgentPaths: Equatable, Sendable {
     /// again and again.
     public var styleHintShownFile: String { root + "/style-hint-shown" }
     public var log: String { root + "/agent.log" }
+    /// The default locations of everything this program keeps, for both CLIs.
+    /// Only the defaults: a directory chosen through a setting is the user's.
+    public func ownedDirectories(codexHome: String?) -> [String] {
+        let codex = codexHome.flatMap { $0.hasPrefix("/") ? $0 : nil } ?? home + "/.codex"
+        return [root]
+            + [home + "/.claude", codex].flatMap { base in
+                [base + "/notifications/ghostty-sessions", base + "/notifications/state"]
+            }
+    }
     /// Where ghostty-tab-save.sh records each session's resolved tab id.
     public func sessionTabFile(sessionID: String) -> String {
         home + "/.claude/notifications/ghostty-sessions/" + sessionID + ".json"

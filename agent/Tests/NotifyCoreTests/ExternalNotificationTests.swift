@@ -225,6 +225,74 @@ struct ExternalNotificationTests {
         await external.clear(event)
         #expect(process.terminated == (scenario == "same" ? [456789] : []))
     }
+    @Test func pruningIsHourlyAcrossProcessesNotOncePerHook() async throws {
+        let sandbox = try HookSandbox()
+        var event = try event(sandbox)
+        event.occurredAt = Date().timeIntervalSince1970
+        func plant(_ name: String) throws {
+            try sandbox.write(name, "stale")
+            try FileManager.default.setAttributes(
+                [.modificationDate: Date(timeIntervalSince1970: 0)],
+                ofItemAtPath: sandbox.root.path + "/" + name)
+        }
+        func exists(_ name: String) -> Bool {
+            FileManager.default.fileExists(atPath: sandbox.root.path + "/" + name)
+        }
+        try plant("aaa-111.title")
+        await DiskRoundJournal().prepare(event)
+        #expect(!exists("aaa-111.title"))
+        // Every hook is a new process, which a new journal stands in for. Within
+        // the hour it must not list the directory again.
+        try plant("bbb-222.title")
+        event.occurredAt += 1800
+        await DiskRoundJournal().prepare(event)
+        #expect(exists("bbb-222.title"))
+        event.occurredAt += 1801
+        await DiskRoundJournal().prepare(event)
+        #expect(!exists("bbb-222.title"))
+    }
+
+    @Test func recordsArePrivateAndAChosenDirectoryKeepsItsMode() async throws {
+        let sandbox = try HookSandbox()
+        var event = try event(sandbox)
+        func mode(_ path: String) throws -> Int {
+            let attrs = try FileManager.default.attributesOfItem(atPath: path)
+            return (attrs[.posixPermissions] as? NSNumber)?.intValue ?? -1
+        }
+        // The sandbox root stands for a directory the user chose: left as it is.
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: sandbox.root.path)
+        event.sessionDirectory = sandbox.root.path
+        event.rateDirectory = sandbox.root.path + "/made/by/us"
+        event.owner = "1000:ttys001:now"
+        // A prompt, so that the journal writes the round itself rather than
+        // keeping the one the fixture planted.
+        event.payload.hookEventName = "UserPromptSubmit"
+        try FileManager.default.removeItem(atPath: sandbox.root.path + "/abc-123.start")
+        let journal = DiskRoundJournal()
+        event = try await journal.capture(event)
+        await journal.prepare(event)
+        _ = await journal.claimRate(event, now: event.occurredAt)
+        #expect(try mode(sandbox.root.path) == 0o755)
+        #expect(try mode(sandbox.root.path + "/made") == 0o700)
+        #expect(try mode(event.rateDirectory) == 0o700)
+        let records = try FileManager.default.contentsOfDirectory(atPath: sandbox.root.path)
+            .filter { $0.hasPrefix(event.sessionID + ".") && !$0.hasSuffix("lock") }
+        #expect(records.contains(event.sessionID + ".round"))
+        #expect(records.contains(event.sessionID + ".claude-owner"))
+        for name in records + [".pruned"] {
+            let found = try? mode(sandbox.root.path + "/" + name)
+            #expect(found == 0o600, "\(name) has mode \(String(found ?? -1, radix: 8))")
+        }
+        #expect(try mode(DiskRoundJournal.rateFile(event)) == 0o600)
+        // Replacing a record keeps it private and leaves no temporary file.
+        try PrivateFile.write("again\n", to: sandbox.root.path + "/" + event.sessionID + ".round")
+        #expect(try mode(sandbox.root.path + "/" + event.sessionID + ".round") == 0o600)
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: sandbox.root.path)
+                .allSatisfy { !$0.hasSuffix(".tmp") })
+    }
+
     @Test func pruneCannotDeleteUnrelatedFilesInAnOverriddenDirectory() async throws {
         let sandbox = try HookSandbox()
         var event = try event(sandbox)

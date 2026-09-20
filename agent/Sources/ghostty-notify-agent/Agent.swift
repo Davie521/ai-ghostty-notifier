@@ -65,8 +65,13 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        try? FileManager.default.createDirectory(
-            atPath: paths.root, withIntermediateDirectories: true)
+        try? PrivateFile.createDirectory(paths.root)
+        // Earlier versions created these open to every local account.
+        for directory in paths.ownedDirectories(
+            codexHome: ProcessInfo.processInfo.environment["CODEX_HOME"])
+        {
+            PrivateFile.closeDirectory(directory)
+        }
         writePidFile()
         try? readiness.publishCapabilities(pid: getpid())
         loadState()
@@ -686,7 +691,7 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Atomic: a crash mid-write must not leave bookkeeping that decodes to
         // half a truth. `Data.write(options: .atomic)` handles the
         // does-not-exist-yet case, which replaceItemAt does not.
-        try? data.write(to: URL(fileURLWithPath: paths.state), options: [.atomic])
+        try? PrivateFile.write(data, to: paths.state)
     }
 
     private static func now() -> Double { Date().timeIntervalSince1970 }

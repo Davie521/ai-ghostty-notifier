@@ -151,7 +151,7 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
             stalledAt = now
             // Other hook processes cannot see this actor. The stamp is how the
             // next one avoids paying the same timeout for the same condition.
-            try? "\(now)\n".write(toFile: stallStamp(event), atomically: true, encoding: .utf8)
+            try? PrivateFile.write("\(now)\n", to: stallStamp(event))
             log(
                 "terminal query abandoned after \(queryTimeout)s; "
                     + "skipping terminal binding for \(Int(Self.stallBackoff))s")
@@ -292,8 +292,7 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
                     [-1743, -1708, -2741, CocoaError.fileReadNoPermission.rawValue]
                         .contains((error as NSError).code)
                 {
-                    try? Data("unavailable\n".utf8).write(
-                        to: URL(fileURLWithPath: sentinel), options: .atomic)
+                    try? PrivateFile.write("unavailable\n", to: sentinel)
                 }
                 log("terminal snapshot unavailable: \(error)")
                 return nil
@@ -363,8 +362,7 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
                 publish(event, tab: "", pid: pid)
                 try? FileManager.default.removeItem(atPath: path(event, "attempts"))
             } else {
-                try? "\(attempts)\n".write(
-                    toFile: path(event, "attempts"), atomically: true, encoding: .utf8)
+                try? PrivateFile.write("\(attempts)\n", to: path(event, "attempts"))
             }
         }
         return result
@@ -421,7 +419,7 @@ public actor NativeTerminalBinding: TerminalBindingProviding {
         let record = Record(tabID: tab, cwd: event.payload.cwd, ghosttyPID: pid.map(String.init))
         guard let data = try? JSONEncoder().encode(record) else { return false }
         do {
-            try data.write(to: URL(fileURLWithPath: path(event, "json")), options: .atomic)
+            try PrivateFile.write(data, to: path(event, "json"))
             return true
         } catch {
             log("cannot publish terminal binding: \(error)")
