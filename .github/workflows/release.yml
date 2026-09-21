@@ -1,0 +1,185 @@
+name: Release
+
+# Three ways in, one pipeline (docs/releasing.md):
+#   push a tag vX.Y.Z           sign, notarize, package and publish the release
+#   run it by hand              ad-hoc build, packaged and installed from as a
+#                               smoke test, uploaded as an artifact; no secrets
+#   run it by hand, signed      the same with the Developer ID and notarization,
+#                               to check the secrets before the first tag; still
+#                               publishes nothing
+# Only a tag publishes. A run that should sign but lacks a secret fails before
+# building; it never falls back to publishing an ad-hoc App.
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+    inputs:
+      sign_and_notarize:
+        description: "Sign with the Developer ID and notarize (needs the secrets); publishes nothing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      SIGN: ${{ github.event_name == 'push' || inputs.sign_and_notarize }}
+      PUBLISH: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Decide the version
+        id: version
+        run: |
+          plist_version=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" agent/Resources/Info.plist)
+          if [[ "$PUBLISH" == true ]]; then
+            version=${GITHUB_REF_NAME#v}
+            if [[ "$version" != "$plist_version" ]]; then
+              echo "::error::tag $GITHUB_REF_NAME, but agent/Resources/Info.plist says $plist_version"
+              exit 1
+            fi
+          else
+            version=$plist_version
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing $version (sign=$SIGN, publish=$PUBLISH)"
+
+      - name: Check the signing secrets
+        if: env.SIGN == 'true'
+        env:
+          DEVELOPER_ID_CERT_P12_BASE64: ${{ secrets.DEVELOPER_ID_CERT_P12_BASE64 }}
+          DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+          NOTARY_KEY_P8_BASE64: ${{ secrets.NOTARY_KEY_P8_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          missing=""
+          for name in DEVELOPER_ID_CERT_P12_BASE64 DEVELOPER_ID_CERT_PASSWORD \
+                      NOTARY_KEY_P8_BASE64 NOTARY_KEY_ID NOTARY_ISSUER_ID; do
+            [[ -n "${!name}" ]] || missing="$missing $name"
+          done
+          if [[ -n "$missing" ]]; then
+            echo "::error::missing repository secrets:$missing (see docs/releasing.md)"
+            exit 1
+          fi
+
+      - name: Import the Developer ID certificate into a throwaway keychain
+        if: env.SIGN == 'true'
+        env:
+          DEVELOPER_ID_CERT_P12_BASE64: ${{ secrets.DEVELOPER_ID_CERT_P12_BASE64 }}
+          DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/release.keychain-db"
+          keychain_password=$(openssl rand -base64 24)
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          printf '%s' "$DEVELOPER_ID_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$DEVELOPER_ID_CERT_PASSWORD" \
+            -T /usr/bin/codesign >/dev/null
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
+          # Search this keychain first; keep the runner's own after it.
+          existing=$(security list-keychains -d user | tr -d '"')
+          # shellcheck disable=SC2086
+          security list-keychains -d user -s "$keychain" $existing
+          identity=$(security find-identity -v -p codesigning "$keychain" |
+            awk -F'"' '/Developer ID Application/ { print $2; exit }')
+          if [[ -z "$identity" ]]; then
+            echo "::error::the certificate holds no Developer ID Application identity"
+            exit 1
+          fi
+          echo "Signing as: $identity"
+          echo "SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "RELEASE_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+
+      - name: Build (universal, hardened runtime, no Apple system sounds)
+        run: |
+          swift --version
+          if [[ "$SIGN" == true ]]; then
+            bash scripts/build-agent.sh --universal --sign "$SIGN_IDENTITY" --no-system-sounds
+          else
+            bash scripts/build-agent.sh --universal --hardened --no-system-sounds
+          fi
+          lipo -archs build/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent
+
+      - name: Notarize and staple
+        if: env.SIGN == 'true'
+        env:
+          NOTARY_KEY_P8_BASE64: ${{ secrets.NOTARY_KEY_P8_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          key="$RUNNER_TEMP/notary.p8"
+          printf '%s' "$NOTARY_KEY_P8_BASE64" | base64 --decode > "$key"
+          ditto -c -k --keepParent build/ClaudeGhosttyNotify.app "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --key "$key" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" \
+            --wait --timeout 30m --output-format json > "$RUNNER_TEMP/notary.json" || true
+          cat "$RUNNER_TEMP/notary.json"
+          status=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("status", ""))' "$RUNNER_TEMP/notary.json" || true)
+          if [[ "$status" != Accepted ]]; then
+            id=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("id", ""))' "$RUNNER_TEMP/notary.json" || true)
+            if [[ -n "$id" ]]; then
+              xcrun notarytool log "$id" --key "$key" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" || true
+            fi
+            rm -f "$key"
+            echo "::error::notarization status: ${status:-no answer}"
+            exit 1
+          fi
+          rm -f "$key"
+          xcrun stapler staple build/ClaudeGhosttyNotify.app
+          xcrun stapler validate build/ClaudeGhosttyNotify.app
+          spctl --assess --type execute --verbose=2 build/ClaudeGhosttyNotify.app
+
+      - name: Package
+        run: bash scripts/package-release.sh "${{ steps.version.outputs.version }}" dist
+
+      - name: Install from the package into a private home (smoke test)
+        run: |
+          release="$RUNNER_TEMP/release/latest/download"
+          mkdir -p "$release" "$RUNNER_TEMP/home/.claude"
+          cp dist/* "$release/"
+          allow=""
+          [[ "$SIGN" == true ]] || allow="--allow-unnotarized"
+          # shellcheck disable=SC2086
+          env -u CLAUDE_CONFIG_DIR -u CODEX_HOME HOME="$RUNNER_TEMP/home" \
+            GHOSTTY_NOTIFY_RELEASE_URL="file://$RUNNER_TEMP/release" \
+            bash dist/setup.sh --no-start --claude --no-codex $allow
+          test -x "$RUNNER_TEMP/home/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent"
+          python3 -c 'import json, sys; hooks = json.load(open(sys.argv[1]))["hooks"]; assert sorted(hooks) == ["Notification", "PreToolUse", "Stop", "UserPromptSubmit"], hooks' \
+            "$RUNNER_TEMP/home/.claude/settings.json"
+
+      - name: Keep the assets of a run that publishes nothing
+        if: env.PUBLISH != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ steps.version.outputs.version }}-${{ env.SIGN == 'true' && 'signed' || 'adhoc' }}
+          path: dist/
+          if-no-files-found: error
+
+      - name: Publish the release
+        if: env.PUBLISH == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes \
+            --title "$GITHUB_REF_NAME" \
+            dist/ai-ghostty-notifier-macos.zip dist/setup.sh dist/SHA256SUMS
+
+      - name: Remove the keychain
+        if: always()
+        run: |
+          if [[ -n "${RELEASE_KEYCHAIN:-}" ]]; then
+            security delete-keychain "$RELEASE_KEYCHAIN" || true
+          fi
+          rm -f "$RUNNER_TEMP/cert.p12" "$RUNNER_TEMP/notary.p8"

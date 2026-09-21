@@ -28,7 +28,7 @@ Claude Code or Codex CLI run in Ghostty ends with a macOS notification whose
 ```bash
 sw_vers -productVersion                  # macOS only; this project has no other platform
 ls -d /Applications/Ghostty.app 2>/dev/null || ls -d ~/Applications/Ghostty.app   # Ghostty
-swift --version                          # Swift 6 toolchain, for building the app
+swift --version                          # Swift 6 toolchain; only when building from source
 python3 --version                        # 3.11+, needed only by the Codex installer
 ```
 
@@ -37,6 +37,34 @@ Codex CLI. If both exist, do both. If neither does, ask before continuing.
 
 Work inside a clone of this repository, and stay on one revision: the app and
 the hooks have to come from the same one.
+
+## Fast path: a published release
+
+Check whether the repository has a release:
+
+```bash
+curl -fsSIL -o /dev/null https://github.com/Davie521/ai-ghostty-notifier/releases/latest/download/setup.sh \
+  && echo release-exists
+```
+
+If it prints `release-exists`, install from the release instead of building:
+
+```bash
+curl -fsSL https://github.com/Davie521/ai-ghostty-notifier/releases/latest/download/setup.sh | bash
+```
+
+No clone and no Swift toolchain are needed. The script checks the download
+against the release's `SHA256SUMS` and refuses an App that is not a notarized
+Developer ID build. It then does steps 1–3 below by itself:
+- installs the App and its LaunchAgent;
+- merges the Claude Code hooks into `settings.json`. It keeps every other
+  entry, backs the file up first, and refuses when the plugin is enabled;
+- registers the Codex hooks, when Codex and a Python 3.11+ are both present.
+
+Read its output, then go to step 4. If it stops on an error, report the error:
+do not retry with `--allow-unnotarized`, which exists only for testing.
+
+Without a release, build from source: steps 1–3.
 
 ## 1. Build and install the companion app
 
