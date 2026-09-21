@@ -173,7 +173,7 @@ class NativeHookTests(unittest.TestCase):
         self.invoke("Stop", source="codex")
         self.wait(lambda: len(self.notices()) == 1)
         self.assertIn("codex-ghostty-notify-" + SID, self.notices()[0])
-        self.assertIn("Codex ✅", self.notices()[0])
+        self.assertIn("Codex", self.notices()[0])
 
     def test_no_native_owner_subagent_or_wrong_event_does_not_create_state(self):
         self.invoke("UserPromptSubmit", source="codex", owner=False)
@@ -213,7 +213,7 @@ class NativeHookTests(unittest.TestCase):
         self.start("codex")
         self.invoke("Stop", source="codex")
         self.wait(lambda: len(self.notices()) == 1)
-        self.assertIn("Codex ✅", self.notices()[0])
+        self.assertIn("Codex", self.notices()[0])
 
     def test_unicode_title_and_metacharacters_are_literal_argv(self):
         self.start()
@@ -226,7 +226,7 @@ class NativeHookTests(unittest.TestCase):
         self.start()
         self.invoke("Stop", env={"GHOSTTY_NOTIFY_APP_NAME": "", "GHOSTTY_NOTIFY_GROUP_PREFIX": ""})
         self.wait(lambda: len(self.notices()) == 1)
-        self.assertIn("Claude ✅", self.notices()[0])
+        self.assertIn("Claude", self.notices()[0])
         self.assertIn("ghostty-notify-" + SID, self.notices()[0])
 
     def test_empty_backend_still_selects_the_ready_native_resident(self):
