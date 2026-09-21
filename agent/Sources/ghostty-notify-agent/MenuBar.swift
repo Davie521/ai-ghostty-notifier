@@ -85,8 +85,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
         // displays. The inset is the usual breathing room around a menu bar
         // glyph.
         let height = max(12, NSStatusBar.system.thickness - 5)
-        self.markImage = ClaudeMark.image(height: height, crossedOut: false)
-        self.crossedOutImage = ClaudeMark.image(height: height, crossedOut: true)
+        self.markImage = GhostMark.image(height: height, crossedOut: false)
+        self.crossedOutImage = GhostMark.image(height: height, crossedOut: true)
         super.init()
 
         let menu = NSMenu()

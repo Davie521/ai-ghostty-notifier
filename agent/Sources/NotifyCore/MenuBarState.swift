@@ -55,9 +55,9 @@ public enum MenuBarProblem: Equatable, Sendable {
 
 /// The two marks the menu bar can wear. Kept as a value rather than an image so
 /// the state machine stays testable without AppKit; drawing lives in
-/// `ClaudeMark`.
+/// `GhostMark`.
 public enum MenuBarIcon: Equatable, Sendable {
-    /// Claude's radiating mark — the agent is working.
+    /// The ghost bell — the agent is working.
     case mark
     /// The same mark struck through: the agent is running but nothing it posts
     /// will ever appear.
