@@ -10,16 +10,20 @@ A release is a GitHub Release carrying three assets, built and published by
 | `setup.sh` | the one-command installer, which downloads the zip above |
 | `SHA256SUMS` | checksums of both |
 
-Users install with
+Users install the way the README says, by pasting a prompt into their coding
+agent; that does not change when releases exist.
+[docs/agent-install.md](agent-install.md) checks for a release first, and when
+there is one the agent runs
 
 ```bash
 curl -fsSL https://github.com/Davie521/ai-ghostty-notifier/releases/latest/download/setup.sh | bash
 ```
 
-which checks the checksum, that the App is a notarized Developer ID build, then
-installs the App and registers the hooks: nothing is compiled
-([scripts/setup.sh](../scripts/setup.sh)). The asset names carry no version so
-that `releases/latest/download/…` always resolves.
+instead of building from source. It checks the checksum, that the App is a
+notarized Developer ID build, then installs the App and registers the hooks;
+nothing is compiled ([scripts/setup.sh](../scripts/setup.sh)). The same line
+works without an agent. The asset names carry no version so that
+`releases/latest/download/…` always resolves.
 
 ## One-time setup
 
@@ -105,8 +109,9 @@ still work together.
    git tag v0.5.0 && git push origin v0.5.0
    ```
 
-3. Watch the run. When it is green, the release exists and the one-liner
-   installs it. Check it once on a Mac, ideally one that never had a local
+3. Watch the run. When it is green, the release exists, and from then on the
+   README's prompt installs it without building anything; the README itself
+   needs no change. Check it once on a Mac, ideally one that never had a local
    build:
 
    ```bash

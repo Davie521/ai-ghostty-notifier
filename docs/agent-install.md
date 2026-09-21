@@ -101,31 +101,46 @@ live resident, and the normal installer is the way to upgrade either.
 ## 2. Register the Claude Code hooks
 
 ```bash
-bash install.sh
+bash install.sh --register-settings
 ```
 
-It verifies the app is installed, copies the launchers into `~/.claude/hooks/`
-and prints a settings snippet. **It deliberately does not touch
-`~/.claude/settings.json`. That merge is your job:**
+It verifies the app is installed, copies the launchers into `<config>/hooks/`,
+and merges their entries into `<config>/settings.json`. `<config>` is
+`$CLAUDE_CONFIG_DIR` when set, otherwise `~/.claude`. The merge
+(`scripts/register-claude-hooks.py`):
 
-- Back the file up first.
-- Merge the printed entries into the existing `hooks` object and leave every
-  other hook alone.
-- Keep `"timeout": 15` on each entry. Without it Claude Code waits up to 600
+- keeps every other entry, and first copies the file aside as
+  `settings.json.ghostty-notify-backup-<time>`;
+- adds nothing to an event that already runs one of these launchers, so running
+  it again is harmless;
+- gives each entry `"timeout": 15`. Without it Claude Code waits up to 600
   seconds for a command hook, which is how a stuck hook once looked like a hung
-  session ([incident](incident-2026-09-17-pretooluse-hang.md)).
-- [`example-settings.json`](../example-settings.json) is the complete example.
-- Then prove the file is still valid JSON and still holds the user's own keys:
+  session ([incident](incident-2026-09-17-pretooluse-hang.md));
+- writes nothing, and says why, when `settings.json` does not parse or when the
+  plugin is enabled. The plugin registers the same hooks itself, and both
+  together mean two notifications for every event.
+
+Read its output. `Registered …` or `Hooks already registered …` means done. If
+it reports the plugin, stop and ask the user which of the two to keep. Only if
+it fell back to printing a snippet (no Python 3.9+, or an unreadable
+`settings.json`) merge by hand: back the file up, add the printed entries to
+the existing `hooks` object without touching the rest, keep the timeouts;
+[`example-settings.json`](../example-settings.json) is the complete example.
+
+If the user has more than one Claude configuration directory, run it once for
+each: `CLAUDE_CONFIG_DIR=<dir> bash install.sh --register-settings`.
+
+Then prove the file still parses:
 
 ```bash
-python3 -m json.tool ~/.claude/settings.json > /dev/null && echo "settings.json parses"
+python3 -m json.tool "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" > /dev/null && echo "settings.json parses"
 ```
 
 The plugin is the alternative, not an addition: the user — not you, these are
 slash commands — runs `/plugin marketplace add Davie521/ai-ghostty-notifier`
-and `/plugin install claude-ghostty-notify` inside Claude Code. The published
-marketplace can lag the clone you are installing from; prefer the manual path
-unless the user asks for the plugin.
+and `/plugin install ai-ghostty-notifier@ai-ghostty-notifier` inside Claude
+Code. The published marketplace can lag the clone you are installing from;
+prefer `install.sh` unless the user asks for the plugin.
 
 ## 3. Register the Codex CLI hooks
 
@@ -191,7 +206,7 @@ bash scripts/install-agent.sh --uninstall
 ```
 
 For Claude, remove this project's entries from `~/.claude/settings.json` (or
-`/plugin uninstall claude-ghostty-notify` for a plugin install). For Codex,
+`/plugin uninstall ai-ghostty-notifier@ai-ghostty-notifier` for a plugin install). For Codex,
 remove the entries containing `ghostty-notify/codex-hook.sh` from
 `~/.codex/hooks.json`; its backups are under `~/.codex/backups/`. Session state
 survives an uninstall, and there is no shell fallback once the app is gone.

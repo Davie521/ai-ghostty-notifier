@@ -54,7 +54,7 @@ bash install.sh
 
 ```text
 /plugin marketplace add Davie521/ai-ghostty-notifier
-/plugin install claude-ghostty-notify
+/plugin install ai-ghostty-notifier@ai-ghostty-notifier
 ```
 
 手动安装和插件注册二选一，避免重复通知。测试本 worktree 时用本地手动安装，
@@ -261,7 +261,7 @@ python3 tests/test-live-worker.py
 ## 卸载
 
 先移除 hook 注册并重启已打开的 CLI 会话。
-插件方式使用 `/plugin uninstall claude-ghostty-notify`；
+插件方式使用 `/plugin uninstall ai-ghostty-notifier@ai-ghostty-notifier`；
 手动 Claude 安装删除 `settings.json` 中本项目的条目；
 Codex 删除 `hooks.json` 中命令包含 `ghostty-notify/codex-hook.sh` 的条目。
 

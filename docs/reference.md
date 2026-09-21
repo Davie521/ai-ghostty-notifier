@@ -58,7 +58,7 @@ then register the plugin in Claude Code:
 
 ```text
 /plugin marketplace add Davie521/ai-ghostty-notifier
-/plugin install claude-ghostty-notify
+/plugin install ai-ghostty-notifier@ai-ghostty-notifier
 ```
 
 Choose manual or plugin registration, not both. During worktree testing use the
@@ -303,7 +303,7 @@ exist is in `docs/incident-2026-09-17-pretooluse-hang.md`.
 ## Uninstall
 
 Remove hook registrations first and restart open CLI sessions. For plugin
-installs, use `/plugin uninstall claude-ghostty-notify`. For manual Claude
+installs, use `/plugin uninstall ai-ghostty-notifier@ai-ghostty-notifier`. For manual Claude
 installs remove this project's entries from `settings.json`; for Codex remove
 entries containing `ghostty-notify/codex-hook.sh` from `hooks.json`.
 
