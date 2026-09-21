@@ -98,7 +98,9 @@ Allow the app in any Focus modes you use. External notification backends require
 their own notification authorization.
 
 Restart open Claude/Codex sessions to load their hook registrations and settings.
-The app's menu bar shows authorization and alert-style status.
+The app's menu bar item shows authorization and alert-style status — a problem
+System Settings can fix links straight to it — and lists the sessions waiting
+on you; click one to jump to its tab.
 
 ### Runtime-only installation (no resident service)
 

@@ -143,6 +143,117 @@ public enum MenuBarState: Equatable, Sendable {
     }
 }
 
+/// How a status line reads at a glance, which decides the symbol beside it.
+public enum MenuStatusTone: Equatable, Sendable {
+    case ok
+    /// No answer yet; one is on its way.
+    case checking
+    /// Read, but macOS named something this build does not know how to judge.
+    case unrecognised
+    case problem
+}
+
+/// One line of the status block at the top of the menu.
+///
+/// Decided here rather than in the AppKit half so that what the menu says, in
+/// every combination of permission and alert style, is testable.
+public struct MenuStatusLine: Equatable, Sendable {
+    public let tone: MenuStatusTone
+    public let text: String
+    /// Whether the line is a button to this app's notification settings. True
+    /// exactly where that pane holds the fix — and it has to be: a menu item
+    /// that does nothing is drawn disabled, dimmed to the same grey as
+    /// "everything is fine", which is the wrong look for a problem.
+    public let opensSettings: Bool
+
+    public init(tone: MenuStatusTone, text: String, opensSettings: Bool = false) {
+        self.tone = tone
+        self.text = text
+        self.opensSettings = opensSettings
+    }
+
+    /// The status block.
+    ///
+    /// One line when everything is in order: two ticks saying the same "fine"
+    /// only pushed the waiting sessions further down. Otherwise one line per
+    /// part that is not in order, so a problem is never folded into a summary
+    /// the user has to unpack.
+    public static func block(
+        permission: NotificationPermission, alertStyle: String
+    ) -> [MenuStatusLine] {
+        let permissionLine = Self.permission(permission)
+        // Without permission there is no alert style to speak of — macOS
+        // reports "none" for a denied app — and a second warning would only
+        // repeat the first one with a different fix.
+        if let permissionLine, permissionLine.tone == .problem { return [permissionLine] }
+
+        let open = [permissionLine, Self.alertStyle(alertStyle)].compactMap { $0 }
+        if open.isEmpty {
+            return [MenuStatusLine(tone: .ok, text: "Notifications on · Persistent")]
+        }
+        if open.count > 1, open.allSatisfy({ $0.tone == .checking }) {
+            return [MenuStatusLine(tone: .checking, text: "Checking notification settings…")]
+        }
+        return open
+    }
+
+    /// Nil when there is nothing to say beyond "fine".
+    private static func permission(_ permission: NotificationPermission) -> MenuStatusLine? {
+        switch permission {
+        case .granted:
+            return nil
+        case .unknown:
+            return MenuStatusLine(tone: .checking, text: "Checking notification permission…")
+        case .denied:
+            return MenuStatusLine(
+                tone: .problem, text: "Notifications not allowed — Fix…", opensSettings: true)
+        case .unavailable:
+            // Not the user's answer: the system never asked. Settings has no row
+            // for this app yet, so sending them there would be a dead end; a
+            // relaunch is what fixes it.
+            return MenuStatusLine(
+                tone: .problem, text: "Notification permission unavailable — relaunch")
+        }
+    }
+
+    private static func alertStyle(_ style: String) -> MenuStatusLine? {
+        switch style {
+        case "alert":
+            return nil
+        case "banner":
+            // Temporary still delivers, which is why the icon does not flag it;
+            // but it slides away before it can be clicked, and the fix is one
+            // setting away.
+            return MenuStatusLine(
+                tone: .problem, text: "Alert style: Temporary — Fix…", opensSettings: true)
+        case "none":
+            return MenuStatusLine(
+                tone: .problem, text: "Alerts turned off — Fix…", opensSettings: true)
+        case "":
+            return MenuStatusLine(tone: .checking, text: "Checking alert style…")
+        default:
+            // Distinct from "checking", which would otherwise sit there forever
+            // claiming an answer is still coming.
+            return MenuStatusLine(tone: .unrecognised, text: "Alert style: \(style)")
+        }
+    }
+}
+
+/// Short texts the menu shows, kept beside the state they describe.
+public enum MenuText {
+    /// Under the status block, in small print. Honest about the window —
+    /// sessions are forgotten after 24h, so this is "seen recently", not "open
+    /// right now" — and useful mainly as a sign of life: a count stuck at zero
+    /// while Claude runs means the hooks are not reaching the agent.
+    public static func sessionsSeen(_ count: Int) -> String {
+        count == 1 ? "1 session seen in the last 24h" : "\(count) sessions seen in the last 24h"
+    }
+
+    /// Heads the list of waiting sessions; the count is there so a long list
+    /// does not have to be counted by eye.
+    public static func waitingHeader(_ count: Int) -> String { "Waiting · \(count)" }
+}
+
 /// Which part of the notification a row line came from.
 ///
 /// Carried explicitly rather than inferred from position: empty lines are
@@ -212,6 +323,37 @@ public struct WaitingSession: Equatable, Sendable {
         .map { ($0.0, $0.1.trimmingCharacters(in: .whitespacesAndNewlines)) }
         .filter { !$0.1.isEmpty }
         .map { NotificationLine(role: $0.0, text: Self.truncate($0.1, to: maxLineLength)) }
+    }
+
+    /// The row as the menu lays it out: the notification's own lines, with the
+    /// time riding on the title — "Claude · 5m ago" — the way Notification
+    /// Center puts the sender and the time together above the text.
+    ///
+    /// The title is the app name, and the same on every row, so it is the one
+    /// line that tells two rows apart the least; the caller draws it small.
+    /// A row with no title still says when, and a row with no text at all names
+    /// its session, so no row is ever an empty click target.
+    public func menuLines(now: Double, maxLineLength: Int = 64) -> [NotificationLine] {
+        let time = relativeTime(now: now)
+        var lines = notificationLines(maxLineLength: maxLineLength)
+        if lines.isEmpty {
+            lines = [NotificationLine(role: .subtitle, text: fallbackLabel)]
+        }
+        if let first = lines.first, first.role == .title {
+            lines[0] = NotificationLine(role: .title, text: first.text + " · " + time)
+        } else {
+            lines.insert(NotificationLine(role: .title, text: time), at: 0)
+        }
+        return lines
+    }
+
+    /// The whole text, one line each, for a tooltip — nil when nothing was
+    /// clipped, so a row that already shows everything does not pop up a copy
+    /// of itself.
+    public func clippedText(maxLineLength: Int = 64) -> String? {
+        let full = notificationLines(maxLineLength: .max)
+        guard full != notificationLines(maxLineLength: maxLineLength) else { return nil }
+        return full.map(\.text).joined(separator: "\n")
     }
 
     /// A stand-in for a row with nothing to show, so a session waiting on the
