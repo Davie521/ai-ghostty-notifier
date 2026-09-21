@@ -199,10 +199,12 @@ them. They need an idle Ghostty tab, and the rest of the suites are in
 
 ## If you need to undo this
 
-Unregister the hooks for both CLIs first, then remove the shared app:
+Unregister the hooks for both CLIs first, then remove the shared app: the
+first command from a checkout, the second after an install from a release.
 
 ```bash
 bash scripts/install-agent.sh --uninstall
+curl -fsSL https://github.com/Davie521/ai-ghostty-notifier/releases/latest/download/setup.sh | bash -s -- --uninstall
 ```
 
 For Claude, remove this project's entries from `~/.claude/settings.json` (or

@@ -19,10 +19,12 @@
 #   --no-start            install the App without its LaunchAgent or prompts
 #   --claude / --no-claude, --codex / --no-codex
 #                         force either set of hooks on or off (default: detect)
-#   --uninstall           remove the App and its LaunchAgent; hooks stay
-#                         registered and are listed so they can be removed
-#   --allow-unnotarized   accept a bundle Gatekeeper rejects (testing a local
-#                         or dry-run build only; never for a real install)
+#   --uninstall           remove the App and its LaunchAgent, downloading
+#                         nothing; hooks stay registered and are listed so they
+#                         can be removed
+#   --allow-unnotarized   install although Gatekeeper did not confirm a
+#                         notarized Developer ID build: a local or dry-run build
+#                         under test, or a Mac with Gatekeeper switched off
 #
 # Written for /bin/bash 3.2, the one macOS ships, and for `curl | bash`: the
 # whole script is a function, so bash has read all of it before any command
@@ -60,6 +62,11 @@ main() {
     local macos_major
     macos_major=$(sw_vers -productVersion | cut -d. -f1)
     [[ "$macos_major" -ge 13 ]] || die "macOS 13 or later is required."
+
+    if [[ $uninstall -eq 1 ]]; then
+        uninstall_app
+        return 0
+    fi
     if [[ ! -d /Applications/Ghostty.app && ! -d "$HOME/Applications/Ghostty.app" ]]; then
         echo "Note: Ghostty was not found in /Applications. Notifications need it to jump back to a tab."
     fi
@@ -97,33 +104,19 @@ main() {
     step "Checking the App's signature"
     codesign --verify --deep --strict "$app" </dev/null || die "the App's signature does not verify. Nothing was installed."
     # Two separate facts. Who signed it comes from the signature itself; whether
-    # Apple notarized it only Gatekeeper can say (codesign does not report it),
-    # and a Mac with assessments disabled cannot say at all.
+    # Apple notarized it only Gatekeeper can say (codesign does not report it).
+    # A Mac with Gatekeeper switched off may not say either; the way past that
+    # is --allow-unnotarized, on purpose, not a quiet exception.
     local authority assessment
     authority=$(codesign -dvv "$app" 2>&1 </dev/null | awk -F= '/^Authority=/ { print $2; exit }')
     assessment=$(spctl --assess --type execute --verbose=2 "$app" 2>&1 </dev/null || true)
     if [[ "$authority" == "Developer ID Application:"* && "$assessment" == *"source=Notarized Developer ID"* ]]; then
         echo "    $authority, notarized"
-    elif [[ "$authority" == "Developer ID Application:"* ]] &&
-        spctl --status 2>/dev/null </dev/null | grep -q "assessments disabled"; then
-        echo "    $authority"
-        echo "    Gatekeeper is disabled on this Mac, so notarization could not be checked."
     elif [[ $require_notarized -eq 1 ]]; then
-        die "this App is not a notarized Developer ID build (signed by: ${authority:-ad-hoc}). Nothing was installed."
+        die "this App is not a notarized Developer ID build, as far as Gatekeeper can tell (signed by: ${authority:-ad-hoc}). Nothing was installed. On a Mac with Gatekeeper switched off, rerun with --allow-unnotarized."
     else
-        echo "    WARNING: not a notarized Developer ID build (signed by: ${authority:-ad-hoc});"
+        echo "    WARNING: Gatekeeper did not confirm a notarized Developer ID build (signed by: ${authority:-ad-hoc});"
         echo "    installing anyway because of --allow-unnotarized"
-    fi
-
-    if [[ $uninstall -eq 1 ]]; then
-        step "Removing the App and its LaunchAgent"
-        bash "$dist/scripts/install-agent.sh" --uninstall </dev/null
-        echo
-        echo "Hooks are still registered. Remove this project's entries from"
-        echo "  ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json (commands ending in ghostty-*.sh)"
-        echo "  ${CODEX_HOME:-$HOME/.codex}/hooks.json (commands containing ghostty-notify/codex-hook.sh)"
-        echo "then restart open Claude Code / Codex sessions."
-        return 0
     fi
 
     step "Installing the App"
@@ -185,17 +178,34 @@ fetch() {
     curl -fsSL --retry 3 --retry-delay 2 -o "$2" "$1" </dev/null || die "download failed: $1"
 }
 
-# The first Python 3.11+ on PATH: install-codex.py needs tomllib, and the
-# /usr/bin/python3 macOS ships is 3.9.
+# What scripts/install-agent.sh --uninstall does, without the download that
+# only an install needs. The label and the directory are the installer's;
+# tests/test_release_setup.py installs with one and uninstalls with the other,
+# so they cannot drift apart unnoticed.
+uninstall_app() {
+    local label="io.github.davie521.cgnotify"
+    local plist="$HOME/Library/LaunchAgents/$label.plist"
+    local install_dir="$HOME/Library/Application Support/claude-ghostty-notify"
+    step "Removing the App and its LaunchAgent"
+    launchctl bootout "gui/$(id -u)/$label" 2>/dev/null </dev/null || true
+    pkill -f "/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" 2>/dev/null </dev/null || true
+    rm -f "$plist"
+    rm -rf "$install_dir"
+    echo "    removed $install_dir"
+    echo
+    echo "Hooks are still registered. Remove this project's entries from"
+    echo "  ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json (commands ending in ghostty-*.sh)"
+    echo "  ${CODEX_HOME:-$HOME/.codex}/hooks.json (commands containing ghostty-notify/codex-hook.sh)"
+    echo "then restart open Claude Code / Codex sessions."
+}
+
+# The python3 on PATH, when it is 3.11 or newer: install-codex.py needs
+# tomllib, and the /usr/bin/python3 macOS ships is 3.9. Empty otherwise.
 python311() {
-    local candidate
-    for candidate in python3.14 python3.13 python3.12 python3.11 python3; do
-        if command -v "$candidate" >/dev/null 2>&1 &&
-            "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' </dev/null 2>/dev/null; then
-            command -v "$candidate"
-            return 0
-        fi
-    done
+    if command -v python3 >/dev/null 2>&1 &&
+        python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' </dev/null 2>/dev/null; then
+        command -v python3
+    fi
     return 0
 }
 

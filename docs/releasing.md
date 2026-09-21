@@ -78,7 +78,8 @@ missing, and never builds or publishes an ad-hoc App instead.
 
 Actions → **Release** → **Run workflow**, with *Sign with the Developer ID and
 notarize* ticked. It signs, notarizes, packages, installs the package into a
-private home, and uploads the assets as an artifact; it publishes nothing. The
+private home, and uploads the assets as an artifact; it publishes nothing. (The
+artifact is visible to anyone who can see the repository, for seven days.) The
 log of *Notarize and staple* ends in `source=Notarized Developer ID` when the
 secrets are right.
 

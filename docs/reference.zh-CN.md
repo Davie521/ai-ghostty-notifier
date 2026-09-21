@@ -15,6 +15,13 @@
 > App 和 hook 应来自同一版本；已发布的旧插件不等于这里的实现。
 > 测试证据和待人工验收项见[迁移状态](native-hook-migration.md)。
 
+仓库有 [release](releasing.md) 之后，一条命令就能完成下面第 1–3 步：装的是签名并公证过的
+构建，不用 clone、不用 Swift 工具链。[agent-install.md](agent-install.md) 也是先走这条路：
+
+```bash
+curl -fsSL https://github.com/Davie521/ai-ghostty-notifier/releases/latest/download/setup.sh | bash
+```
+
 ### 1. 先构建并安装必需的 App
 
 需要 macOS、支持 AppleScript 的 Ghostty，以及 Swift 6 工具链。
@@ -42,12 +49,16 @@ hook 和 launchd 都使用这个固定位置，所以移动源码仓库不会导
 针对当前 checkout 运行：
 
 ```bash
-bash install.sh
+bash install.sh --register-settings
 ```
 
-安装器先检查原生 App，再把薄入口复制到 `~/.claude/hooks/`，
-打印需要合并进 `~/.claude/settings.json` 的片段；不会直接重写你的设置。
-完整示例见 [example-settings.json](../example-settings.json)。
+安装器先检查原生 App，再把薄入口复制到 `<config>/hooks/`，并把它们的条目合并进
+`<config>/settings.json`；`<config>` 是 `$CLAUDE_CONFIG_DIR`（设了的话），否则是 `~/.claude`。
+合并会保留文件里其他所有内容，先备份为 `settings.json.ghostty-notify-backup-<时间>`，
+已经跑着这些入口的事件不会重复添加；文件解析不了或插件已启用时不写入，并说明原因。
+有多个配置目录的话，设置 `CLAUDE_CONFIG_DIR` 逐个运行一次。
+不带 `--register-settings` 只打印片段，需要手动合并；完整示例见
+[example-settings.json](../example-settings.json)。
 
 也可以使用包含**同一原生 hook 版本**的插件，通过
 [hooks/hooks.json](../hooks/hooks.json) 自动注册。先安装 App，再在 Claude Code 中运行：
@@ -265,10 +276,11 @@ python3 tests/test-live-worker.py
 手动 Claude 安装删除 `settings.json` 中本项目的条目；
 Codex 删除 `hooks.json` 中命令包含 `ghostty-notify/codex-hook.sh` 的条目。
 
-**两个 CLI** 都取消使用后，再卸载共用 App：
+**两个 CLI** 都取消使用后，再卸载共用 App：从 checkout 装的用第一条，从 release 装的用第二条。
 
 ```bash
 bash scripts/install-agent.sh --uninstall
+curl -fsSL https://github.com/Davie521/ai-ghostty-notifier/releases/latest/download/setup.sh | bash -s -- --uninstall
 ```
 
 这会删除 LaunchAgent 和已安装的 App，保留会话状态；不会启用完整 shell 兜底。

@@ -166,6 +166,8 @@ jobs:
           name: release-${{ steps.version.outputs.version }}-${{ env.SIGN == 'true' && 'signed' || 'adhoc' }}
           path: dist/
           if-no-files-found: error
+          # Visible to everyone who can see the repository, so not for long.
+          retention-days: 7
 
       - name: Publish the release
         if: env.PUBLISH == 'true'

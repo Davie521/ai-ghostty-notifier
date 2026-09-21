@@ -125,7 +125,7 @@ echo "Next steps:"
 echo
 echo "1. Merge the snippet into $CLAUDE_DIR/settings.json:"
 echo
-cat <<'EOF'
+cat <<EOF
     "env": {
       "GHOSTTY_NOTIFY_MIN_ELAPSED": "180",
       "GHOSTTY_NOTIFY_SOUND_ELAPSED": "600",
@@ -134,25 +134,23 @@ cat <<'EOF'
     "hooks": {
       "PreToolUse": [{
         "matcher": "",
-        "hooks": [{"type": "command", "command": "/Users/$USER/.claude/hooks/ghostty-tab-save.sh", "timeout": 15}]
+        "hooks": [{"type": "command", "command": "$HOOKS_DIR/ghostty-tab-save.sh", "timeout": 15}]
       }],
       "UserPromptSubmit": [{
         "hooks": [
-          {"type": "command", "command": "/Users/$USER/.claude/hooks/ghostty-round-reset.sh", "timeout": 15}
+          {"type": "command", "command": "$HOOKS_DIR/ghostty-round-reset.sh", "timeout": 15}
         ]
       }],
       "Notification": [{
         "matcher": "",
-        "hooks": [{"type": "command", "command": "/Users/$USER/.claude/hooks/ghostty-notify.sh", "timeout": 15}]
+        "hooks": [{"type": "command", "command": "$HOOKS_DIR/ghostty-notify.sh", "timeout": 15}]
       }],
       "Stop": [{
         "matcher": "",
-        "hooks": [{"type": "command", "command": "/Users/$USER/.claude/hooks/ghostty-notify.sh", "timeout": 15}]
+        "hooks": [{"type": "command", "command": "$HOOKS_DIR/ghostty-notify.sh", "timeout": 15}]
       }]
     }
 EOF
-echo
-echo "   (The commands must be absolute paths to the copies in $HOOKS_DIR.)"
 echo
 echo "2. Allow notifications and Ghostty Automation for Claude Ghostty Notify."
 echo "   System Settings → Notifications → Claude Ghostty Notify → Persistent."

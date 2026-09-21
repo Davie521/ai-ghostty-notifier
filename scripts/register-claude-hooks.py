@@ -110,10 +110,10 @@ def write_atomically(target: Path, text: str) -> None:
             handle.write(text)
         os.chmod(temp, mode)
         os.replace(temp, target)
-    except BaseException:
+    finally:
+        # Gone after the replace; left behind by any failure before it.
         if os.path.exists(temp):
             os.unlink(temp)
-        raise
 
 
 def main(argv=None) -> int:
@@ -121,7 +121,6 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Register the hook launchers in Claude Code's settings.json.")
     parser.add_argument("--settings", type=Path, default=base / "settings.json")
     parser.add_argument("--hooks-dir", type=Path, default=base / "hooks")
-    parser.add_argument("--dry-run", action="store_true", help="report, change nothing")
     args = parser.parse_args(argv)
 
     settings_path = args.settings.expanduser()
@@ -163,9 +162,6 @@ def main(argv=None) -> int:
     if not added:
         print(f"Hooks already registered in {settings_path}")
         return 0
-    if args.dry_run:
-        print(f"Would register {', '.join(added)} in {settings_path}")
-        return 0
 
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
@@ -175,9 +171,6 @@ def main(argv=None) -> int:
         print(f"Backed up {settings_path} to {backup.name}")
     text = json.dumps(updated, indent=2, ensure_ascii=False) + "\n"
     write_atomically(target, text)
-    if json.loads(target.read_text(encoding="utf-8")) != updated:
-        print(f"FATAL: {settings_path} did not read back as written", file=sys.stderr)
-        return 2
     print(f"Registered {', '.join(added)} in {settings_path}")
     return 0
 

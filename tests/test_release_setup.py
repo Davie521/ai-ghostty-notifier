@@ -151,10 +151,11 @@ class RegisterClaudeHooksTests(unittest.TestCase):
         self.assertEqual(self.register().returncode, 2)
         self.assertFalse(self.settings.exists())
 
-    def test_dry_run_changes_nothing(self):
-        result = self.register("--dry-run")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("Would register", result.stdout)
+    def test_a_relative_hooks_dir_is_refused(self):
+        # It would be resolved against whatever directory Claude Code runs hooks from.
+        result = self.register("--hooks-dir", "hooks")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("must be absolute", result.stderr)
         self.assertFalse(self.settings.exists())
 
 
@@ -205,15 +206,17 @@ class ReleaseSetupTests(unittest.TestCase):
                          "GHOSTTY_NOTIFY_LSREGISTER": "/usr/bin/true",
                          "INSTALL_TEST_CALLS": str(self.calls)})
 
-    def setup_sh(self, *args, release=None):
+    def setup_sh(self, *args, release=None, service_calls=()):
         env = dict(self.env)
         if release is not None:
             env["GHOSTTY_NOTIFY_RELEASE_URL"] = release.as_uri()
         # Piped, exactly as `curl ... | bash -s -- ARGS` runs it.
         result = subprocess.run(["/bin/bash", "-s", "--", *args], input=(self.out / "setup.sh").read_text(),
                                 env=env, capture_output=True, text=True, timeout=120)
-        self.assertFalse(self.calls.exists(), "setup invoked a service/UI command: "
-                         + (self.calls.read_text() if self.calls.exists() else ""))
+        # Every service or UI command is a tripwire, except the ones a test expects.
+        calls = self.calls.read_text() if self.calls.exists() else ""
+        unexpected = [line for line in calls.splitlines() if Path(line.split()[0]).name not in service_calls]
+        self.assertEqual(unexpected, [], "setup invoked a service/UI command:\n" + calls)
         return result
 
     def assert_nothing_installed(self):
@@ -268,6 +271,20 @@ class ReleaseSetupTests(unittest.TestCase):
         result = self.setup_sh("--frobnicate")
         self.assertNotEqual(result.returncode, 0)
         self.assert_nothing_installed()
+
+    def test_uninstall_removes_the_app_and_downloads_nothing(self):
+        result = self.setup_sh("--no-start", "--no-claude", "--no-codex", "--allow-unnotarized")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        plist = self.home / "Library/LaunchAgents/io.github.davie521.cgnotify.plist"
+        plist.parent.mkdir(parents=True, exist_ok=True)
+        plist.write_text("<plist/>")
+        # Pointed at a release that does not exist: an uninstall that downloaded would fail.
+        result = self.setup_sh("--uninstall", release=self.root / "no-release", service_calls=("launchctl", "pkill"))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.app.parent.exists())
+        self.assertFalse(plist.exists())
+        self.assertIn("launchctl bootout gui/", self.calls.read_text())
+        self.assertIn("Hooks are still registered", result.stdout)
 
     def test_the_archive_carries_what_setup_installs_and_nothing_local(self):
         with zipfile.ZipFile(self.out / ASSET) as archive:
