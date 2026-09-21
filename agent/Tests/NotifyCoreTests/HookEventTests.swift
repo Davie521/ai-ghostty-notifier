@@ -87,7 +87,7 @@ struct HookEventTests {
     @Test func emptyAppNameKeepsTheClaudeDefault() {
         var event = sampleEvent()
         event.settings["GHOSTTY_NOTIFY_APP_NAME"] = ""
-        #expect(NotificationPolicy.content(event, title: "", tabID: nil).title == "Claude ✅")
+        #expect(NotificationPolicy.content(event, title: "", tabID: nil).title == "Claude")
     }
 
     @Test(arguments: [
@@ -103,7 +103,7 @@ struct HookEventTests {
     @Test func notificationUsesCapturedTimeAndSource() {
         let event = sampleEvent(source: .codex)
         let notice = NotificationPolicy.content(event, title: "中文", tabID: "tab-1")
-        #expect(notice.title == "Codex ✅")
+        #expect(notice.title == "Codex")
         #expect(notice.body == "Finished after 16m 40s")
         #expect(notice.subtitle == "中文 — 项目")
         #expect(notice.stateKey != sampleEvent().key)
