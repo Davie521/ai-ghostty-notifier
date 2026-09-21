@@ -14,6 +14,10 @@
 
 <p align="center"><a href="README.md">English</a> · <a href="README.zh-CN.md">中文</a></p>
 
+<p align="center">
+  <img src="docs/assets/notification.png" alt="一条真实通知：Claude，200-second timer test — my-app，Finished after 3m 24s" width="350">
+</p>
+
 丢一个长任务给它跑，切去浏览器，然后就忘了。任务结束时弹一条通知，告诉你是哪个
 会话跑完的、跑了多久；点 **Go to tab** 就回到那个会话的标签页——同一个项目里开着
 好几个会话也不会认错。

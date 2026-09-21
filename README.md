@@ -14,6 +14,10 @@
 
 <p align="center"><a href="README.md">English</a> · <a href="README.zh-CN.md">中文</a></p>
 
+<p align="center">
+  <img src="docs/assets/notification.png" alt="A real notification from this tool: Claude, 200-second timer test — my-app, Finished after 3m 24s" width="350">
+</p>
+
 You start a long task, switch to the browser, and forget about it. When it
 ends, a notification tells you which session finished and how long it took.
 **Go to tab** brings that session's tab forward, even with several sessions open
