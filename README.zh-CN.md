@@ -50,7 +50,7 @@
 最后告诉我哪些步骤只能我自己做。
 ```
 
-[docs/agent-install.md](docs/agent-install.md) 是写来被执行的：构建并安装配套
+[docs/agent-install.md](docs/agent-install.md) 是写给 agent 执行的英文说明，你不用读它，贴上面那段话就行。它会：构建并安装配套
 App、把 hook 条目合并进你的设置而不碰你已有的其他配置、每一步都实际验证过再
 往下走，而不是默认它成功了。
 
