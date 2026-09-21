@@ -91,8 +91,8 @@ next_steps_after_registration() {
     echo "─────────────────────────────────────────────────────────"
     echo "Next steps:"
     echo
-    echo "1. Allow notifications and Ghostty Automation for Claude Ghostty Notify."
-    echo "   System Settings → Notifications → Claude Ghostty Notify → Persistent."
+    echo "1. Allow notifications and Ghostty Automation for AI Ghostty Notifier."
+    echo "   System Settings → Notifications → AI Ghostty Notifier → Persistent."
     echo
     echo "2. Restart open Claude Code sessions so they load the hooks."
     echo "─────────────────────────────────────────────────────────"
