@@ -715,7 +715,7 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         )
     }
 
-    private static let appName = "Claude Ghostty Notify"
+    private static let appName = AgentConstants.displayName
     /// Opens System Settings straight at this app's own notification pane.
     static var notificationSettingsURL: String {
         let bundleID = Bundle.main.bundleIdentifier ?? ""

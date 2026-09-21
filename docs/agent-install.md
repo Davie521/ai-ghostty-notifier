@@ -165,8 +165,8 @@ Trusting the new entries is the user's step: start Codex in Ghostty, run
 Report these as a short checklist, in the user's language, and say plainly that
 the install is not finished until they are done:
 
-1. Allow notifications for **Claude Ghostty Notify** when macOS asks. In
-   **System Settings → Notifications → Claude Ghostty Notify**, choose
+1. Allow notifications for **AI Ghostty Notifier** when macOS asks. In
+   **System Settings → Notifications → AI Ghostty Notifier**, choose
    **Persistent** if the alert and its button should stay on screen.
 2. Allow **Automation** control of Ghostty when macOS asks. Without it the
    notification can only activate Ghostty, not jump to the exact tab.

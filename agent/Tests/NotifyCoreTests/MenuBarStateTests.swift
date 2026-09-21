@@ -353,3 +353,163 @@ struct StateCompatibilityTests {
         #expect(restored.waitingSessions().first?.relativeTime(now: 100_000) != "now")
     }
 }
+
+@Suite("Menu status block")
+struct MenuStatusBlockTests {
+    // Two ticks saying the same "fine" only pushed the sessions down.
+    @Test func everythingInOrderIsOneQuietLine() {
+        let block = MenuStatusLine.block(permission: .granted, alertStyle: "alert")
+        #expect(block == [MenuStatusLine(tone: .ok, text: "Notifications on · Persistent")])
+    }
+
+    // The first seconds after launch, before either answer is back.
+    @Test func twoPendingAnswersAreOneCheckingLine() {
+        let block = MenuStatusLine.block(permission: .unknown, alertStyle: "")
+        #expect(block.map(\.tone) == [.checking])
+        #expect(block.first?.opensSettings == false)
+    }
+
+    // Only the part still pending is reported as pending; the part already in
+    // order is not repeated beside it.
+    @Test func onlyTheOpenPartIsReported() {
+        #expect(
+            MenuStatusLine.block(permission: .granted, alertStyle: "").map(\.text)
+                == ["Checking alert style…"])
+        #expect(
+            MenuStatusLine.block(permission: .unknown, alertStyle: "alert").map(\.text)
+                == ["Checking notification permission…"])
+    }
+
+    // A problem is its own line, never folded into a summary — and a pending
+    // answer beside it is not merged away with it.
+    @Test func aProblemIsNotFoldedIntoAPendingAnswer() {
+        let block = MenuStatusLine.block(permission: .unknown, alertStyle: "banner")
+        #expect(block.map(\.tone) == [.checking, .problem])
+    }
+
+    // macOS reports "none" for a denied app. Two warnings with two different
+    // fixes for one problem would send the user looking for the second.
+    @Test func withoutPermissionTheAlertStyleIsNotReported() {
+        for permission in [NotificationPermission.denied, .unavailable] {
+            for style in ["none", "banner", "alert", ""] {
+                let block = MenuStatusLine.block(permission: permission, alertStyle: style)
+                #expect(block.count == 1)
+                #expect(block.first?.tone == .problem)
+            }
+        }
+    }
+
+    // Clickable exactly where System Settings holds the fix. A disabled item is
+    // drawn dimmed, like "fine", so every fixable problem has to be a button —
+    // and the one Settings cannot fix must not pretend to be.
+    @Test func problemsAreButtonsExactlyWhereSettingsHoldsTheFix() {
+        #expect(
+            MenuStatusLine.block(permission: .denied, alertStyle: "none").first?.opensSettings
+                == true)
+        #expect(
+            MenuStatusLine.block(permission: .granted, alertStyle: "banner").first?.opensSettings
+                == true)
+        #expect(
+            MenuStatusLine.block(permission: .granted, alertStyle: "none").first?.opensSettings
+                == true)
+        #expect(
+            MenuStatusLine.block(permission: .unavailable, alertStyle: "").first?.opensSettings
+                == false)
+    }
+
+    // Temporary still delivers, so the icon leaves it alone; the menu is where
+    // it is reported.
+    @Test func temporaryAlertsAreReportedInTheMenu() {
+        let block = MenuStatusLine.block(permission: .granted, alertStyle: "banner")
+        #expect(
+            block == [
+                MenuStatusLine(
+                    tone: .problem, text: "Alert style: Temporary — Fix…", opensSettings: true)
+            ])
+    }
+
+    // An answer this build cannot judge is not "checking": that would claim one
+    // is still on its way, forever.
+    @Test func anUnknownStyleIsNamedNotAwaited() {
+        let block = MenuStatusLine.block(permission: .granted, alertStyle: "unknown")
+        #expect(block == [MenuStatusLine(tone: .unrecognised, text: "Alert style: unknown")])
+    }
+
+    @Test func theSmallPrintCountsSessions() {
+        #expect(MenuText.sessionsSeen(1) == "1 session seen in the last 24h")
+        #expect(MenuText.sessionsSeen(45) == "45 sessions seen in the last 24h")
+        #expect(MenuText.sessionsSeen(0) == "0 sessions seen in the last 24h")
+        #expect(MenuText.waitingHeader(3) == "Waiting · 3")
+    }
+}
+
+@Suite("Waiting rows as the menu lays them out")
+struct WaitingRowLayoutTests {
+    private func session(
+        id: String = "abc", title: String = "Claude", subtitle: String = "refactor — cgn",
+        body: String = "Finished after 5m 3s", postedAt: Double = 1000
+    ) -> WaitingSession {
+        WaitingSession(
+            sessionID: id, title: title, subtitle: subtitle, body: body, postedAt: postedAt)
+    }
+
+    // Same lines, same order as the notification; the time rides on the title.
+    @Test func theTimeRidesOnTheTitle() {
+        #expect(
+            session().menuLines(now: 1000 + 5 * 60) == [
+                NotificationLine(role: .title, text: "Claude · 5m ago"),
+                NotificationLine(role: .subtitle, text: "refactor — cgn"),
+                NotificationLine(role: .body, text: "Finished after 5m 3s"),
+            ])
+    }
+
+    // With no title to ride on, the time still gets a line of its own.
+    @Test func aRowWithoutATitleStillSaysWhen() {
+        let lines = session(title: "").menuLines(now: 1000)
+        #expect(lines.first == NotificationLine(role: .title, text: "now"))
+        #expect(lines.map(\.role) == [.title, .subtitle, .body])
+    }
+
+    // No text at all: the row names its session, where the eye goes first.
+    @Test func aRowWithNoTextNamesItsSession() {
+        let lines = session(id: "0123456789ab", title: "", subtitle: "", body: "")
+            .menuLines(now: 1000)
+        #expect(
+            lines == [
+                NotificationLine(role: .title, text: "now"),
+                NotificationLine(role: .subtitle, text: "Session 01234567"),
+            ])
+    }
+
+    // A tooltip only where the row was clipped, carrying the whole text.
+    @Test func theTooltipIsForClippedRowsOnly() {
+        #expect(session().clippedText() == nil)
+        let long = String(repeating: "x", count: 120)
+        #expect(
+            session(subtitle: long).clippedText()
+                == "Claude\n\(long)\nFinished after 5m 3s")
+    }
+}
+
+@Suite("The app's name")
+struct DisplayNameTests {
+    // macOS shows CFBundleName — in banners and in System Settings — and the
+    // menu, the setup window and VoiceOver show the constant. The menu's "Fix…"
+    // sends the user to a Settings row by that name, so the two must agree.
+    @Test func theBundleNameIsTheNameTheAppUses() throws {
+        let plist = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Resources/Info.plist")
+        let info = try #require(
+            PropertyListSerialization.propertyList(from: Data(contentsOf: plist), format: nil)
+                as? [String: Any])
+        #expect(info["CFBundleName"] as? String == AgentConstants.displayName)
+    }
+
+    @Test func theSpokenLabelNamesTheApp() {
+        for state: MenuBarState in [.idle, .waiting(1), .problem(.alertsOff, waiting: 0)] {
+            #expect(state.accessibilityDescription.hasPrefix(AgentConstants.displayName + ": "))
+        }
+    }
+}

@@ -151,7 +151,7 @@ main() {
     echo
     echo "─────────────────────────────────────────────────────────"
     echo "Installed. What only you can do:"
-    echo "  1. Allow notifications for Claude Ghostty Notify when macOS asks, and"
+    echo "  1. Allow notifications for AI Ghostty Notifier when macOS asks, and"
     echo "     choose Persistent under System Settings → Notifications to keep the"
     echo "     alert and its Go to tab button on screen."
     echo "  2. Allow it to control Ghostty the first time you click a notification."

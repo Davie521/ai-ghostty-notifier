@@ -354,6 +354,6 @@ echo "  1. permission to send notifications"
 echo "  2. permission to control Ghostty (needed for click-to-jump)"
 echo "Both are one-time and both must be allowed."
 echo
-echo "If you use Focus modes, add Claude Ghostty Notify to their allowed apps:"
+echo "If you use Focus modes, add AI Ghostty Notifier to their allowed apps:"
 echo "a Focus that already lets Terminal (an external backend's identity) through"
 echo "still sends this app's alerts straight to Notification Center."
