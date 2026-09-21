@@ -72,6 +72,15 @@ struct HookEventTests {
         #expect(NotificationPolicy.content(event, title: "", tabID: nil).sound == "Ping")
     }
 
+    @Test func inputPromptIsTitledLikeACompletion() {
+        // Only the subtitle, the body and the sound tell the two apart; the
+        // title is the app name either way, with no emoji on it.
+        let notice = NotificationPolicy.content(
+            sampleEvent(kind: .notification), title: "", tabID: nil)
+        #expect(notice.title == "Claude")
+        #expect(notice.subtitle.hasPrefix("Input Required"))
+    }
+
     @Test func settingsRemainPerRequestAndPreserveDefaults() {
         let a = HookOptions([
             "GHOSTTY_NOTIFY_MIN_ELAPSED": "3m", "GHOSTTY_NOTIFY_TIMEOUT": "000",

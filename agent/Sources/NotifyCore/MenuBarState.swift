@@ -168,7 +168,8 @@ public struct NotificationLine: Equatable, Sendable {
 /// needs. Built from `SessionState`, so the menu never reaches into bookkeeping.
 public struct WaitingSession: Equatable, Sendable {
     public let sessionID: String
-    /// The notification's title — "Claude" / "Claude 🔔" as the hook builds it.
+    /// The notification's title — the app name, "Claude" or "Codex", as the hook
+    /// builds it.
     public let title: String
     /// "<session title> — <project>", the part that tells two sessions apart.
     public let subtitle: String

@@ -195,7 +195,7 @@ public enum NotificationPolicy {
                 floor(elapsed.truncatingRemainder(dividingBy: 60)))
             : (event.payload.message ?? "Claude is waiting for you")
         return NotifyRequest(
-            sessionID: event.sessionID, title: completed ? app : app + " 🔔",
+            sessionID: event.sessionID, title: app,
             subtitle: clean(subtitle), body: clean(body),
             sound: completed ? (elapsed >= options.soundAfter ? "Glass" : nil) : "Ping",
             tabID: tabID, timeout: options.timeout, clearOnFocus: options.clearOnFocus,
