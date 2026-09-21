@@ -12,42 +12,29 @@
   <a href="https://github.com/Davie521/ai-ghostty-notifier/actions/workflows/ci.yml"><img src="https://github.com/Davie521/ai-ghostty-notifier/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
-**Language / 语言** → [English](README.md) · [中文](README.zh-CN.md)
+<p align="center"><a href="README.md">English</a> · <a href="README.zh-CN.md">中文</a></p>
 
-You start a long task, switch to the browser, and forget about it. When the task
-ends, a macOS notification tells you which session finished and how long it took.
-Click **Go to tab** and Ghostty brings that tab forward — even when several
-sessions are running in the same project directory.
+You start a long task, switch to the browser, and forget about it. When it
+ends, a notification tells you which session finished and how long it took.
+**Go to tab** brings that session's tab forward, even with several sessions open
+in the same project.
 
-- **It interrupts you only when that is worth it.** Under 3 minutes: nothing.
-  3–10 minutes: silent. 10 minutes or more: with sound.
-- **One click returns to the session**, found by the session's own identity
-  rather than by guessing from the project folder.
-- **Claude Code and Codex CLI**, each shown under its own session title.
-- **Quiet by design.** No Node, no telemetry, no Accessibility permission.
+## Features
 
-**What you need:** macOS, [Ghostty](https://ghostty.org) with AppleScript
-support, a Swift 6 toolchain, and Claude Code or Codex CLI.
-
-[Install](#install) · [Configuration](docs/reference.md#configuration) · [How it works](docs/reference.md#how-it-works) · [Troubleshooting](docs/reference.md#troubleshooting-and-limits)
-
-## Behavior
-
-| Task duration | Notification |
-| --- | --- |
-| Under 3 minutes | None |
-| 3–10 minutes | Silent notification |
-| 10 minutes or more | Notification with Glass sound |
-
-Defaults are configurable ([every setting](docs/reference.md#configuration)).
-Resident notifications expire after 20 minutes unless cleared
-earlier. Focusing the session's tab or submitting another prompt withdraws its
-notification. Permission/input prompts are silent unless
-`GHOSTTY_NOTIFY_ON_PROMPT=1`.
+- **Only when it is worth it.** Under 3 minutes: nothing. 3–10 minutes: a
+  silent notification. 10 minutes or more: with sound. The thresholds are
+  [configurable](docs/reference.md#configuration).
+- **Back to the exact tab.** Tabs are told apart by session, not by project
+  folder, so several sessions in one repository still land in the right place.
+- **Claude Code and Codex CLI**, each notification under its session's own title.
+- **Gets out of the way.** Return to the tab or send another prompt and the
+  notification disappears; one nobody answers expires after 20 minutes.
+- **A menu bar list** of the sessions waiting on you.
+- **Nothing extra.** No Node, no telemetry, no Accessibility permission.
 
 ## Install
 
-Let a coding agent do it. Paste this into Claude Code or Codex CLI:
+Paste this into Claude Code or Codex CLI:
 
 ```text
 Install https://github.com/Davie521/ai-ghostty-notifier on this Mac.
@@ -55,17 +42,24 @@ Clone it, then follow docs/agent-install.md exactly, including its checks,
 and finish by telling me the steps only I can do.
 ```
 
-[docs/agent-install.md](docs/agent-install.md) is written to be executed: it
-builds and installs the companion app, merges the hook entries into your
-settings without touching anything else you have there, and verifies each step
-instead of assuming it worked.
-
-Two things stay with you, because no agent can click them: granting the
-notification and Automation permissions, and restarting the CLI sessions you
+The agent builds and installs the companion app, merges the hooks into your
+settings without touching anything else, and checks every step
+([what it follows](docs/agent-install.md)). Two things stay with you: allowing
+the notification and Automation permissions, and restarting the CLI sessions you
 already have open.
 
-Rather do it by hand? The same steps are in
-[docs/reference.md](docs/reference.md#manual-install).
+**Requirements:** macOS, [Ghostty](https://ghostty.org) with AppleScript
+support, a Swift 6 toolchain (the app is built from source; there is no prebuilt
+download yet), and Claude Code or Codex CLI.
+
+## Docs
+
+[Manual install](docs/reference.md#manual-install) ·
+[Behavior in detail](docs/reference.md#behavior) ·
+[Configuration](docs/reference.md#configuration) ·
+[How it works](docs/reference.md#how-it-works) ·
+[Troubleshooting](docs/reference.md#troubleshooting-and-limits) ·
+[Uninstall](docs/reference.md#uninstall)
 
 ## Credits and license
 

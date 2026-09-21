@@ -1,7 +1,7 @@
 # Reference
 
-Everything the [README](../README.md) leaves out: the manual install, every
-setting, how it works, troubleshooting, the test suites and uninstall.
+Everything the [README](../README.md) leaves out: the manual install, the exact
+behavior, every setting, how it works, troubleshooting, the test suites and uninstall.
 The quickest install is to hand [agent-install.md](agent-install.md) to a coding
 agent; this file is the same ground, written for a person.
 
@@ -137,6 +137,20 @@ Uninstalling the app no longer activates a complete shell implementation.
 Private `GHOSTTY_NOTIFY_FOCUS_SCRIPT` and `GHOSTTY_NOTIFY_CLEAR_SCRIPT`
 overrides are retired; focus and clearing are native operations. Old helper
 files may remain in upgraded directories but are not invoked or reinstalled.
+
+## Behavior
+
+| Task duration | Notification |
+| --- | --- |
+| Under 3 minutes | None |
+| 3–10 minutes | Silent notification |
+| 10 minutes or more | Notification with Glass sound |
+
+Defaults are configurable ([every setting](#configuration)).
+Resident notifications expire after 20 minutes unless cleared
+earlier. Focusing the session's tab or submitting another prompt withdraws its
+notification. Permission/input prompts are silent unless
+`GHOSTTY_NOTIFY_ON_PROMPT=1`.
 
 ## Configuration
 
