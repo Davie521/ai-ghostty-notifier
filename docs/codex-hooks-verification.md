@@ -125,7 +125,8 @@ Verified with Codex CLI 0.154.0 and the agent 0.4.0 (unchanged since
   `interruptionSuppression: delay delivery … resolutionReason: mode
   configuration type` for the agent and `none … mode configuration for
   application` for Terminal. Turning the Focus off made the alerts float; the
-  README now says to allow the agent in Focus modes.
+  install docs now say to allow the agent in Focus modes
+  ([reference.md](reference.md#4-permissions-and-restart)).
 
 `tests/test_codex_hooks.py` grew to 41 tests (agent delivery, the config
 pin, the unauthorized fallback, the anchor/dismiss pair, rebinding after a

@@ -30,9 +30,10 @@ executable prevents notifications: the bootstrap instead drains stdin, reports t
 and returns success to avoid blocking the CLI, but cannot send a notification.
 
 No production installation, restart, commit or publication has been performed
-by this migration work. The English and Chinese READMEs now describe app-first
-installation, runtime-only installation, upgrades and the absence of shell
-fallback. Installer tests copy a real signed app into private homes only.
+by this migration work. The install documentation ([reference.md](reference.md#manual-install), its
+Chinese twin, and [agent-install.md](agent-install.md) for agents) describes
+app-first installation, runtime-only installation, upgrades and the absence of
+shell fallback. Installer tests copy a real signed app into private homes only.
 
 ## Completion requirements
 
