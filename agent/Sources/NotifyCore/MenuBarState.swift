@@ -121,18 +121,19 @@ public enum MenuBarState: Equatable, Sendable {
     /// "not allowed" beside a badge reading "2" would tell a VoiceOver user
     /// nothing is waiting while two sessions are.
     public var accessibilityDescription: String {
+        let name = AgentConstants.displayName
         switch self {
         case .idle:
-            return "Claude notifications: nothing waiting"
+            return "\(name): nothing waiting"
         case .waiting(let count):
-            return "Claude notifications: " + Self.waitingPhrase(count)
+            return "\(name): " + Self.waitingPhrase(count)
         case .problem(let problem, let count):
             let headline: String
             switch problem {
-            case .notAuthorized: headline = "Claude notifications are not allowed"
+            case .notAuthorized: headline = "\(name): notifications are not allowed"
             case .authorizationUnavailable:
-                headline = "Claude notifications could not be authorized"
-            case .alertsOff: headline = "Claude alerts are turned off"
+                headline = "\(name): notifications could not be authorized"
+            case .alertsOff: headline = "\(name): alerts are turned off"
             }
             return count > 0 ? "\(headline); \(Self.waitingPhrase(count))" : headline
         }

@@ -1,6 +1,12 @@
 import Foundation
 
 public enum AgentConstants {
+    /// The name the user sees: in notification banners, System Settings, the
+    /// menu and the setup window. Must match CFBundleName in Info.plist, which
+    /// is what macOS itself shows; a test holds the two together. The project's
+    /// name, not Claude's — the app serves Codex CLI too. Only the name: the
+    /// bundle identifier, which the permission grants are keyed to, stays.
+    public static let displayName = "AI Ghostty Notifier"
     public static let ghosttyBundleID = "com.mitchellh.ghostty"
     /// Category carrying the "Go to tab" button. Registered at launch; every
     /// posted notification references it.

@@ -48,14 +48,14 @@ final class StyleHintWindow: NSObject {
 
         super.init()
 
-        let heading = NSTextField(labelWithString: "Keep Claude's notifications on screen")
+        let heading = NSTextField(labelWithString: "Keep notifications on screen")
         heading.font = .boldSystemFont(ofSize: 14)
 
         let body = NSTextField(
             wrappingLabelWithString: """
                 macOS shows this app's notifications as Temporary, so they slide away after \
                 about five seconds — and clicking a notification is how you jump back to the \
-                Claude session's tab.
+                Claude or Codex session's tab.
 
                 Set Alert Style to Persistent and they wait for you instead.
 

@@ -92,7 +92,7 @@ turn-complete alerts while keeping those prompts.
 ### 4. Permissions and restart
 
 Allow notifications and, when requested, Automation control of Ghostty.
-In **System Settings → Notifications → Claude Ghostty Notify**, choose
+In **System Settings → Notifications → AI Ghostty Notifier**, choose
 **Persistent** if you want the alert and its action to remain visible.
 Allow the app in any Focus modes you use. External notification backends require
 their own notification authorization.

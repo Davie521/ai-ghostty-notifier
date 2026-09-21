@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Claude Ghostty Notify</string>
+    <string>AI Ghostty Notifier</string>
     <!-- Notification authorization and the Automation grant are both keyed to
          this identifier. Changing it re-prompts the user for both.
          An identifier can also be BURNED: if the process ever touches
@@ -53,6 +53,6 @@
          the first Apple Event to Ghostty is denied outright, and clicking a
          notification would silently fail to jump. -->
     <key>NSAppleEventsUsageDescription</key>
-    <string>Claude Ghostty Notify needs to control Ghostty so that clicking a notification can jump to the terminal tab your Claude session is running in.</string>
+    <string>AI Ghostty Notifier needs to control Ghostty so that clicking a notification can jump to the terminal tab your Claude or Codex session is running in.</string>
 </dict>
 </plist>

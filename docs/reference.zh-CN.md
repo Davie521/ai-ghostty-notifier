@@ -84,7 +84,7 @@ python3 scripts/install-codex.py
 ### 4. 授权并重启 CLI
 
 允许发送通知，并在系统询问控制 Ghostty 时允许自动化。
-需要通知持续显示时，在**系统设置 → 通知 → Claude Ghostty Notify** 中选择
+需要通知持续显示时，在**系统设置 → 通知 → AI Ghostty Notifier** 中选择
 **提醒 / Persistent**。使用专注模式时也要放行这个 App。
 使用外部后端时，其发送通知的应用身份也需要单独授权。
 

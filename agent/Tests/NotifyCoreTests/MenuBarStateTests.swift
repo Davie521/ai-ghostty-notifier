@@ -490,3 +490,26 @@ struct WaitingRowLayoutTests {
                 == "Claude\n\(long)\nFinished after 5m 3s")
     }
 }
+
+@Suite("The app's name")
+struct DisplayNameTests {
+    // macOS shows CFBundleName — in banners and in System Settings — and the
+    // menu, the setup window and VoiceOver show the constant. The menu's "Fix…"
+    // sends the user to a Settings row by that name, so the two must agree.
+    @Test func theBundleNameIsTheNameTheAppUses() throws {
+        let plist = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Resources/Info.plist")
+        let info = try #require(
+            PropertyListSerialization.propertyList(from: Data(contentsOf: plist), format: nil)
+                as? [String: Any])
+        #expect(info["CFBundleName"] as? String == AgentConstants.displayName)
+    }
+
+    @Test func theSpokenLabelNamesTheApp() {
+        for state: MenuBarState in [.idle, .waiting(1), .problem(.alertsOff, waiting: 0)] {
+            #expect(state.accessibilityDescription.hasPrefix(AgentConstants.displayName + ": "))
+        }
+    }
+}

@@ -133,7 +133,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         let now = Date().timeIntervalSince1970
         menu.removeAllItems()
 
-        menu.addItem(header("Claude Ghostty Notify"))
+        menu.addItem(header(AgentConstants.displayName))
         addStatusBlock(to: menu, status: current)
 
         menu.addItem(.separator())
@@ -147,7 +147,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
             action("Setup Guidance…", symbol: "questionmark.circle", #selector(showGuidance)))
         menu.addItem(action("Open Log", symbol: "doc.text", #selector(openLog)))
         menu.addItem(.separator())
-        let quit = action("Quit Claude Ghostty Notify", symbol: "power", #selector(quit))
+        let quit = action(
+            "Quit \(AgentConstants.displayName)", symbol: "power", #selector(quit))
         quit.keyEquivalent = "q"
         menu.addItem(quit)
     }

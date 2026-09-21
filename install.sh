@@ -105,8 +105,8 @@ EOF
 echo
 echo "   (Replace \$USER with your username — hooks require absolute paths.)"
 echo
-echo "2. Allow notifications and Ghostty Automation for Claude Ghostty Notify."
-echo "   System Settings → Notifications → Claude Ghostty Notify → Persistent."
+echo "2. Allow notifications and Ghostty Automation for AI Ghostty Notifier."
+echo "   System Settings → Notifications → AI Ghostty Notifier → Persistent."
 echo "   External backends, if used, need their own notification permissions."
 echo
 echo "3. Restart Claude Code so the env vars take effect."
