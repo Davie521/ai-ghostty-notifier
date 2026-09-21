@@ -19,6 +19,14 @@ installed.
 > from this same revision; an older published plugin is not this worktree.
 > See [migration evidence and remaining manual checks](native-hook-migration.md).
 
+Once the repository has a [release](releasing.md), one command does steps 1–3
+below from a signed, notarized build, with no clone and no Swift toolchain. It
+is the path [agent-install.md](agent-install.md) tries first:
+
+```bash
+curl -fsSL https://github.com/Davie521/ai-ghostty-notifier/releases/latest/download/setup.sh | bash
+```
+
 ### 1. Build and install the required app
 
 Use macOS with Ghostty's AppleScript support and a Swift 6 toolchain. Build from
@@ -44,12 +52,18 @@ checkout does not break them. Building alone does not update that installed copy
 For this checkout, run:
 
 ```bash
-bash install.sh
+bash install.sh --register-settings
 ```
 
 It verifies that the native app is installed, copies the small launchers to
-`~/.claude/hooks/`, and prints the snippet to merge into
-`~/.claude/settings.json`. It does not rewrite your settings.
+`<config>/hooks/` and merges their entries into `<config>/settings.json`, where
+`<config>` is `$CLAUDE_CONFIG_DIR` when set and `~/.claude` otherwise. The
+merge keeps everything else in the file, copies it aside first as
+`settings.json.ghostty-notify-backup-<time>`, adds nothing to an event that
+already runs one of these launchers, and writes nothing when the file does not
+parse or when the plugin is enabled. With more than one configuration
+directory, run it once per directory with `CLAUDE_CONFIG_DIR` set. Without
+`--register-settings` it only prints the snippet to merge by hand;
 [example-settings.json](../example-settings.json) contains the complete example.
 
 Alternatively, a plugin containing this same native-hook revision auto-registers
@@ -58,7 +72,7 @@ then register the plugin in Claude Code:
 
 ```text
 /plugin marketplace add Davie521/ai-ghostty-notifier
-/plugin install claude-ghostty-notify
+/plugin install ai-ghostty-notifier@ai-ghostty-notifier
 ```
 
 Choose manual or plugin registration, not both. During worktree testing use the
@@ -303,14 +317,16 @@ exist is in `docs/incident-2026-09-17-pretooluse-hang.md`.
 ## Uninstall
 
 Remove hook registrations first and restart open CLI sessions. For plugin
-installs, use `/plugin uninstall claude-ghostty-notify`. For manual Claude
+installs, use `/plugin uninstall ai-ghostty-notifier@ai-ghostty-notifier`. For manual Claude
 installs remove this project's entries from `settings.json`; for Codex remove
 entries containing `ghostty-notify/codex-hook.sh` from `hooks.json`.
 
-After unregistering hooks for **both** CLIs, remove the shared app:
+After unregistering hooks for **both** CLIs, remove the shared app: the first
+command from a checkout, the second after an install from a release.
 
 ```bash
 bash scripts/install-agent.sh --uninstall
+curl -fsSL https://github.com/Davie521/ai-ghostty-notifier/releases/latest/download/setup.sh | bash -s -- --uninstall
 ```
 
 This removes its LaunchAgent and installed bundle, but keeps session state.

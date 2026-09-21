@@ -1,9 +1,23 @@
 #!/bin/bash
 # Installer for ai-ghostty-notifier.
-# Copies the hook scripts into ~/.claude/hooks/ and prints the
-# settings.json snippet to merge into the user's config.
+# Copies the hook scripts into <config>/hooks/ and prints the settings.json
+# snippet to merge into the user's config. <config> is $CLAUDE_CONFIG_DIR when
+# set, otherwise ~/.claude.
+#
+# --register-settings merges the entries into <config>/settings.json instead of
+# printing them (scripts/register-claude-hooks.py: keeps everything else, adds
+# nothing twice, refuses when the plugin is enabled). Without a usable python3
+# it falls back to printing the snippet.
 
 set -eu
+
+REGISTER=0
+case "${1:-}" in
+    --register-settings) REGISTER=1 ;;
+    "") ;;
+    *) echo "usage: install.sh [--register-settings]" >&2; exit 2 ;;
+esac
+[[ $# -le 1 ]] || { echo "usage: install.sh [--register-settings]" >&2; exit 2; }
 
 if [[ "$(uname)" != "Darwin" ]]; then
     echo "❌ macOS only (Ghostty AppleScript-based)." >&2
@@ -29,7 +43,8 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd 2>/dev/null || echo '')"
 LOCAL_HOOKS="$SCRIPT_DIR/hooks"
 
-HOOKS_DIR="$HOME/.claude/hooks"
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+HOOKS_DIR="$CLAUDE_DIR/hooks"
 mkdir -p "$HOOKS_DIR"
 STAGING=$(mktemp -d "$HOOKS_DIR/.native-install.XXXXXX")
 trap 'rm -rf "$STAGING"' EXIT
@@ -70,13 +85,47 @@ for f in "${HOOK_FILES[@]}"; do
     echo "  ✓ installed $f"
 done
 
+
+next_steps_after_registration() {
+    echo
+    echo "─────────────────────────────────────────────────────────"
+    echo "Next steps:"
+    echo
+    echo "1. Allow notifications and Ghostty Automation for Claude Ghostty Notify."
+    echo "   System Settings → Notifications → Claude Ghostty Notify → Persistent."
+    echo
+    echo "2. Restart open Claude Code sessions so they load the hooks."
+    echo "─────────────────────────────────────────────────────────"
+}
+
+if [[ $REGISTER -eq 1 ]]; then
+    REGISTER_SCRIPT="$SCRIPT_DIR/scripts/register-claude-hooks.py"
+    echo
+    if [[ -f "$REGISTER_SCRIPT" ]] && command -v python3 >/dev/null 2>&1 &&
+        python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
+        set +e
+        CLAUDE_CONFIG_DIR="$CLAUDE_DIR" python3 "$REGISTER_SCRIPT" \
+            --settings "$CLAUDE_DIR/settings.json" --hooks-dir "$HOOKS_DIR"
+        status=$?
+        set -e
+        case $status in
+            # scripts/setup.sh prints one combined list at the end.
+            0) [[ -n "${GHOSTTY_NOTIFY_FROM_SETUP:-}" ]] || next_steps_after_registration; exit 0 ;;
+            3) exit 0 ;;
+            *) echo "Could not register automatically; merge the snippet below by hand." ;;
+        esac
+    else
+        echo "python3 (3.9+) is not available to register automatically; merge the snippet below by hand."
+    fi
+fi
+
 echo
 echo "─────────────────────────────────────────────────────────"
 echo "Next steps:"
 echo
-echo "1. Merge the snippet into ~/.claude/settings.json:"
+echo "1. Merge the snippet into $CLAUDE_DIR/settings.json:"
 echo
-cat <<'EOF'
+cat <<EOF
     "env": {
       "GHOSTTY_NOTIFY_MIN_ELAPSED": "180",
       "GHOSTTY_NOTIFY_SOUND_ELAPSED": "600",
@@ -85,25 +134,23 @@ cat <<'EOF'
     "hooks": {
       "PreToolUse": [{
         "matcher": "",
-        "hooks": [{"type": "command", "command": "/Users/$USER/.claude/hooks/ghostty-tab-save.sh", "timeout": 15}]
+        "hooks": [{"type": "command", "command": "$HOOKS_DIR/ghostty-tab-save.sh", "timeout": 15}]
       }],
       "UserPromptSubmit": [{
         "hooks": [
-          {"type": "command", "command": "/Users/$USER/.claude/hooks/ghostty-round-reset.sh", "timeout": 15}
+          {"type": "command", "command": "$HOOKS_DIR/ghostty-round-reset.sh", "timeout": 15}
         ]
       }],
       "Notification": [{
         "matcher": "",
-        "hooks": [{"type": "command", "command": "/Users/$USER/.claude/hooks/ghostty-notify.sh", "timeout": 15}]
+        "hooks": [{"type": "command", "command": "$HOOKS_DIR/ghostty-notify.sh", "timeout": 15}]
       }],
       "Stop": [{
         "matcher": "",
-        "hooks": [{"type": "command", "command": "/Users/$USER/.claude/hooks/ghostty-notify.sh", "timeout": 15}]
+        "hooks": [{"type": "command", "command": "$HOOKS_DIR/ghostty-notify.sh", "timeout": 15}]
       }]
     }
 EOF
-echo
-echo "   (Replace \$USER with your username — hooks require absolute paths.)"
 echo
 echo "2. Allow notifications and Ghostty Automation for Claude Ghostty Notify."
 echo "   System Settings → Notifications → Claude Ghostty Notify → Persistent."

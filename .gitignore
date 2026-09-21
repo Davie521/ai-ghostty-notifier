@@ -17,3 +17,6 @@ hooks/bin/
 
 __pycache__/
 *.pyc
+
+# Release packaging output (scripts/package-release.sh)
+dist/
