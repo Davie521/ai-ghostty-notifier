@@ -57,10 +57,14 @@ jobs:
       - name: NotifyCore unit tests
         run: swift test --package-path agent --quiet
 
+      # Hardened runtime, as a release is signed (.github/workflows/release.yml),
+      # so every suite below runs the configuration users get: an entitlement
+      # the runtime needs and the build lacks fails here, not after a release.
       - name: Build and verify required native bundle without installing it
         run: |
-          bash scripts/build-agent.sh --build-only
+          bash scripts/build-agent.sh --build-only --hardened
           codesign --verify --deep --strict build/ClaudeGhosttyNotify.app
+          codesign --display --verbose=2 build/ClaudeGhosttyNotify.app 2>&1 | grep -E 'flags=.*runtime'
 
       - name: Native launchers and real process regressions
         env:
@@ -74,6 +78,9 @@ jobs:
 
       - name: Isolated first install and upgrade regressions
         run: python3 -m unittest discover -s tests -p 'test_native_install.py' -v
+
+      - name: Release packaging and one-command install
+        run: python3 -m unittest discover -s tests -p 'test_release_setup.py' -v
 
       # Skips itself with a loud SKIP line when the runner has no Aqua session,
       # because the agent is an AppKit app. It never asserts that a banner

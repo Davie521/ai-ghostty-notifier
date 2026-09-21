@@ -85,8 +85,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
         // displays. The inset is the usual breathing room around a menu bar
         // glyph.
         let height = max(12, NSStatusBar.system.thickness - 5)
-        self.markImage = ClaudeMark.image(height: height, crossedOut: false)
-        self.crossedOutImage = ClaudeMark.image(height: height, crossedOut: true)
+        self.markImage = GhostMark.image(height: height, crossedOut: false)
+        self.crossedOutImage = GhostMark.image(height: height, crossedOut: true)
         super.init()
 
         let menu = NSMenu()
@@ -133,109 +133,98 @@ final class MenuBar: NSObject, NSMenuDelegate {
         let now = Date().timeIntervalSince1970
         menu.removeAllItems()
 
-        menu.addItem(disabled("Claude Ghostty Notify"))
-        menu.addItem(.separator())
-
-        switch current.permission {
-        case .granted:
-            menu.addItem(disabled("✓  Notifications allowed"))
-        case .denied:
-            menu.addItem(disabled("⚠  Notifications not allowed"))
-        case .unavailable:
-            // Not the user's answer: the system never asked. Saying "not
-            // allowed" here would send them to a System Settings row that does
-            // not exist yet, when a relaunch is what fixes it.
-            menu.addItem(disabled("⚠  Notification permission unavailable — relaunch"))
-        case .unknown:
-            menu.addItem(disabled("…  Notification permission: checking"))
-        }
-
-        switch current.alertStyle {
-        case "alert":
-            menu.addItem(disabled("✓  Alert style: Persistent"))
-        case "banner":
-            // The one problem the user can actually fix, so it is the one item
-            // that does something when clicked.
-            menu.addItem(action("⚠  Alert style: Temporary — fix…", #selector(openSettings)))
-        case "none":
-            menu.addItem(action("⚠  Alerts turned off — fix…", #selector(openSettings)))
-        case "":
-            menu.addItem(disabled("…  Alert style: checking"))
-        default:
-            // Read, but macOS named a style this build does not know. Distinct
-            // from "checking", which would otherwise sit there forever claiming
-            // an answer is still coming.
-            menu.addItem(disabled("?  Alert style: \(current.alertStyle)"))
-        }
+        menu.addItem(header(AgentConstants.displayName))
+        addStatusBlock(to: menu, status: current)
 
         menu.addItem(.separator())
         addWaitingSection(to: menu, waiting: current.waiting, now: now)
 
         menu.addItem(.separator())
-        // Honest about the window: sessions are forgotten after 24h, so this is
-        // "seen recently", not "open right now".
+        // Always here, not only when something is wrong: it is also where the
+        // sound, the Focus modes and the lock screen are set.
+        menu.addItem(action("Notification Settings…", symbol: "bell", #selector(openSettings)))
         menu.addItem(
-            disabled(
-                current.trackedSessions == 1
-                    ? "1 session tracked · last 24h"
-                    : "\(current.trackedSessions) sessions tracked · last 24h"))
+            action("Setup Guidance…", symbol: "questionmark.circle", #selector(showGuidance)))
+        menu.addItem(action("Open Log", symbol: "doc.text", #selector(openLog)))
+        menu.addItem(.separator())
+        let quit = action(
+            "Quit \(AgentConstants.displayName)", symbol: "power", #selector(quit))
+        quit.keyEquivalent = "q"
+        menu.addItem(quit)
+    }
 
-        menu.addItem(.separator())
-        menu.addItem(action("Setup guidance…", #selector(showGuidance)))
-        menu.addItem(action("Open log", #selector(openLog)))
-        menu.addItem(.separator())
-        menu.addItem(action("Quit", #selector(quit)))
+    /// Permission and alert style, then the sessions-seen count in small print.
+    ///
+    /// Grey means fine. A problem the user can fix is a button, which is also
+    /// what keeps it at full strength: AppKit dims a disabled item, symbol and
+    /// all, to the same grey as "everything is in order".
+    private func addStatusBlock(to menu: NSMenu, status: AgentStatus) {
+        let block = MenuStatusLine.block(
+            permission: status.permission, alertStyle: status.alertStyle)
+        for line in block {
+            let entry =
+                line.opensSettings
+                ? action(line.text, #selector(openSettings)) : disabled(line.text)
+            entry.image = Self.statusSymbol(line.tone)
+            menu.addItem(entry)
+        }
+        let seen = MenuText.sessionsSeen(status.trackedSessions)
+        let small = disabled(seen)
+        small.attributedTitle = NSAttributedString(
+            string: seen,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: Self.baseSize - 2),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ])
+        menu.addItem(small)
     }
 
     /// The sessions waiting on the user, each row a way back to its tab.
     private func addWaitingSection(to menu: NSMenu, waiting: [WaitingSession], now: Double) {
         guard !waiting.isEmpty else {
-            menu.addItem(disabled("No notifications waiting"))
+            menu.addItem(disabled("No sessions waiting"))
             return
         }
 
-        menu.addItem(
-            disabled(waiting.count == 1 ? "1 session waiting" : "\(waiting.count) sessions waiting")
-        )
+        menu.addItem(header(MenuText.waitingHeader(waiting.count)))
         for session in waiting {
-            let lines = session.notificationLines()
-            let plain =
-                lines.isEmpty
-                ? session.fallbackLabel : lines.map(\.text).joined(separator: " — ")
+            let lines = session.menuLines(now: now)
             // A plain title as well as the attributed one: NSMenu's keyboard
             // type-select matches on `title`, and a row with only an
-            // `attributedTitle` cannot be reached from the keyboard at all.
+            // `attributedTitle` cannot be reached from the keyboard at all. It
+            // leads with the subtitle, since every row starts with the same
+            // app name.
+            let plain = lines.filter { $0.role != .title }.map(\.text).joined(separator: " — ")
             let entry = NSMenuItem(
                 title: plain, action: #selector(jumpToSession(_:)), keyEquivalent: "")
-            entry.attributedTitle = Self.rowText(
-                lines: lines, fallback: session.fallbackLabel,
-                time: session.relativeTime(now: now))
+            entry.attributedTitle = Self.rowText(lines)
+            entry.toolTip = session.clippedText()
             entry.target = self
             entry.representedObject = session.sessionID
             menu.addItem(entry)
         }
     }
 
-    /// One row, laid out like the notification it stands in for: the title in
-    /// bold with the time beside it, then the subtitle, then the body.
+    /// Derived from the menu font rather than fixed points, so everything
+    /// scales with the rest of the menu when the user enlarges system text.
+    private static var baseSize: CGFloat { NSFont.menuFont(ofSize: 0).pointSize }
+
+    /// One row, in the notification's own order: title, subtitle, body.
     ///
-    /// Same content and same order as the banner, because that is what makes the
-    /// row recognisable as the thing the user missed rather than a second,
-    /// slightly different account of it.
-    private static func rowText(
-        lines: [NotificationLine], fallback: String, time: String
-    ) -> NSAttributedString {
-        let shown =
-            lines.isEmpty ? [NotificationLine(role: .title, text: fallback)] : lines
+    /// Not in the notification's own emphasis, though. The title is the app
+    /// name — "Claude" on nearly every row — so drawing it bold made the one
+    /// line that tells rows apart the least the loudest. It is small print
+    /// with the time beside it, the way Notification Center heads a
+    /// notification with the app and the time; the subtitle, which names the
+    /// session and the project, is the line that stands out.
+    private static func rowText(_ lines: [NotificationLine]) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = 1
         paragraph.lineBreakMode = .byTruncatingTail
-        // Derived from the menu font rather than fixed points, so the rows grow
-        // with the rest of the menu when the user scales system text.
-        let base = NSFont.menuFont(ofSize: 0).pointSize
+        let base = baseSize
 
         let text = NSMutableAttributedString()
-        for (index, line) in shown.enumerated() {
+        for (index, line) in lines.enumerated() {
             if index > 0 { text.append(NSAttributedString(string: "\n")) }
             // Styled by what the line *is*. Empty lines are dropped, so a body
             // can end up where a subtitle would have been and position alone
@@ -244,13 +233,13 @@ final class MenuBar: NSObject, NSMenuDelegate {
             let color: NSColor
             switch line.role {
             case .title:
+                font = NSFont.systemFont(ofSize: base - 2)
+                color = .secondaryLabelColor
+            case .subtitle:
                 font = NSFont.systemFont(ofSize: base, weight: .semibold)
                 color = .labelColor
-            case .subtitle:
-                font = NSFont.systemFont(ofSize: base - 1)
-                color = .labelColor
             case .body:
-                font = NSFont.systemFont(ofSize: base - 2)
+                font = NSFont.systemFont(ofSize: base - 1)
                 color = .secondaryLabelColor
             }
             text.append(
@@ -259,18 +248,43 @@ final class MenuBar: NSObject, NSMenuDelegate {
                     attributes: [
                         .font: font, .foregroundColor: color, .paragraphStyle: paragraph,
                     ]))
-            if index == 0, !time.isEmpty {
-                text.append(
-                    NSAttributedString(
-                        string: "   " + time,
-                        attributes: [
-                            .font: NSFont.systemFont(ofSize: base - 2),
-                            .foregroundColor: NSColor.secondaryLabelColor,
-                            .paragraphStyle: paragraph,
-                        ]))
-            }
         }
         return text
+    }
+
+    /// The symbol beside a status line. Coloured where colour carries the
+    /// meaning — green for fine, orange for a problem — and a template
+    /// otherwise, so it takes the text colour.
+    private static func statusSymbol(_ tone: MenuStatusTone) -> NSImage? {
+        switch tone {
+        case .ok:
+            return symbol("checkmark.circle.fill", label: "OK", colors: [.white, .systemGreen])
+        case .checking: return symbol("clock", label: "Checking")
+        case .unrecognised: return symbol("circle.dashed", label: "Unknown")
+        case .problem:
+            return symbol(
+                "exclamationmark.triangle.fill", label: "Problem",
+                colors: [.white, .systemOrange])
+        }
+    }
+
+    /// Coloured through a symbol configuration rather than painted over, and
+    /// that matters: the menu lines up the titles of a section's image-less
+    /// items — the small print under the status — with those beside a
+    /// *symbol*, and a repainted image is no longer one. The small print then
+    /// sat under the tick in one state and under the text in another.
+    private static func symbol(_ name: String, label: String?, colors: [NSColor] = []) -> NSImage? {
+        guard let glyph = NSImage(systemSymbolName: name, accessibilityDescription: label) else {
+            return nil
+        }
+        guard !colors.isEmpty else { return glyph }
+        return glyph.withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: colors))
+    }
+
+    /// A section title — the system's own style where there is one.
+    private func header(_ title: String) -> NSMenuItem {
+        if #available(macOS 14.0, *) { return NSMenuItem.sectionHeader(title: title) }
+        return disabled(title)
     }
 
     private func disabled(_ title: String) -> NSMenuItem {
@@ -279,9 +293,12 @@ final class MenuBar: NSObject, NSMenuDelegate {
         return entry
     }
 
-    private func action(_ title: String, _ selector: Selector) -> NSMenuItem {
+    private func action(
+        _ title: String, symbol: String? = nil, _ selector: Selector
+    ) -> NSMenuItem {
         let entry = NSMenuItem(title: title, action: selector, keyEquivalent: "")
         entry.target = self
+        if let symbol { entry.image = Self.symbol(symbol, label: nil) }
         return entry
     }
 

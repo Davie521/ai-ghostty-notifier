@@ -47,7 +47,9 @@ REPO=$(cd "$HERE/.." && pwd)
 LABEL="io.github.davie521.cgnotify"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 BUNDLE_NAME="ClaudeGhosttyNotify.app"
-BUILT="$REPO/build/$BUNDLE_NAME"
+# What to install: this checkout's build, or, for scripts/setup.sh, a released
+# bundle that was downloaded, checksum-verified and unpacked elsewhere.
+BUILT="${GHOSTTY_NOTIFY_INSTALL_FROM:-$REPO/build/$BUNDLE_NAME}"
 INSTALL_DIR="$HOME/Library/Application Support/claude-ghostty-notify"
 APP="$INSTALL_DIR/$BUNDLE_NAME"
 BIN="$APP/Contents/MacOS/ghostty-notify-agent"
@@ -494,6 +496,6 @@ echo "  1. permission to send notifications"
 echo "  2. permission to control Ghostty (needed for click-to-jump)"
 echo "Both are one-time and both must be allowed."
 echo
-echo "If you use Focus modes, add Claude Ghostty Notify to their allowed apps:"
+echo "If you use Focus modes, add AI Ghostty Notifier to their allowed apps:"
 echo "a Focus that already lets Terminal (an external backend's identity) through"
 echo "still sends this app's alerts straight to Notification Center."
