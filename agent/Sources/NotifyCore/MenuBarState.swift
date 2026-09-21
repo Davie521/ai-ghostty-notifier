@@ -55,9 +55,9 @@ public enum MenuBarProblem: Equatable, Sendable {
 
 /// The two marks the menu bar can wear. Kept as a value rather than an image so
 /// the state machine stays testable without AppKit; drawing lives in
-/// `ClaudeMark`.
+/// `GhostMark`.
 public enum MenuBarIcon: Equatable, Sendable {
-    /// Claude's radiating mark — the agent is working.
+    /// The ghost bell — the agent is working.
     case mark
     /// The same mark struck through: the agent is running but nothing it posts
     /// will ever appear.
@@ -168,7 +168,8 @@ public struct NotificationLine: Equatable, Sendable {
 /// needs. Built from `SessionState`, so the menu never reaches into bookkeeping.
 public struct WaitingSession: Equatable, Sendable {
     public let sessionID: String
-    /// The notification's title — "Claude" / "Claude 🔔" as the hook builds it.
+    /// The notification's title — the app name, "Claude" or "Codex", as the hook
+    /// builds it.
     public let title: String
     /// "<session title> — <project>", the part that tells two sessions apart.
     public let subtitle: String
