@@ -43,13 +43,16 @@ and opens the notification-permission flow. Do not use the install command when
 you only want to test a build.
 
 Upgrading while sessions are in use is fine. Before it stops the previous
-version, the installer takes the execute bit off the installed binary, so that a
-hook firing in those seconds cannot start a process of the old version that would
-outlive the replacement. Until the new copy is in place, usually a second or two
-and at most about twenty, hooks find no runtime and do nothing: a notification
-due in that window is not shown. If the install fails or is interrupted, the bit
-goes back on and the previous version keeps working. Only `kill -9` on the
-installer can leave it off; rerun the installer to put that right.
+version, the installer takes the execute bit off the installed binary and leaves
+a marker beside it, so that a hook firing in those seconds cannot start a process
+of the old version that would outlive the replacement. Hooks registered from a
+checkout or a plugin honour the marker too, rather than starting the build beside
+them. Until the new copy is in place, usually a second or two and at most about a minute, hooks do nothing:
+a notification due in that window is not shown. The previous version is replaced
+only once none of its processes is left. If that cannot be confirmed, or the
+install fails or is interrupted, the bit goes back on, its LaunchAgent is loaded
+again and the previous version keeps working. Only `kill -9` on the installer
+can leave the way in shut; rerun the installer to put that right.
 
 The app is copied to
 `~/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app`.
