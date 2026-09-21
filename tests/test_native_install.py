@@ -286,7 +286,7 @@ echo ready > "$mark.ready"
 while :; do /bin/sleep 0.05; done
 '''
 
-    def start_full_install(self, home, ps_stub, launchd=""):
+    def start_full_install(self, home, ps_stub, launchd="", args=(), env=None):
         """The whole install, with a stand-in for every service command.
 
         `launchd` is shell that runs inside the launchctl stand-in after the
@@ -311,15 +311,15 @@ STATE="$HOME/.claude/notifications/ghostty-agent"
                   'mkdir -p "$STATE" && echo authorized > "$STATE/ready"\n')
         self.stub("ps", ps_stub)
         return subprocess.Popen(
-            ["/bin/bash", str(self.checkout / "scripts/install-agent.sh")], cwd=self.checkout,
+            ["/bin/bash", str(self.checkout / "scripts/install-agent.sh"), *args], cwd=self.checkout,
             env={**self.env, "HOME": str(home), "CALLS": str(calls),
-                 "GHOSTTY_NOTIFY_LSREGISTER": str(self.bin / "lsregister")},
+                 "GHOSTTY_NOTIFY_LSREGISTER": str(self.bin / "lsregister"), **(env or {})},
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             # A group of its own, so that a test can press Ctrl-C on it.
             start_new_session=True)
 
-    def full_install(self, home, ps_stub, launchd=""):
-        installer = self.start_full_install(home, ps_stub, launchd)
+    def full_install(self, home, ps_stub, launchd="", args=(), env=None):
+        installer = self.start_full_install(home, ps_stub, launchd, args, env)
         self.addCleanup(installer.kill)
         output, errors = installer.communicate(timeout=60)
         calls = self.root / "full-install-calls"
@@ -350,8 +350,12 @@ STATE="$HOME/.claude/notifications/ghostty-agent"
 
     @staticmethod
     def listed(process, path):
-        """One line of `ps -o pid=,lstart=,comm=` for a real process under a staged path."""
-        started = subprocess.check_output(["/bin/ps", "-o", "lstart=", "-p", str(process.pid)], text=True).strip()
+        """One line of `ps -o pid=,lstart=,comm=` for a real process under a staged path.
+
+        With the start time as the installer has ps print it, in the C format.
+        """
+        started = subprocess.check_output(["/bin/ps", "-o", "lstart=", "-p", str(process.pid)], text=True,
+                                          env={**os.environ, "LC_ALL": "", "LC_TIME": "C"}).strip()
         return "{:>5} {} {}\n".format(process.pid, started, path)
 
     # The listing is staged; a question about one pid goes to the real ps,
@@ -496,11 +500,45 @@ while :; do /bin/sleep 0.05; done
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(mark.read_text(), "hook exit 0\n")
         self.assertFalse(started.exists(), "a hook started the previous version while it was being stopped")
-        self.assertIn("native runtime missing", Path(str(mark) + ".stderr").read_text())
+        self.assertIn("being reinstalled", Path(str(mark) + ".stderr").read_text())
         # And open again, as the new version. Compared, not run: running a
         # bundle's binary registers that bundle with LaunchServices.
         self.assertTrue(os.access(installed / EXECUTABLE, os.X_OK))
         self.assertEqual((installed / EXECUTABLE).read_bytes(), (self.built / EXECUTABLE).read_bytes())
+
+    def test_hooks_registered_beside_a_build_do_not_fall_back_to_it(self):
+        # Hooks registered straight from a checkout, or from a plugin that
+        # carries the app, have a bundle beside them. With the installed
+        # binary shut they used to fall through to it and start a process of
+        # the old version that nobody was waiting for.
+        layouts = {"checkout": lambda hooks: hooks.parent / "build" / BUNDLE,
+                   "plugin": lambda hooks: hooks / BUNDLE}
+        for layout, beside in layouts.items():
+            with self.subTest(layout):
+                home = self.root / ("home with hooks from a " + layout)
+                installed, started = self.previous_version(home)
+                hooks = self.root / (layout + " with a build") / "hooks"
+                shutil.copytree(REPO / "hooks", hooks)
+                build = beside(hooks)
+                (build / "Contents/MacOS").mkdir(parents=True)
+                (build / "Contents/Resources").mkdir()
+                (build / MARKER).write_text("")
+                build_started = self.root / ("the-build-beside-the-" + layout + "-was-started")
+                (build / EXECUTABLE).write_text('#!/bin/bash\necho started >> "{}"\n'.format(build_started))
+                (build / EXECUTABLE).chmod(0o755)
+                busy = self.root / ("busy-hook-from-a-" + layout)
+                busy.write_text(self.BUSY_HOOK.format(home=home, hooks=hooks))
+                busy.chmod(0o755)
+                process, mark = self.stand_in("hook from a " + layout, busy, installed)
+                (self.root / "process-table").write_text(self.listed(process, installed / EXECUTABLE))
+                result, _ = self.full_install(
+                    home, self.REAL_PS_FOR_ONE_PID + 'cat "{}"\n'.format(self.root / "process-table"))
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(mark.read_text(), "hook exit 0\n")
+                self.assertFalse(build_started.exists(), "a hook fell back to the build beside it")
+                self.assertFalse(started.exists())
+                self.assertIn("being reinstalled", Path(str(mark) + ".stderr").read_text())
+                (self.root / "full-install-calls").unlink(missing_ok=True)
 
     def test_the_previous_version_can_start_again_when_the_install_fails(self):
         home = self.root / "home-where-the-swap-fails"
@@ -593,20 +631,167 @@ cat "{}/listing-$number" 2>/dev/null || true
             self.assertEqual(process.wait(timeout=5), 0)
         self.assertNotIn("kept appearing", result.stderr)
 
-    def test_liveness_markers_stay_when_it_cannot_be_confirmed_that_nothing_is_left(self):
-        # Something new in every list: the markers may describe a resident that
-        # is still there, and the permission check would wait two minutes for
-        # an answer that resident has already given.
+    def previous_launch_agent(self, home):
+        plist = home / "Library/LaunchAgents/io.github.davie521.cgnotify.plist"
+        plist.parent.mkdir(parents=True)
+        plist.write_text("previous LaunchAgent\n")
+        return plist
+
+    def assert_previous_version_back(self, installed, before, plist, recorded):
+        self.assertEqual((installed / EXECUTABLE).read_bytes(), before, "the previous version was replaced")
+        self.assertTrue(os.access(installed / EXECUTABLE, os.X_OK), "the previous version was left unable to start")
+        self.assertEqual(plist.read_text(), "previous LaunchAgent\n")
+        # Taken from launchd to be stopped, and given back.
+        self.assertEqual(recorded[-2:], ["launchctl bootout", "launchctl bootstrap"])
+        self.assertEqual(list(installed.parent.glob(".native-install.*")), [])
+
+    def test_nothing_is_replaced_when_it_cannot_be_confirmed_that_the_previous_version_has_stopped(self):
+        # Something new in every list. Replacing the bundle now would be doing
+        # what all the stopping is there to prevent, so the install stops, and
+        # the previous version is put back as it was: able to start, under
+        # launchd, and with its liveness markers, which may describe a
+        # resident that is still there.
         home = self.root / "home-where-something-keeps-appearing"
-        installed = home / "Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app"
+        installed, _ = self.previous_version(home)
+        before = (installed / EXECUTABLE).read_bytes()
+        plist = self.previous_launch_agent(home)
         state = home / ".claude/notifications/ghostty-agent"
         state.mkdir(parents=True)
         (state / "agent.pid").write_text("1\n")
         _, lines = self.previous_versions(installed, "first", "second", "third")
         result, recorded = self.full_install(home, self.listings("", lines[0], lines[1], lines[2]))
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("kept appearing", result.stderr)
-        self.assertIn("agent.pid was there at the permission check", recorded)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("could not confirm that the previous version has stopped", result.stderr)
+        self.assert_previous_version_back(installed, before, plist, recorded)
+        self.assertEqual((state / "agent.pid").read_text(), "1\n")
+
+    def test_nothing_is_replaced_when_processes_cannot_be_listed_after_the_first_look(self):
+        # The look before anything is stopped works, a later one fails. The
+        # install used to wait ten seconds, signal every ghostty-notify-agent
+        # on the machine by name, another checkout's included, and go on.
+        home = self.root / "home-where-ps-fails-later"
+        installed, _ = self.previous_version(home)
+        before = (installed / EXECUTABLE).read_bytes()
+        plist = self.previous_launch_agent(home)
+        ps_stub = self.REAL_PS_FOR_ONE_PID + '''number=$(($(cat "$CALLS.listings" 2>/dev/null || echo 0) + 1))
+echo "$number" > "$CALLS.listings"
+((number == 1)) && exit 0
+echo "ps: cannot get process list" >&2; exit 1
+'''
+        result, recorded = self.full_install(home, ps_stub)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("cannot list processes", result.stderr)
+        self.assertEqual([line for line in recorded if line.startswith("pkill")], [])
+        self.assert_previous_version_back(installed, before, plist, recorded)
+
+    def test_a_process_ps_cannot_describe_is_waited_for_and_never_signalled(self):
+        # kill -0 answers for the pid but ps -p says nothing. It used to count
+        # as gone, and the bundle was replaced under it. It is not known to be
+        # gone, so nothing is replaced; nor known to be the process that was
+        # listed, so it is not signalled either.
+        home = self.root / "home-where-ps-cannot-describe-a-pid"
+        installed, _ = self.previous_version(home)
+        before = (installed / EXECUTABLE).read_bytes()
+        plist = self.previous_launch_agent(home)
+        helper = self.root / "previous-version"
+        helper.write_text(self.HELPER)
+        helper.chmod(0o755)
+        process, asked_to_stop = self.stand_in("process ps cannot describe", helper, installed)
+        (self.root / "process-table").write_text(self.listed(process, installed / EXECUTABLE))
+        ps_stub = ('if [[ " $* " == *" -p "* ]]; then echo "ps: no answer" >&2; exit 1; fi\n'
+                   'cat "{}"\n'.format(self.root / "process-table"))
+        result, recorded = self.full_install(home, ps_stub)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertFalse(asked_to_stop.exists(), "a process that could not be identified was signalled")
+        self.assertIsNone(process.poll())
+        self.assert_previous_version_back(installed, before, plist, recorded)
+
+    def test_the_previous_version_can_start_again_when_an_uninstall_is_interrupted(self):
+        # --uninstall shuts the way in too, and used to do so before anything
+        # would open it again.
+        stubborn = self.root / "stubborn"
+        stubborn.write_text(self.STUBBORN)
+        stubborn.chmod(0o755)
+        home = self.root / "home-of-an-interrupted-uninstall"
+        installed, _ = self.previous_version(home)
+        plist = self.previous_launch_agent(home)
+        process, _ = self.stand_in("hook that will not stop for the uninstall", stubborn, installed)
+        (self.root / "process-table").write_text(self.listed(process, installed / EXECUTABLE))
+        installer = self.start_full_install(
+            home, self.REAL_PS_FOR_ONE_PID + 'cat "{}"\n'.format(self.root / "process-table"),
+            args=("--uninstall",))
+        self.addCleanup(installer.kill)
+        deadline = time.monotonic() + 10
+        while os.access(installed / EXECUTABLE, os.X_OK) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertFalse(os.access(installed / EXECUTABLE, os.X_OK), "the way in was never shut")
+        installer.terminate()
+        installer.communicate(timeout=30)
+        self.assertNotEqual(installer.returncode, 0)
+        self.assertTrue(os.access(installed / EXECUTABLE, os.X_OK), "the previous version was left unable to start")
+        self.assertEqual(plist.read_text(), "previous LaunchAgent\n")
+        calls = (self.root / "full-install-calls").read_text().splitlines()
+        self.assertEqual(calls[-2:], ["launchctl bootout", "launchctl bootstrap"])
+
+    TERM_RECORDER = r'''
+#include <signal.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+/* A process of the previous version as ps sees one: a binary of its own, run
+   from the installed path. argv[1] is the mark file, argv[2] a file that only
+   the new bundle has. */
+static volatile sig_atomic_t asked;
+static void on_term(int number) { (void)number; asked = 1; }
+
+int main(int argc, char **argv) {
+    char ready[4096];
+    struct stat seen;
+    FILE *file;
+    if (argc < 3) return 2;
+    signal(SIGTERM, on_term);
+    snprintf(ready, sizeof ready, "%s.ready", argv[1]);
+    if ((file = fopen(ready, "w"))) fclose(file);
+    while (!asked) usleep(20000);
+    if ((file = fopen(argv[1], "w"))) {
+        fprintf(file, "asked to stop; new bundle in place: %s\n", stat(argv[2], &seen) == 0 ? "yes" : "no");
+        fclose(file);
+    }
+    return 0;
+}
+'''
+
+    def test_this_installations_processes_are_found_whatever_the_locale(self):
+        # ps prints the start time per locale: four fields under zh_CN and
+        # ja_JP where five are read, so nothing was found to stop and the
+        # bundle was replaced under what ran. Nor is the C locale the answer:
+        # it prints a non-ASCII path as escapes. So the real ps, and a real
+        # process running the installed binary under a HOME with Chinese in it.
+        source = self.root / "term-recorder.c"
+        source.write_text(self.TERM_RECORDER)
+        recorder = self.root / "term-recorder"
+        subprocess.run(["/usr/bin/clang", str(source), "-o", str(recorder)], check=True)
+        for locale in ("zh_CN.UTF-8", "ja_JP.UTF-8"):
+            with self.subTest(locale):
+                home = self.root / ("家目录 " + locale)
+                installed, _ = self.previous_version(home)
+                shutil.copy2(recorder, installed / EXECUTABLE)
+                mark = self.root / ("previous-version-under-" + locale + ".mark")
+                process = subprocess.Popen([str(installed / EXECUTABLE), str(mark),
+                                            str(installed / "Contents/Info.plist")])
+                self.addCleanup(process.wait)
+                self.addCleanup(process.kill)
+                deadline = time.monotonic() + 5
+                while not Path(str(mark) + ".ready").exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                result, _ = self.full_install(home, 'exec /bin/ps "$@"\n',
+                                              env={"LANG": locale, "LC_ALL": locale})
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(mark.read_text() if mark.exists() else "not asked to stop",
+                                 "asked to stop; new bundle in place: no\n")
+                self.assertEqual(process.wait(timeout=5), 0)
+                (self.root / "full-install-calls").unlink(missing_ok=True)
 
     LATE_LAUNCHD = '''case "$1" in
     kickstart) echo $(($(cat "$CALLS.restarts" 2>/dev/null || echo 0) + 1)) > "$CALLS.restarts"; echo 0 > "$CALLS.looks" ;;

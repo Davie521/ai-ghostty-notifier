@@ -102,6 +102,30 @@ unload() {
     launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
 }
 
+# Run one command to its end even if the script is interrupted meanwhile, and
+# take the interruption after it. On SIGTERM bash runs its EXIT trap at once,
+# while the command it was waiting for is still running. The trap then puts
+# back what that command is in the middle of taking away — a LaunchAgent being
+# booted out, a bundle being moved — and the command finishes afterwards and
+# undoes it. With a trap of its own for the signal, bash waits for the command
+# first.
+uninterrupted() {
+    local signal=""
+    trap 'signal=TERM' TERM
+    trap 'signal=INT' INT
+    "$@"
+    trap - TERM INT
+    if [[ -n "$signal" ]]; then kill -s "$signal" $$; fi
+}
+
+# ps with its start times in one format and its paths as they are. The start
+# time is printed per locale — "二  9月/22 03:18:51 2026" under zh_CN, four
+# fields where the parsers below read five, so nothing would be found to stop —
+# hence LC_TIME=C, with LC_ALL cleared since it would override it. Not the C
+# locale altogether: that prints every byte of a non-ASCII path as an escape,
+# and the path would no longer match the one it is compared with.
+ps_fixed() { LC_ALL="" LC_TIME=C LC_CTYPE=UTF-8 ps "$@"; }
+
 # The processes this installation owns, one per line: "<pid> <start time>".
 #
 # Whatever runs the installed binary: the resident, and every hook and worker,
@@ -118,7 +142,7 @@ unload() {
 # none.
 owned_processes() {
     local table resident
-    table=$(ps -axww -o pid=,lstart=,comm=) || return 1
+    table=$(ps_fixed -axww -o pid=,lstart=,comm=) || return 1
     resident=$(cat "$STATE/agent.pid" 2>/dev/null || true)
     printf '%s\n' "$table" |
         awk -v bin="$BIN" -v resident="$resident" \
@@ -132,15 +156,23 @@ owned_processes() {
                 substr(path, length(path) - length(suffix) + 1) == suffix { print pid, started }'
 }
 
-# True while "<pid> <start time>" is still that process and still running.
-# False once it is gone, and also when it has exited but its parent has not
-# collected it yet, which kill -0 cannot tell (such a process holds no lock and
-# writes nothing, and a slow parent must not cost the whole wait), and when the
-# pid now belongs to a process that started at another time.
+# Whether "<pid> <start time>" is still that process and still running:
+#   0  it is.
+#   1  it is gone. Also when it has exited but its parent has not collected it
+#      yet, which kill -0 cannot tell (such a process holds no lock and writes
+#      nothing, and a slow parent must not cost the whole wait), and when the
+#      pid now belongs to a process that started at another time.
+#   2  something answers to the pid, but ps could not say what. Not known to be
+#      gone, so it is waited for; not known to be the process that was listed,
+#      so it is never signalled.
 still_running() {
     local pid=$1 started=$2 state day month date clock year
     kill -0 "$pid" 2>/dev/null || return 1
-    read -r state day month date clock year < <(ps -o stat=,lstart= -p "$pid" 2>/dev/null) || return 1
+    if ! read -r state day month date clock year < <(ps_fixed -o stat=,lstart= -p "$pid" 2>/dev/null); then
+        # Either it went between the two looks, or ps failed: ask again.
+        kill -0 "$pid" 2>/dev/null && return 2
+        return 1
+    fi
     [[ "$state" != Z* && "$day $month $date $clock $year" == "$started" ]]
 }
 
@@ -157,26 +189,26 @@ still_running() {
 # Then the list is made again, and this only returns true once a list has
 # nothing running in it. With the way in shut (see close_admission) the second
 # list is empty and costs one `ps`; without that it would be a chase.
+#
+# False when that cannot be confirmed, a failed listing included. There is no
+# fallback by name: `pkill -x` cannot tell this installation's processes from
+# another checkout's, which is the whole reason for the listing.
 terminate_owned() {
-    local list line live left waited
+    local list line live left waited status
     for _ in 1 2 3; do
         if ! list=$(owned_processes); then
-            # Too late to turn back when something has been stopped already, so
-            # allow the longest grace there is instead of confirming the exits.
-            echo "  warning: cannot list processes; waiting 10 s instead of confirming that the previous version has exited" >&2
-            # By name, the closest thing left. It cannot tell this installation's
-            # processes from another checkout's, which the listing above can.
-            pkill -x ghostty-notify-agent 2>/dev/null || true
-            sleep 10
-            return 0
+            echo "  cannot list processes (ps failed)" >&2
+            return 1
         fi
         live=""
         while IFS= read -r line; do
             [[ -n "$line" ]] || continue
-            if still_running "${line%% *}" "${line#* }"; then
-                kill -TERM "${line%% *}" 2>/dev/null || true
-                live="$live$line"$'\n'
-            fi
+            status=0
+            still_running "${line%% *}" "${line#* }" || status=$?
+            case $status in
+                0) kill -TERM "${line%% *}" 2>/dev/null || true; live="$live$line"$'\n' ;;
+                2) live="$live$line"$'\n' ;;
+            esac
         done <<<"$list"
         [[ -z "$live" ]] && return 0
         waited=0
@@ -186,14 +218,18 @@ terminate_owned() {
             left=""
             while IFS= read -r line; do
                 [[ -n "$line" ]] || continue
-                if still_running "${line%% *}" "${line#* }"; then left="$left$line"$'\n'; fi
+                status=0
+                still_running "${line%% *}" "${line#* }" || status=$?
+                if ((status != 1)); then left="$left$line"$'\n'; fi
             done <<<"$live"
             # What has been seen to go is never looked at again.
             live=$left
         done
         while IFS= read -r line; do
             [[ -n "$line" ]] || continue
-            if still_running "${line%% *}" "${line#* }"; then kill -KILL "${line%% *}" 2>/dev/null || true; fi
+            status=0
+            still_running "${line%% *}" "${line#* }" || status=$?
+            if ((status == 0)); then kill -KILL "${line%% *}" 2>/dev/null || true; fi
         done <<<"$live"
     done
     return 1
@@ -203,11 +239,18 @@ terminate_owned() {
 # resident that is still there after all that needs them, and `open` would
 # hand the permission check to it and wait two minutes for an answer it has
 # already given.
+remove_markers() {
+    rm -f "$STATE/agent.pid" "$STATE/ready" "$STATE/capabilities" "$STATE/native-hook-ready"
+}
+
+# For the copies of the new version this script starts itself, once it is in
+# place: nothing is left to protect by stopping short, so a failure is only
+# reported.
 stop_owned() {
     if terminate_owned; then
-        rm -f "$STATE/agent.pid" "$STATE/ready" "$STATE/capabilities" "$STATE/native-hook-ready"
+        remove_markers
     else
-        echo "  warning: processes of this installation kept appearing while they were being stopped" >&2
+        echo "  warning: could not confirm that every process of this installation has stopped" >&2
     fi
 }
 
@@ -221,7 +264,7 @@ stop_owned() {
 # does not cover the mode. For those seconds hooks notify nobody; the
 # alternative was that they notify through a version that is being removed.
 #
-# Opened again by cleanup_stage if the previous version stays after all.
+# Opened again by reopen_previous if the previous version stays after all.
 CLOSED=""
 close_admission() {
     [[ -f "$BIN" ]] || return 0
@@ -232,9 +275,29 @@ close_admission() {
     CLOSED=1
 }
 
+# The previous version stays after all — the install failed, stopped short or
+# was interrupted: let it start again, and hand it back to launchd if it was
+# taken from it. The EXIT trap of both the install and --uninstall.
+RELOAD=""
+reopen_previous() {
+    if [[ -n "$CLOSED" ]]; then
+        chmod u+x "$BIN" 2>/dev/null || true
+        CLOSED=""
+    fi
+    if [[ -n "$RELOAD" && -e "$PLIST" ]]; then
+        launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null || true
+        RELOAD=""
+    fi
+}
+
 # A running agent keeps executing from the old inode after the bundle is
 # replaced, and readiness checks would confirm that stale process as healthy,
 # so nothing would ever start the new copy.
+#
+# All or nothing. Replacing or removing the bundle while a process of the
+# previous version may still be running is what the stopping is for, so if it
+# cannot be confirmed that they have all gone, the script stops here and its
+# EXIT trap puts the previous version back as it was.
 stop_agents() {
     # Asked before anything is stopped: if processes cannot be listed, this is
     # the moment to find out, while the previous service is still running.
@@ -243,8 +306,14 @@ stop_agents() {
         exit 2
     }
     close_admission
-    unload
-    stop_owned
+    if [[ -e "$PLIST" ]]; then RELOAD=1; fi
+    uninterrupted unload
+    terminate_owned || {
+        echo "FATAL: could not confirm that the previous version has stopped; nothing was replaced." >&2
+        echo "    It can start again and its LaunchAgent is loaded again. Rerun when no Claude or Codex session is busy." >&2
+        exit 2
+    }
+    remove_markers
 }
 
 # Read-only: the LaunchAgent a full install would write for this HOME.
@@ -254,12 +323,15 @@ if [[ "${1:-}" == "--print-launch-agent" ]]; then
 fi
 
 if [[ "${1:-}" == "--uninstall" ]]; then
+    trap reopen_previous EXIT
     stop_agents
+    RELOAD=""
     rm -f "$PLIST"
     if [[ -x "$LSREGISTER" && -d "$APP" ]]; then
         "$LSREGISTER" -u "$APP" >/dev/null 2>&1 || true
     fi
     rm -rf "$APP"
+    CLOSED=""
     rmdir "$INSTALL_DIR" 2>/dev/null || true
     echo "==> Removed $LABEL and $APP"
     echo "    Session bookkeeping under $STATE is kept; remove it by hand if unwanted."
@@ -309,8 +381,7 @@ cleanup_stage() {
     if [[ -e "$PREVIOUS" && ! -e "$APP" ]]; then
         mv "$PREVIOUS" "$APP" || return
     fi
-    # The previous version is staying after all: let it start again.
-    if [[ -n "$CLOSED" ]]; then chmod u+x "$BIN" || true; fi
+    reopen_previous
     rm -rf "$STAGING"
 }
 trap cleanup_stage EXIT
@@ -330,9 +401,11 @@ if [[ "$START" == 1 ]]; then
     }
 fi
 if [[ "$START" == 1 ]]; then stop_agents; fi
-if [[ -e "$APP" ]]; then mv "$APP" "$PREVIOUS"; fi
-mv "$STAGED" "$APP"
+if [[ -e "$APP" ]]; then uninterrupted mv "$APP" "$PREVIOUS"; fi
+uninterrupted mv "$STAGED" "$APP"
+# The new version is in place: nothing of the previous one to put back.
 CLOSED=""
+RELOAD=""
 # The copy must carry the build's signature: TCC keys the notification and
 # Automation grants to it, so a copy that lost it would be asked again — or,
 # for notifications, would silently display nothing.
