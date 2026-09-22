@@ -526,7 +526,9 @@ launchctl bootstrap "$DOMAIN" "$PLIST"
 # is left works, and nothing brings it back when it dies. So the end state is
 # checked, and put right: stop whoever holds the place, start launchd's again.
 launchd_pid() {
-    launchctl print "$DOMAIN/$LABEL" 2>/dev/null | awk '$1 == "pid" && $2 == "=" { print $3; exit }'
+    # Read to the end: an awk that exits early leaves launchctl to die of
+    # SIGPIPE, which pipefail turns into a failure of this function.
+    launchctl print "$DOMAIN/$LABEL" 2>/dev/null | awk '$1 == "pid" && $2 == "=" && !seen { print $3; seen = 1 }'
 }
 supervised() {
     local mine

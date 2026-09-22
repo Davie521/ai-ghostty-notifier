@@ -155,8 +155,10 @@ else
     codesign --sign "$IDENTITY" --force "${TIMESTAMP[@]}" --options runtime \
         --entitlements "$ENTITLEMENTS" "$APP"
     codesign --verify --deep --strict "$APP"
+    # grep without -q reads to the end: -q quits at the match, and under
+    # pipefail codesign's SIGPIPE would then read as a missing entitlement.
     codesign --display --entitlements - "$APP" 2>/dev/null |
-        grep -q "com.apple.security.automation.apple-events" || {
+        grep "com.apple.security.automation.apple-events" >/dev/null || {
         echo "FATAL: the signed bundle lacks the Apple Events entitlement" >&2
         exit 2
     }
