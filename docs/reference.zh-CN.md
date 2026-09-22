@@ -11,10 +11,6 @@
 查找终端、判断通知和回退投递。shell 文件只是保留原名称的启动入口；
 每次 hook 不再依赖 jq 或 Python。App 的常驻进程可以不一直运行，但 App 文件必须保留。
 
-> 当前 worktree 是原生 hook 迁移版本，尚未发布。“配套 App 必装”的安装方案已经确认。
-> App 和 hook 应来自同一版本；已发布的旧插件不等于这里的实现。
-> 测试证据和待人工验收项见[迁移状态](native-hook-migration.md)。
-
 仓库有 [release](releasing.md) 之后，一条命令就能完成下面第 1–3 步：装的是签名并公证过的
 构建，不用 clone、不用 Swift 工具链。[agent-install.md](agent-install.md) 也是先走这条路：
 
@@ -167,13 +163,21 @@ Codex 首次安装会从 Claude 设置中复制公开通知偏好，不复制来
 | `GHOSTTY_NOTIFY_MIN_ELAPSED` | `180` | 完成通知的最低耗时，秒 |
 | `GHOSTTY_NOTIFY_SOUND_ELAPSED` | `600` | 响 Glass 提示音的最低耗时 |
 | `GHOSTTY_NOTIFY_TIMEOUT` | `1200` | 自动过期秒数；`0` 表示不自动过期 |
-| `GHOSTTY_NOTIFY_BACKEND` | `auto` | 先用就绪的常驻进程，否则用只显示的 terminal-notifier；明确选择 terminal-notifier 可跳过常驻投递 |
+| `GHOSTTY_NOTIFY_BACKEND` | `auto` | 先用就绪的常驻进程，否则用只显示的 terminal-notifier；明确选择 terminal-notifier 可跳过常驻投递。`agent` 等同 `auto`；退役的 `alerter` 和其他未知值按 `terminal-notifier` 处理 |
 | `GHOSTTY_NOTIFY_ON_PROMPT` | `0` | 只有 `1` 开启 Claude 权限/输入提示通知 |
 | `GHOSTTY_NOTIFY_CLEAR_ON_FOCUS` | `1` | `0`、`false`、`no`、`off` 关闭聚焦清理 |
 | `GHOSTTY_NOTIFY_AGENT_APP` | 自动发现 | 常驻 App 路径；空值禁用常驻路径，不会取消必需的原生运行时 |
 | `GHOSTTY_NOTIFY_NATIVE_APP` | 已安装的 App | 仅环境变量可覆盖入口查找的原生 App，不读取 Codex config 中的此项 |
 | `GHOSTTY_NOTIFY_MENU_BAR` | `1` | 常驻进程自身的设置；false 类值隐藏菜单栏 |
 | `GHOSTTY_NOTIFY_HOOK_DEADLINE` | `12` | hook 进程放弃并以成功状态退出前的秒数；限制在 1–120 |
+| `GHOSTTY_NOTIFY_APP_NAME` | `Claude` | Claude 通知里显示的应用名；Codex 固定为 `Codex` |
+| `GHOSTTY_NOTIFY_GROUP_PREFIX` | `ghostty-notify` | 外部后端投递与撤回用的分组前缀；Codex 默认 `codex-ghostty-notify` |
+| `GHOSTTY_NOTIFY_SESSION_DIR` | `<notifications>/ghostty-sessions` | 每个会话的状态目录；`<notifications>` 是 `~/.claude/notifications` 或 `$CODEX_HOME/notifications` |
+| `GHOSTTY_NOTIFY_RATE_DIR` | `<notifications>/state` | 限频状态目录，同一个基目录 |
+| `GHOSTTY_NOTIFY_TTY` | 自动探测 | 终端设备覆盖，必须是 `/dev/` 下的字符设备。完全没有终端的 Claude 会话（headless `claude -p`）会被忽略，除非用它指明一个；Codex 会话仍需有终端 CLI 祖先进程 |
+| `GHOSTTY_NOTIFY_CODEX_SETTLE` | `1.5` | Codex 在 Stop 之后等 TUI 标题稳定再绑定的秒数 |
+| `GHOSTTY_NOTIFY_MARKER_RETRY_DELAYS` | Codex `0.5 1 2 3`，Claude 无 | 标签页查找重试间隔，空白分隔，最多 8 个；明确设为空则不重试 |
+| `CODEX_HOME`、`CODEX_SQLITE_HOME` | `~/.codex`、`$CODEX_HOME` | 原生 Codex 标题和状态查询的读取位置；SQLite 只读打开 |
 
 hook 不会长时间挡住 CLI：每次终端查询都有上限，hook 进程到
 `GHOSTTY_NOTIFY_HOOK_DEADLINE` 会自行退出，随附的 hook 条目也写了 `"timeout": 15`。
@@ -182,8 +186,16 @@ hook 一旦卡住，看起来就像会话卡死
 （[事故记录](incident-2026-09-17-pretooluse-hang.md)）。
 
 耗时、超时接受非负整数，缺失、空或非法值使用默认值。
-其他设置的空值有各自的含义。所有路径、默认值、后端回退和退役项详见
-[配置契约](native-hook-configuration.md)。
+空值在不同设置里含义不同：路径和前缀类设置回落到默认值，
+`GHOSTTY_NOTIFY_AGENT_APP` 为空表示不走常驻投递，
+`GHOSTTY_NOTIFY_MARKER_RETRY_DELAYS` 为空表示不重试。
+相对路径按 hook 的工作目录解析，`~/` 按发送方的 HOME 解析。
+Codex 的 `config.json` 只贡献 `GHOSTTY_NOTIFY_*` 键；null 值忽略，
+文件格式错误会报告但 hook 仍以成功状态退出。
+
+原生运行时之前的这些设置已被忽略：`GHOSTTY_NOTIFY_ALERTER`、`GHOSTTY_NOTIFY_FOCUS_POLL`，
+以及 `GHOSTTY_NOTIFY_FOCUS_SCRIPT` / `GHOSTTY_NOTIFY_CLEAR_SCRIPT` 这两个 helper 替换项；
+它们没有原生替代，升级时请删掉。
 
 例如 Claude 的设置：
 
@@ -229,10 +241,6 @@ Claude 首次绑定标签页以及恢复标题的尝试，会在 hook 返回前�
 临时 Swift worker 可以用独立参数直接调用外部通知后端。
 运行时业务 helper 不再启动 Bash、jq、ps、osascript、sleep 或 sqlite3 CLI；
 SQLite 通过只读 C API 查询。构建和安装脚本仍可使用 shell。
-
-职责和证据见[原生迁移文档](native-hook-migration.md)。
-[第一阶段迁移](hook-migration.md)是历史记录。其中描述的 shell 实现不是安装后可用的兜底；
-它和与之对照的测试套件已在迁移完成后删除，保留在 git 历史里。
 
 ## 排查与局限
 

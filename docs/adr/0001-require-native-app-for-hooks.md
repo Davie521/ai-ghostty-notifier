@@ -70,5 +70,5 @@ drain stdin, report the missing runtime and exit successfully without notifying.
 - Automated checks do not establish real banner, sound or tab-jump behavior;
   those remain manual release acceptance checks.
 
-See [migration evidence](../native-hook-migration.md) and
-[configuration compatibility](../native-hook-configuration.md).
+The settings the native runtime honors, and the ones it retired, are listed
+under [configuration](../reference.md#configuration).

@@ -14,11 +14,6 @@ The shell files are only stable launchers; hooks need neither jq nor Python.
 The resident process does not have to stay running, but the app must remain
 installed.
 
-> This worktree contains the native-hook migration, not a published release.
-> The required-app installation contract is accepted. Use the app and hooks
-> from this same revision; an older published plugin is not this worktree.
-> See [migration evidence and remaining manual checks](native-hook-migration.md).
-
 Once the repository has a [release](releasing.md), one command does steps 1–3
 below from a signed, notarized build, with no clone and no Swift toolchain. It
 is the path [agent-install.md](agent-install.md) tries first:
@@ -193,13 +188,21 @@ paths and private helper controls are not copied.
 | `GHOSTTY_NOTIFY_MIN_ELAPSED` | `180` | Minimum duration for a completion alert, seconds |
 | `GHOSTTY_NOTIFY_SOUND_ELAPSED` | `600` | Minimum duration for Glass sound |
 | `GHOSTTY_NOTIFY_TIMEOUT` | `1200` | Expiry in seconds; `0` disables automatic expiry |
-| `GHOSTTY_NOTIFY_BACKEND` | `auto` | Ready resident first, then display-only terminal-notifier; explicit `terminal-notifier` skips resident delivery |
+| `GHOSTTY_NOTIFY_BACKEND` | `auto` | Ready resident first, then display-only terminal-notifier; explicit `terminal-notifier` skips resident delivery. `agent` behaves like `auto`; the retired `alerter` and unknown values behave like `terminal-notifier` |
 | `GHOSTTY_NOTIFY_ON_PROMPT` | `0` | Only `1` enables immediate Claude permission/input alerts |
 | `GHOSTTY_NOTIFY_CLEAR_ON_FOCUS` | `1` | `0`, `false`, `no`, `off` disable focus clearing |
 | `GHOSTTY_NOTIFY_AGENT_APP` | discovered | Resident bundle path; empty disables resident use, not the required native runtime |
 | `GHOSTTY_NOTIFY_NATIVE_APP` | installed app | Environment-only bootstrap override for the native executable's app; not read from Codex config |
 | `GHOSTTY_NOTIFY_MENU_BAR` | `1` | Resident-process setting; false-like values hide its menu bar item |
 | `GHOSTTY_NOTIFY_HOOK_DEADLINE` | `12` | Seconds before a hook process gives up and exits successfully; clamped to 1–120 |
+| `GHOSTTY_NOTIFY_APP_NAME` | `Claude` | App name in Claude notifications; Codex is always `Codex` |
+| `GHOSTTY_NOTIFY_GROUP_PREFIX` | `ghostty-notify` | Group prefix for external-backend delivery and removal; Codex defaults to `codex-ghostty-notify` |
+| `GHOSTTY_NOTIFY_SESSION_DIR` | `<notifications>/ghostty-sessions` | Per-session state; `<notifications>` is `~/.claude/notifications` or `$CODEX_HOME/notifications` |
+| `GHOSTTY_NOTIFY_RATE_DIR` | `<notifications>/state` | Rate-limit state, same base directory |
+| `GHOSTTY_NOTIFY_TTY` | inspected | Terminal device override, a character device under `/dev/`. A Claude session with no terminal at all (a headless `claude -p`) is ignored unless this names one; a Codex session still needs a terminal CLI ancestor |
+| `GHOSTTY_NOTIFY_CODEX_SETTLE` | `1.5` | Seconds Codex waits after Stop for its TUI title to settle before binding |
+| `GHOSTTY_NOTIFY_MARKER_RETRY_DELAYS` | Codex `0.5 1 2 3`, Claude none | Whitespace-separated delays between tab-lookup retries, at most 8; explicit empty disables retries |
+| `CODEX_HOME`, `CODEX_SQLITE_HOME` | `~/.codex`, `$CODEX_HOME` | Where Codex title and state lookup reads; SQLite is opened read-only |
 
 A hook never holds the CLI for long: each terminal query is bounded, the hook
 process ends itself at `GHOSTTY_NOTIFY_HOOK_DEADLINE`, and the shipped hook
@@ -209,9 +212,18 @@ a stuck hook once looked like a hung session
 ([incident](incident-2026-09-17-pretooluse-hang.md)).
 
 Elapsed/timeout settings accept nonnegative integers; missing, empty or invalid
-values use their defaults. Empty values have different meanings for other
-settings. The [configuration contract](native-hook-configuration.md) covers
-all supported paths, defaults, backend fallback and retired controls.
+values use their defaults. Empty means something different per setting: the
+path and prefix settings fall back to their defaults, `GHOSTTY_NOTIFY_AGENT_APP`
+disables resident delivery, and `GHOSTTY_NOTIFY_MARKER_RETRY_DELAYS` disables
+retries. Relative paths resolve against the hook's working directory and `~/`
+against the sender's HOME. Codex `config.json` only contributes
+`GHOSTTY_NOTIFY_*` keys; null values are ignored, and a malformed file is
+reported while the hook still exits successfully.
+
+Settings from before the native runtime are ignored: `GHOSTTY_NOTIFY_ALERTER`,
+`GHOSTTY_NOTIFY_FOCUS_POLL`, and the `GHOSTTY_NOTIFY_FOCUS_SCRIPT` /
+`GHOSTTY_NOTIFY_CLEAR_SCRIPT` helper substitutions, which have no native
+replacement and should be removed when upgrading.
 
 For example, in Claude's settings:
 
@@ -264,12 +276,6 @@ The resident posts through `UNUserNotificationCenter`. A temporary native worker
 can instead invoke an external backend with literal arguments. No runtime
 business helper launches Bash, jq, ps, osascript, sleep or the sqlite3 CLI.
 SQLite lookup uses its read-only C API. Build/install scripts can remain shell.
-
-See [responsibilities and verification](native-hook-migration.md).
-The [first migration stage](hook-migration.md) is a historical record. The
-shell implementation it describes is not an installed fallback; it and the
-suites that compared against it were removed after the migration and remain in
-the git history.
 
 ## Troubleshooting and limits
 
