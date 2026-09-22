@@ -401,6 +401,17 @@ struct TabSelectionWatchTests {
         #expect(watch.observe("TAB-B", waiting: waiting) == [])
     }
 
+    // The same session's earlier notification had seen A. Its replacement is
+    // posted while the user is already on B, so the earlier view must not
+    // turn B into an arrival and cut the new one's grace short.
+    @Test func aReplacementDoesNotInheritTheEarlierView() {
+        var watch = TabSelectionWatch()
+        watch.posted(sessionID: "b", selected: .tab("TAB-A"))
+        watch.posted(sessionID: "b", selected: nil)
+        watch.postedSelectionKnown(sessionID: "b", selected: "TAB-B")
+        #expect(watch.observe("TAB-B", waiting: waiting) == [])
+    }
+
     @Test func aFailedQueryNeitherArrivesNorForgets() {
         var watch = TabSelectionWatch()
         watch.posted(sessionID: "b", selected: .tab("TAB-A"))
