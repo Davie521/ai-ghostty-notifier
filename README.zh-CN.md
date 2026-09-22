@@ -10,6 +10,9 @@
 
 <p align="center">
   <a href="https://github.com/Davie521/ai-ghostty-notifier/actions/workflows/ci.yml"><img src="https://github.com/Davie521/ai-ghostty-notifier/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Davie521/ai-ghostty-notifier/releases/latest"><img src="https://img.shields.io/github/v/release/Davie521/ai-ghostty-notifier" alt="最新版本"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20%2B%20Commons%20Clause-blue" alt="许可证：MIT + Commons Clause"></a>
+  <a href="#安装"><img src="https://img.shields.io/badge/macOS-13%2B-lightgrey?logo=apple" alt="macOS 13+"></a>
 </p>
 
 <p align="center"><a href="README.md">English</a> · <a href="README.zh-CN.md">中文</a></p>
@@ -65,4 +68,8 @@ agent 会构建并安装配套 App、把 hook 合并进你的设置而不碰其�
 灵感来自 Claude Code 通知生态，包括
 [claude-code-notifier](https://github.com/kovoor/claude-code-notifier) 中讨论的 TTY 标记思路。
 
-[MIT](LICENSE)。
+[MIT 加 Commons Clause](LICENSE)。在哪里用都可以，工作中也可以；可以修改，也可以分享你的修改。
+不可以的是出售它，或者出售价值全部或主要来自它的产品或服务；收费托管、咨询、支持都算出售。
+需要商业授权请写信到 [daviefan@outlook.com](mailto:daviefan@outlook.com)。
+
+加上这条限制之前发布的内容（到 v0.5.1 为止，含 v0.5.1）仍按原来的 MIT 许可证。
