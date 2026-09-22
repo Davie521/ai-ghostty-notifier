@@ -71,8 +71,8 @@ bash install.sh --register-settings
 /plugin install ai-ghostty-notifier@ai-ghostty-notifier
 ```
 
-手动安装和插件注册二选一，避免重复通知。测试本 worktree 时用本地手动安装，
-因为 marketplace 上发布的可能仍是旧版 hook。
+手动安装和插件注册二选一，避免重复通知。要测试本地 checkout 就用手动安装：
+marketplace 提供的是最近发布的版本，不是你的工作副本。
 
 ### 3. 注册 Codex CLI hook（需要时）
 
@@ -242,6 +242,13 @@ Claude 首次绑定标签页以及恢复标题的尝试，会在 hook 返回前�
 运行时业务 helper 不再启动 Bash、jq、ps、osascript、sleep 或 sqlite3 CLI；
 SQLite 通过只读 C API 查询。构建和安装脚本仍可使用 shell。
 
+为什么必须装 App、而且没有 shell 兜底：改成原生运行时之前，shell hook 里已经堆了
+JSON 解析、状态文件、锁、进程看守和终端恢复逻辑。只把常驻那条路径迁到 Swift，
+就得同时维护、测试第二套完整实现。App 的可执行文件本来就在，所以让它同时充当
+短命的 hook 进程和临时 worker。代价是安装、升级都要先有构建好的 App，hook 才能工作；
+卸掉 App 通知就停，启动入口会报告运行时缺失并以 0 退出。也考虑过用 Python 写 hook 客户端，
+否决的原因是每次 hook 多一个解释器，而 macOS 相关的集成一点没少。
+
 ## 排查与局限
 
 - **没有通知：** 检查必需 App 是否存在、耗时阈值、hook 注册/信任、通知授权和专注模式。
@@ -282,7 +289,7 @@ macOS 按 bundle id 解析通知点击，LaunchServices 可能选中它知道的
 `lsregister -u` 只能管这么久。放在名字以 `.noindex` 结尾的目录里的副本没有被发现。
 
 被错误选中的副本会怎样，取决于已安装的常驻进程。它带单实例锁时，副本发现锁被占就退出，那次点击落空。
-加锁之前的旧版常驻不持锁：2026-09-20 就有一次点击在它旁边拉起了一份构建，两个常驻进程同时处理一个队列，直到多出来的那个被停掉。
+加锁之前的旧版常驻不持锁：一次点击就可能拉起它旁边的一份构建，两个常驻进程同时处理一个队列，直到多出来的那个被停掉。
 
 所以日常使用的机器上不要留着构建：用完删掉 `build/`，或者去掉其中二进制的可执行位。
 `tests/test-agent.sh` 会注销它用过的构建，但这只在包被重新发现之前有效。
@@ -307,6 +314,9 @@ python3 tests/test-live-worker.py
 两者默认测试已安装的 App。要测某个构建时，两个脚本认的是同一组设置，所以不会出现只设了一个、另一个脚本却还在测已安装版本的情况：
 `GHOSTTY_NOTIFY_NATIVE_APP` 指向 App 包，例如 `"$PWD/build/ClaudeGhosttyNotify.app"`；`NATIVE_TEST_BINARY` 指向可执行文件；两个都设时以可执行文件为准。
 每个脚本一开始都会打印它实际测试的二进制。
+第三项 `bash tests/test-live-focus.sh <源标签页 id> <目标标签页 id>` 需要两个已经打开的 Ghostty 窗口：
+先聚焦源标签页，再让运行时去聚焦目标标签页，然后断言目标窗口真的到了最前面，
+因为 Ghostty 自己的 selected-tab 属性在窗口仍被挡在后面时也会报告成功。它只认 `GHOSTTY_NOTIFY_NATIVE_APP`。
 这个标签页就是测试夹具：检查会反复把标记写进它的标题，要求每次查找都找到，结束时把标题重置为 Ghostty 的默认标题，不管原来是什么。
 所以它必须空闲：检查期间有程序设置标题的话，例如 Claude Code 工作时每秒两次，标记会被覆盖，检查失败，那个程序自己的标题也会丢。
 来龙去脉见 `docs/incident-2026-09-17-pretooluse-hang.md`。

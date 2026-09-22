@@ -82,9 +82,9 @@ then register the plugin in Claude Code:
 /plugin install ai-ghostty-notifier@ai-ghostty-notifier
 ```
 
-Choose manual or plugin registration, not both. During worktree testing use the
-local manual install, since the published marketplace may still contain older
-hooks.
+Choose manual or plugin registration, not both. To test a checkout, use the
+manual install: the marketplace serves the last published version, not your
+working copy.
 
 ### 3. Register Codex CLI hooks, if used
 
@@ -277,6 +277,17 @@ can instead invoke an external backend with literal arguments. No runtime
 business helper launches Bash, jq, ps, osascript, sleep or the sqlite3 CLI.
 SQLite lookup uses its read-only C API. Build/install scripts can remain shell.
 
+Why the app is required, and why there is no shell fallback: before the native
+runtime, the shell hooks had accumulated JSON parsing, state files, locks,
+process watchers and terminal recovery. Moving only the resident path to Swift
+would have left a second, complete implementation to keep in step and test. The
+app's executable already existed, so it also runs as the short-lived hook
+process and the temporary worker. The cost is that installing or upgrading
+needs the built app before the hooks work, and removing it turns notifications
+off; the launchers then report the missing runtime and exit 0. A Python hook
+client was considered and rejected: it adds an interpreter to every hook
+without removing any of the macOS-specific integration.
+
 ## Troubleshooting and limits
 
 - **No notification:** check the required app exists, the minimum duration, hook
@@ -332,8 +343,8 @@ named `*.noindex` was not picked up.
 What a wrongly chosen copy does depends on the installed agent. Once the
 installed agent has the single-instance lock, the copy finds the lock taken and
 exits, and that click goes nowhere. An installed agent from before the lock
-holds none: on 2026-09-20 a click started a build next to it, and two residents
-drained one spool until the stray was stopped.
+holds none: a click can start a build sitting next to it, and two residents
+then drain one spool until the stray is stopped.
 
 So do not keep a build around on a machine you use: delete `build/` when you
 are done, or take the execute bit off its binary. `tests/test-agent.sh`
@@ -367,6 +378,12 @@ two settings, so one setting cannot leave them testing different things.
 `"$PWD/build/ClaudeGhosttyNotify.app"`, and `NATIVE_TEST_BINARY` an executable;
 the executable wins when both are set. Each script starts by printing the binary
 it tests.
+
+A third check, `bash tests/test-live-focus.sh <source-tab-id> <target-tab-id>`,
+needs two Ghostty windows already open. It focuses the source tab, asks the
+runtime to focus the target, and asserts that the target's window actually came
+to the front, because Ghostty's own selected-tab property reported success while
+the window stayed behind. It takes `GHOSTTY_NOTIFY_NATIVE_APP` only.
 
 The tab is the fixture. Each check writes markers into its title, expects every
 lookup to find them, and leaves the tab with Ghostty's default title, whatever

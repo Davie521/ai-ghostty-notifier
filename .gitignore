@@ -7,13 +7,12 @@
 # Resident agent build output. The .app bundle is assembled locally by
 # scripts/build-agent.sh; nothing signed or prebuilt is committed. The native
 # bundle must be installed before the compatibility hook launchers can run.
+# `build` has no trailing slash on purpose: it may be a symlink to a *.noindex
+# directory (docs/reference.md, "Builds and notification clicks"), and a
+# directory-only pattern would let the symlink show up as untracked.
 agent/.build/
-build/
+build
 hooks/bin/
-
-# Playwright MCP page snapshots — browser scratch output, not project source.
-# Swept into a commit once by `git add -A`; kept out of the index since.
-.playwright-mcp/
 
 __pycache__/
 *.pyc
