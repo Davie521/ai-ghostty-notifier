@@ -261,6 +261,9 @@ What the notification is able to say, and how it finds the tab:
   `GHOSTTY_NOTIFY_TTY` names a terminal for a session that has none of its own.
 - The resident app uses its own notification identity, exact per-session
   withdrawal, activation events and a menu bar list of waiting sessions.
+  Switching tabs inside Ghostty activates no app, so while Ghostty is in front
+  and a notification waits on a known tab, the app also reads the selected tab
+  once a second; that stops as soon as either no longer holds.
   External backends are optional alternatives; their limitations are under
   [Troubleshooting and limits](#troubleshooting-and-limits).
 

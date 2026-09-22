@@ -265,6 +265,178 @@ struct FocusDismissalTests {
         #expect(state.sessionsMatching(selectedTabID: "TAB-404") == [])
         #expect(state.hasOutstandingNotifications)
     }
+
+    // Reproduced on 2026-09-22: Ghostty frontmost throughout, the session's tab
+    // selected five times for up to 25 seconds, and the notification stayed
+    // until Ghostty was left and re-entered.
+    @Test func switchingToTheSessionsTabInsideGhosttyWithdrawsIt() {
+        var state = stateWithTwoSessions()
+        #expect(state.takeNotifications(for: .ghosttyTabSelected(tabID: "TAB-1")) == ["claude-aaa"])
+        #expect(state.sessions["bbb"]?.notificationIDs == ["claude-bbb"])
+    }
+
+    // Unlike activation, a switch is no evidence about a session that cannot be
+    // placed in a tab: the user never left Ghostty. The fallback would take its
+    // notification down about a second after posting.
+    @Test func aTabSwitchLeavesASessionWithNoKnownTabAlone() {
+        var state = SessionState()
+        _ = state.newNotification(sessionID: "ccc", now: 1)
+        #expect(state.takeNotifications(for: .ghosttyTabSelected(tabID: "TAB-9")) == [])
+        #expect(state.sessions["ccc"]?.notificationIDs == ["claude-ccc"])
+    }
+
+    @Test func aTabSwitchHonoursTheOptOut() {
+        var state = SessionState()
+        state.anchor(sessionID: "keep", tabID: "TAB-1", now: 1)
+        _ = state.newNotification(sessionID: "keep", clearOnFocus: false, now: 1)
+        #expect(state.takeNotifications(for: .ghosttyTabSelected(tabID: "TAB-1")) == [])
+    }
+
+    @Test func aLateSwitchAnswerDoesNotWithdrawWhatArrivedWhileItWasPending() {
+        var state = stateWithTwoSessions()
+        let asked = state.outstanding()
+        _ = state.newNotification(sessionID: "aaa", now: 5)
+        #expect(
+            state.takeNotifications(for: .ghosttyTabSelected(tabID: "TAB-1"), among: asked) == [])
+        #expect(state.sessions["aaa"]?.notificationIDs == ["claude-aaa"])
+    }
+
+    // Each poll of the selection is an Apple Event; with nothing a switch could
+    // clear, the agent must not be asking at all.
+    @Test func pollingIsOnlyWorthItForNotificationsOnKnownTabs() {
+        var state = SessionState()
+        #expect(!state.hasNotificationsOnKnownTabs)
+        _ = state.newNotification(sessionID: "untabbed", now: 1)
+        #expect(!state.hasNotificationsOnKnownTabs)
+        state.anchor(sessionID: "kept", tabID: "TAB-1", now: 1)
+        _ = state.newNotification(sessionID: "kept", clearOnFocus: false, now: 1)
+        #expect(!state.hasNotificationsOnKnownTabs)
+        state.anchor(sessionID: "tabbed", tabID: "TAB-2", now: 1)
+        _ = state.newNotification(sessionID: "tabbed", now: 1)
+        #expect(state.hasNotificationsOnKnownTabs)
+        _ = state.takeNotifications(sessionID: "tabbed")
+        #expect(!state.hasNotificationsOnKnownTabs)
+    }
+}
+
+@Suite("Tab switches inside Ghostty")
+struct TabSelectionWatchTests {
+    private let waiting = ["b": "TAB-B"]
+
+    // A notification posted onto the tab the user is watching keeps its short
+    // grace: being there already is not arriving there.
+    @Test func beingOnTheTabWhenItWasPostedIsNotAnArrival() {
+        var watch = TabSelectionWatch()
+        watch.posted(sessionID: "b", selected: nil)
+        watch.postedSelectionKnown(sessionID: "b", selected: "TAB-B")
+        #expect(watch.observe("TAB-B", waiting: waiting) == [])
+    }
+
+    // Codex review of #42, HIGH: posted while the user watched A, and they
+    // reached B before the first poll. A baseline taken at that poll read B
+    // as where they had always been, and the notification never went.
+    @Test func reachingTheTabBeforeTheFirstPollIsAnArrival() {
+        var watch = TabSelectionWatch()
+        watch.posted(sessionID: "b", selected: nil)
+        watch.postedSelectionKnown(sessionID: "b", selected: "TAB-A")
+        #expect(watch.observe("TAB-B", waiting: waiting) == ["b"])
+    }
+
+    // Codex review of #42, MEDIUM: a poll already running for another session
+    // had last seen A; the user moved to B and B's round then finished. That
+    // arrival preceded the notification, so it must not end B's grace.
+    @Test func anArrivalBeforeThePostDoesNotCountForIt() {
+        var watch = TabSelectionWatch()
+        watch.posted(sessionID: "other", selected: .tab("TAB-A"))
+        _ = watch.observe("TAB-A", waiting: ["other": "TAB-O"])
+        watch.posted(sessionID: "b", selected: nil)
+        watch.postedSelectionKnown(sessionID: "b", selected: "TAB-B")
+        #expect(watch.observe("TAB-B", waiting: ["other": "TAB-O", "b": "TAB-B"]) == [])
+    }
+
+    @Test func leavingAndComingBackIsAnArrival() {
+        var watch = TabSelectionWatch()
+        watch.posted(sessionID: "b", selected: .tab("TAB-B"))
+        #expect(watch.observe("TAB-A", waiting: waiting) == [])
+        #expect(watch.observe("TAB-B", waiting: waiting) == ["b"])
+    }
+
+    @Test func postedWhileGhosttyWasBehindArrivesOnFirstSight() {
+        var watch = TabSelectionWatch()
+        watch.posted(sessionID: "b", selected: .outside)
+        #expect(watch.observe("TAB-B", waiting: waiting) == ["b"])
+    }
+
+    @Test func leavingGhosttyMakesTheNextSightAnArrival() {
+        var watch = TabSelectionWatch()
+        watch.posted(sessionID: "b", selected: .tab("TAB-B"))
+        watch.leftGhostty()
+        #expect(watch.observe("TAB-B", waiting: waiting) == ["b"])
+    }
+
+    // Nothing is known about where the user was: the answer is only a baseline.
+    @Test func withNoPostTimeAnswerTheFirstPollIsABaseline() {
+        var watch = TabSelectionWatch()
+        watch.posted(sessionID: "b", selected: nil)
+        #expect(watch.observe("TAB-B", waiting: waiting) == [])
+        #expect(watch.observe("TAB-A", waiting: waiting) == [])
+        #expect(watch.observe("TAB-B", waiting: waiting) == ["b"])
+    }
+
+    // The post-time query and the first poll describe the same moment; a poll
+    // that answered first is not overwritten.
+    @Test func aLatePostTimeAnswerDoesNotOverwriteAPoll() {
+        var watch = TabSelectionWatch()
+        watch.posted(sessionID: "b", selected: nil)
+        _ = watch.observe("TAB-A", waiting: waiting)
+        watch.postedSelectionKnown(sessionID: "b", selected: "TAB-B")
+        #expect(watch.seen["b"] == .tab("TAB-A"))
+    }
+
+    // A replacement notification starts over from where the user is now.
+    @Test func aNewNotificationReplacesWhatTheOldOneSaw() {
+        var watch = TabSelectionWatch()
+        watch.posted(sessionID: "b", selected: .outside)
+        watch.posted(sessionID: "b", selected: .tab("TAB-B"))
+        #expect(watch.observe("TAB-B", waiting: waiting) == [])
+    }
+
+    // The same session's earlier notification had seen A. Its replacement is
+    // posted while the user is already on B, so the earlier view must not
+    // turn B into an arrival and cut the new one's grace short.
+    @Test func aReplacementDoesNotInheritTheEarlierView() {
+        var watch = TabSelectionWatch()
+        watch.posted(sessionID: "b", selected: .tab("TAB-A"))
+        watch.posted(sessionID: "b", selected: nil)
+        watch.postedSelectionKnown(sessionID: "b", selected: "TAB-B")
+        #expect(watch.observe("TAB-B", waiting: waiting) == [])
+    }
+
+    @Test func aFailedQueryNeitherArrivesNorForgets() {
+        var watch = TabSelectionWatch()
+        watch.posted(sessionID: "b", selected: .tab("TAB-A"))
+        #expect(watch.observe(nil, waiting: waiting) == [])
+        #expect(watch.seen["b"] == .tab("TAB-A"))
+        #expect(watch.observe("TAB-B", waiting: waiting) == ["b"])
+    }
+
+    @Test func sessionsNoLongerWaitingAreForgotten() {
+        var watch = TabSelectionWatch()
+        watch.posted(sessionID: "gone", selected: .outside)
+        _ = watch.observe("TAB-A", waiting: waiting)
+        #expect(watch.seen["gone"] == nil)
+    }
+
+    @Test func onlyWithdrawableSessionsOnKnownTabsAreWatched() {
+        var state = SessionState()
+        _ = state.newNotification(sessionID: "untabbed", now: 1)
+        state.anchor(sessionID: "kept", tabID: "TAB-1", now: 1)
+        _ = state.newNotification(sessionID: "kept", clearOnFocus: false, now: 1)
+        state.anchor(sessionID: "tabbed", tabID: "TAB-2", now: 1)
+        _ = state.newNotification(sessionID: "tabbed", now: 1)
+        state.anchor(sessionID: "idle", tabID: "TAB-3", now: 1)
+        #expect(state.waitingOnKnownTabs() == ["tabbed": "TAB-2"])
+    }
 }
 
 @Suite("State persistence")
