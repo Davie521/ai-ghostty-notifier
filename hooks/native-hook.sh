@@ -6,7 +6,8 @@ GHOSTTY_NOTIFY_HOOKS_DIR="$(cd -- "${BASH_SOURCE[0]%/*}" && pwd)"
 export GHOSTTY_NOTIFY_HOOKS_DIR
 native_app=""
 native_problem=""
-native_installed="$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app"
+native_install_dir="$HOME/Library/Application Support/claude-ghostty-notify"
+native_installed="$native_install_dir/ClaudeGhosttyNotify.app"
 native_candidates=(
     "${GHOSTTY_NOTIFY_AGENT_APP:-}" \
     "$native_installed" \
@@ -15,13 +16,13 @@ native_candidates=(
 if [[ -n "${GHOSTTY_NOTIFY_NATIVE_APP+set}" ]]; then
     native_candidates=("$GHOSTTY_NOTIFY_NATIVE_APP")
 fi
-# An installed app whose binary is not executable is being replaced:
-# scripts/install-agent.sh takes the bit off while it stops the previous
-# version, and waits only for what runs the installed binary. That closes the
-# way in for this HOME, not for one copy — falling through to a build beside
-# these hooks would start a process nobody waits for.
-if [[ -f "$native_installed/Contents/MacOS/ghostty-notify-agent" \
-    && ! -x "$native_installed/Contents/MacOS/ghostty-notify-agent" ]]; then
+# The installed app is being replaced. scripts/install-agent.sh leaves this
+# marker beside it, takes the execute bit off its binary, and waits only for
+# what runs that binary. The bit alone would close only that copy: these hooks
+# would fall through to a build beside them, starting a process nobody waits
+# for — and between the two moves of the bundle there is no installed binary
+# to have a bit at all. The marker closes the way in for this HOME.
+if [[ -e "$native_install_dir/.admission-closed" ]]; then
     native_candidates=("")
     native_problem="the app is being reinstalled; this hook does nothing until it is back"
 fi

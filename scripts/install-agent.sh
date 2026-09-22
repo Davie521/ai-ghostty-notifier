@@ -110,12 +110,13 @@ unload() {
 # undoes it. With a trap of its own for the signal, bash waits for the command
 # first.
 uninterrupted() {
-    local signal=""
+    local signal="" status=0
     trap 'signal=TERM' TERM
     trap 'signal=INT' INT
-    "$@"
+    "$@" || status=$?
     trap - TERM INT
     if [[ -n "$signal" ]]; then kill -s "$signal" $$; fi
+    return "$status"
 }
 
 # ps with its start times in one format and its paths as they are. The start
@@ -264,15 +265,26 @@ stop_owned() {
 # does not cover the mode. For those seconds hooks notify nobody; the
 # alternative was that they notify through a version that is being removed.
 #
-# Opened again by reopen_previous if the previous version stays after all.
+# The bit covers the installed binary. A hook registered from a checkout or a
+# plugin has a bundle of its own beside it, and the launcher would fall through
+# to that one — also in the moment between the two moves of the bundle, when
+# there is no installed binary to have a bit. So there is a marker as well,
+# beside the bundle rather than in it, and hooks/native-hook.sh starts no copy
+# at all while it is there.
+#
+# Recorded as closed before anything changes, and the change itself is not
+# interrupted, so that an interruption never finds it closed and not
+# recorded. Opened again by reopen_previous if the previous version stays
+# after all, and by the install once the new version is in place.
 CLOSED=""
+GATE="$INSTALL_DIR/.admission-closed"
 close_admission() {
     [[ -f "$BIN" ]] || return 0
-    chmod u-x "$BIN" || {
+    CLOSED=1
+    : > "$GATE" && uninterrupted chmod u-x "$BIN" || {
         echo "FATAL: cannot change $BIN; nothing was stopped or changed." >&2
         exit 2
     }
-    CLOSED=1
 }
 
 # The previous version stays after all — the install failed, stopped short or
@@ -282,6 +294,7 @@ RELOAD=""
 reopen_previous() {
     if [[ -n "$CLOSED" ]]; then
         chmod u+x "$BIN" 2>/dev/null || true
+        rm -f "$GATE"
         CLOSED=""
     fi
     if [[ -n "$RELOAD" && -e "$PLIST" ]]; then
@@ -332,6 +345,7 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     fi
     rm -rf "$APP"
     CLOSED=""
+    rm -f "$GATE"
     rmdir "$INSTALL_DIR" 2>/dev/null || true
     echo "==> Removed $LABEL and $APP"
     echo "    Session bookkeeping under $STATE is kept; remove it by hand if unwanted."
@@ -403,9 +417,12 @@ fi
 if [[ "$START" == 1 ]]; then stop_agents; fi
 if [[ -e "$APP" ]]; then uninterrupted mv "$APP" "$PREVIOUS"; fi
 uninterrupted mv "$STAGED" "$APP"
-# The new version is in place: nothing of the previous one to put back.
+# The new version is in place: nothing of the previous one to put back, and
+# hooks may start it. The marker goes on every path, --no-start included, in
+# case a killed install left one behind.
 CLOSED=""
 RELOAD=""
+rm -f "$GATE"
 # The copy must carry the build's signature: TCC keys the notification and
 # Automation grants to it, so a copy that lost it would be asked again — or,
 # for notifications, would silently display nothing.

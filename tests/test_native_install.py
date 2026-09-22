@@ -540,6 +540,55 @@ while :; do /bin/sleep 0.05; done
                 self.assertIn("being reinstalled", Path(str(mark) + ".stderr").read_text())
                 (self.root / "full-install-calls").unlink(missing_ok=True)
 
+    def test_an_interruption_while_the_way_in_is_being_shut_leaves_it_open(self):
+        # That the way in was shut used to be recorded only once chmod had
+        # returned. Interrupted during chmod, the cleanup found nothing
+        # recorded, and chmod then finished and left the binary shut.
+        home = self.root / "home-interrupted-at-chmod"
+        installed, _ = self.previous_version(home)
+        self.stub("chmod", 'if [[ "$1" == u-x ]]; then kill -TERM "$PPID"; /bin/sleep 0.3; fi\n'
+                  'exec /bin/chmod "$@"\n')
+        result, _ = self.full_install(home, self.REAL_PS_FOR_ONE_PID)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(os.access(installed / EXECUTABLE, os.X_OK),
+                        "an interruption left the previous version unable to start")
+        self.assertFalse((installed.parent / ".admission-closed").exists())
+        self.assertEqual(list(installed.parent.glob(".native-install.*")), [])
+
+    def test_a_hook_between_the_two_moves_of_the_bundle_starts_nothing(self):
+        # For a moment there is no installed binary at all: the previous
+        # bundle has been moved aside and the new one not yet moved in. With
+        # no binary to find shut, a hook registered beside a build fell
+        # through to the build. Here one fires in exactly that moment.
+        home = self.root / "home with a hook between the moves"
+        installed, started = self.previous_version(home)
+        hooks = self.root / "checkout between the moves" / "hooks"
+        shutil.copytree(REPO / "hooks", hooks)
+        build = hooks.parent / "build" / BUNDLE
+        (build / "Contents/MacOS").mkdir(parents=True)
+        (build / "Contents/Resources").mkdir()
+        (build / MARKER).write_text("")
+        build_started = self.root / "the-build-was-started-between-the-moves"
+        (build / EXECUTABLE).write_text('#!/bin/bash\necho started >> "{}"\n'.format(build_started))
+        (build / EXECUTABLE).chmod(0o755)
+        mark = self.root / "hook-between-the-moves"
+        self.stub("mv", '''case "$1" in */.native-install.*/{bundle})
+    [[ -e "{installed}" ]] && echo "the installed bundle was still there" > "{mark}.note"
+    /usr/bin/env -i HOME="{home}" PATH=/usr/bin:/bin /bin/bash "{hooks}/ghostty-notify.sh" </dev/null 2>"{mark}.stderr"
+    echo "hook exit $?" > "{mark}"
+esac
+exec /bin/mv "$@"
+'''.format(bundle=BUNDLE, installed=installed, mark=mark, home=home, hooks=hooks))
+        result, _ = self.full_install(home, self.REAL_PS_FOR_ONE_PID)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(mark.read_text(), "hook exit 0\n")
+        self.assertFalse(Path(str(mark) + ".note").exists(), "the hook did not fire between the moves")
+        self.assertFalse(build_started.exists(), "a hook started the build beside it between the moves")
+        self.assertFalse(started.exists())
+        self.assertIn("being reinstalled", Path(str(mark) + ".stderr").read_text())
+        # Open again once the new version is in place.
+        self.assertFalse((installed.parent / ".admission-closed").exists())
+
     def test_the_previous_version_can_start_again_when_the_install_fails(self):
         home = self.root / "home-where-the-swap-fails"
         installed, _ = self.previous_version(home)
