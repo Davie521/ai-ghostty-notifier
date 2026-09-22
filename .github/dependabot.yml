@@ -1,0 +1,9 @@
+# Both workflows pin their actions by commit (a tag can be moved to other
+# code), so nothing updates them unless this does: it proposes the new commit
+# with its version in the trailing comment.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
