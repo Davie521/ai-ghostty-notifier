@@ -1,6 +1,6 @@
 {
   "name": "ai-ghostty-notifier",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Ghostty-native notifications for Claude Code and Codex CLI: time-tiered alerts (silent under 3min, no-sound 3-10min, with sound over 10min), a resident agent that jumps to the session's exact tab when you click and clears the notification the moment you return to it",
   "author": {
     "name": "Davie521",
