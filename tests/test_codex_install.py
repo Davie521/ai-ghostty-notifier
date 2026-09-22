@@ -196,6 +196,17 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual({oct(b.stat().st_mode & 0o777) for b in backups}, {"0o600"})
         self.assertEqual([p.name for p in codex.iterdir() if p.name.endswith(".tmp")], [])
 
+    def test_hooks_trust_advice_only_when_the_registration_changed(self):
+        _, codex, settings = self.sandbox()
+        with patch("builtins.print") as first:
+            installer.install(codex, settings)
+        with patch("builtins.print") as second:
+            installer.install(codex, settings)
+        said = lambda mock: " ".join(str(a) for call in mock.call_args_list for a in call.args)
+        self.assertIn("/hooks to trust", said(first))
+        self.assertNotIn("/hooks to trust", said(second))
+        self.assertIn("unchanged", said(second))
+
     def test_unmigratable_config_aborts_before_anything_is_written(self):
         _, codex, settings = self.sandbox()
         (codex / "config.toml").write_text('notify = ["/x/ghostty-notify/codex-notify.py", "extra"]\n')

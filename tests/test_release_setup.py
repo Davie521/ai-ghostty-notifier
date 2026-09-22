@@ -236,6 +236,22 @@ class ReleaseSetupTests(unittest.TestCase):
         self.assertIn("What only you can do", result.stdout)
         # One list of next steps, not install.sh's as well.
         self.assertEqual(result.stdout.count("Next steps:"), 0)
+        # The way out is this script's own, not a checkout the user does not have.
+        self.assertIn("setup.sh | bash -s -- --uninstall", result.stdout)
+        self.assertNotIn("install-agent.sh --uninstall", result.stdout)
+
+    def test_claude_config_dir_selects_where_the_hooks_go(self):
+        other = self.home / ".claude-b"
+        other.mkdir()
+        self.env["CLAUDE_CONFIG_DIR"] = str(other)
+        result = self.setup_sh("--no-start", "--claude", "--no-codex", "--allow-unnotarized")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((other / "settings.json").exists(), result.stdout)
+        self.assertEqual(sorted(json.loads((other / "settings.json").read_text())["hooks"]), EVENTS)
+        for launcher in LAUNCHERS:
+            self.assertTrue((other / "hooks" / launcher).is_file(), launcher)
+        self.assertEqual(self.settings.read_text(), self.original_settings)
+        self.assertFalse((self.home / ".claude/hooks").exists())
 
     def test_a_pinned_version_uses_its_own_download_path(self):
         (self.release / "latest").rename(self.root / "latest-moved")

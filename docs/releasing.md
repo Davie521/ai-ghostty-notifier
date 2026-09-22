@@ -111,10 +111,8 @@ still work together.
    ```
 
 3. Watch the run. When it is green, the release exists, and from then on the
-   README's prompt installs it without building anything. The prompt needs no
-   change; only the README's requirements line should stop asking for a Swift
-   toolchain once the first release is out. Check it once on a Mac, ideally one
-   that never had a local build:
+   README's prompt installs it without building anything; the prompt needs no
+   change. Check it once on a Mac, ideally one that never had a local build:
 
    ```bash
    curl -fsSL https://github.com/Davie521/ai-ghostty-notifier/releases/latest/download/setup.sh | bash

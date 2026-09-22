@@ -14,13 +14,17 @@ The shell files are only stable launchers; hooks need neither jq nor Python.
 The resident process does not have to stay running, but the app must remain
 installed.
 
-Once the repository has a [release](releasing.md), one command does steps 1–3
-below from a signed, notarized build, with no clone and no Swift toolchain. It
-is the path [agent-install.md](agent-install.md) tries first:
+One command does steps 1–3 below from the current [release](releasing.md), a
+signed and notarized build, with no clone and no Swift toolchain. It is the
+path [agent-install.md](agent-install.md) tries first:
 
 ```bash
 curl -fsSL https://github.com/Davie521/ai-ghostty-notifier/releases/latest/download/setup.sh | bash
 ```
+
+With more than one Claude configuration directory, run it once more for each
+of the others, with `CLAUDE_CONFIG_DIR=<dir>` in front of `bash` and
+`--claude --no-codex` after `bash -s --`.
 
 ### 1. Build and install the required app
 
