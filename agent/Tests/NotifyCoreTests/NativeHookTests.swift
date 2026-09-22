@@ -57,6 +57,45 @@ struct NativeHookTests {
         #expect(try parse(input, environment: ["TERM_PROGRAM": "iTerm.app"]) == nil)
         #expect(try parse(#"{"session_id":"abc-123","hook_event_name":"PreToolUse"}"#) == nil)
     }
+    private func claudeTree(tty: String? = "/dev/ttys001") -> ProcessFixture {
+        var processes = inspector(tty: tty)
+        processes.processes[300]?.name = "claude"
+        processes.processes[300]?.executable = "/native/claude"
+        return processes
+    }
+    // Issue #9. A headless `claude -p` inherits TERM_PROGRAM from whatever
+    // launched it but owns no terminal, and so no tab.
+    @Test func aClaudeSessionWithNoTerminalAnywhereIsIgnored() throws {
+        let input = #"{"session_id":"abc-123","hook_event_name":"Stop"}"#
+        #expect(try parse(input, source: .claude, processes: claudeTree(tty: nil)) == nil)
+        // No CLI to be found either, and nothing below it with a terminal.
+        #expect(try parse(input, source: .claude, processes: ProcessFixture()) == nil)
+        #expect(
+            try parse(
+                #"{"session_id":"abc-123","hook_event_name":"UserPromptSubmit"}"#,
+                source: .claude, processes: claudeTree(tty: nil)) == nil)
+    }
+    @Test func aClaudeSessionCountsWhereverItsTerminalIsFound() throws {
+        let input = #"{"session_id":"abc-123","hook_event_name":"Stop"}"#
+        // The CLI's own terminal.
+        #expect(try parse(input, source: .claude, processes: claudeTree())?.tty == "/dev/ttys001")
+        // A CLI the walk does not recognise by name: the hook's controlling
+        // terminal, which it inherits from that CLI, is enough.
+        var unnamed = claudeTree()
+        unnamed.processes[300]?.name = "node"
+        unnamed.processes[300]?.executable = "/node/bin/node"
+        #expect(try parse(input, source: .claude, processes: unnamed)?.tty == "/dev/ttys001")
+        // And GHOSTTY_NOTIFY_TTY names one outright.
+        #expect(
+            try parse(
+                input, source: .claude, environment: ["GHOSTTY_NOTIFY_TTY": "/dev/ttys009"],
+                processes: claudeTree(tty: nil))?.tty == "/dev/ttys009")
+        // Empty is no name at all.
+        #expect(
+            try parse(
+                input, source: .claude, environment: ["GHOSTTY_NOTIFY_TTY": ""],
+                processes: claudeTree(tty: nil)) == nil)
+    }
     @Test func nodeStyleArgvIdentityStillFindsClaude() {
         var processes = inspector()
         processes.processes[300]?.name = "node"

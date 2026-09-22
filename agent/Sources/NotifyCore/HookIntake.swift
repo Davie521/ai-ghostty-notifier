@@ -96,6 +96,17 @@ public enum HookIntake {
         event.tty =
             env["GHOSTTY_NOTIFY_TTY"].flatMap { $0.isEmpty ? nil : $0 }
             ?? owner?.tty ?? inspector.process(processID)?.tty
+        // A session with no terminal anywhere is not sitting in a tab, whatever
+        // the environment says: TERM_PROGRAM and GHOSTTY_RESOURCES_DIR are
+        // inherited, so a headless `claude -p` started by a server or a script
+        // that was itself launched from Ghostty passes the check above. Taken
+        // for a tab's session, every run posted a banner — each gets a fresh
+        // session id, so the rate limit never saw the same key twice — and was
+        // anchored to whichever tab happened to be focused (issue #9). An
+        // interactive session always has one, under tmux too: its CLI's, or
+        // this hook's own controlling terminal when the CLI runs under a name
+        // the walk does not know; GHOSTTY_NOTIFY_TTY names one outright.
+        if event.tty == nil { return nil }
         return try HookEvent.decode(JSONEncoder().encode(event))
     }
 

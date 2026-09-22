@@ -182,6 +182,31 @@ class NativeHookTests(unittest.TestCase):
         self.invoke("UserPromptSubmit", source="codex", payload={"session_id": SID, "agent_id": "child", "hook_event_name": "UserPromptSubmit"})
         self.assertFalse(self.state("codex").exists())
 
+    def test_headless_claude_posts_and_records_nothing(self):
+        # Issue #9: a `claude -p` started by a server or a script inherits
+        # TERM_PROGRAM from whoever launched it but owns no terminal, and so no
+        # tab. Each run used to post a banner and be anchored to whichever tab
+        # was focused. No GHOSTTY_NOTIFY_TTY, as a real one has none.
+        headless = {"GHOSTTY_NOTIFY_TTY": ""}
+        other = "feedface-3030-4040"
+        def payload(event):
+            return {"session_id": other, "hook_event_name": event, "cwd": "/work/headless"}
+        self.invoke("UserPromptSubmit", payload=payload("UserPromptSubmit"), env=headless, owner=False)
+        self.assertFalse(self.state().exists())
+        # Not even a round long enough to notify about.
+        self.state().mkdir(parents=True)
+        (self.state() / (other + ".start")).write_text(str(int(time.time()) - 700) + "\n")
+        self.invoke("Stop", payload=payload("Stop"), env=headless, owner=False)
+        # The same fixture does notify for a session with a terminal, and in
+        # the time that takes the headless round would have been posted too.
+        self.start()
+        self.invoke("Stop")
+        self.wait(lambda: len(self.notices()) == 1)
+        time.sleep(0.5)
+        self.assertEqual(len(self.notices()), 1)
+        self.assertNotIn("ghostty-notify-" + other, self.notices()[0])
+        self.assertEqual([p.name for p in self.state().iterdir() if other in p.name], [other + ".start"])
+
     def test_malformed_and_non_ghostty_inputs_are_fail_open(self):
         for value in ("{", "[]", '{"session_id":"../escape","hook_event_name":"Stop"}'):
             self.invoke("Stop", payload=value)

@@ -239,6 +239,10 @@ What the notification is able to say, and how it finds the tab:
 - Codex binds after Stop, normally allowing 1.5 seconds for its animated TUI title
   to settle. Desktop and MCP-server processes without a terminal CLI owner are
   skipped.
+- A Claude session with no terminal at all — a headless `claude -p` started by
+  a server or a script — is skipped too, even when it inherited `TERM_PROGRAM`
+  from something launched in Ghostty: it has no tab to notify about or jump to.
+  `GHOSTTY_NOTIFY_TTY` names a terminal for a session that has none of its own.
 - The resident app uses its own notification identity, exact per-session
   withdrawal, activation events and a menu bar list of waiting sessions.
   External backends are optional alternatives; their limitations are under
@@ -291,7 +295,8 @@ the git history.
   Automation failures, not an unconditional guarantee.
 - **Old notifications after an upgrade:** dismiss stale pre-upgrade notices and
   test a freshly posted one; macOS may no longer route the old sender identity.
-- macOS/Ghostty only. Terminal CLI ownership is required for Codex notifications.
+- macOS/Ghostty only. Terminal CLI ownership is required for Codex notifications,
+  and a terminal for Claude's.
   Tests do not replace manual checks of visible banners, sound and real tab jumps.
 
 ## Verification
