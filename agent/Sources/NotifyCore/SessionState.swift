@@ -340,6 +340,14 @@ public struct SessionState: Equatable, Sendable {
         }
     }
 
+    /// Each session a tab switch could clear, with its tab.
+    public func waitingOnKnownTabs() -> [String: String] {
+        sessions.compactMapValues { record in
+            guard !record.notificationIDs.isEmpty, record.clearOnFocus else { return nil }
+            return record.tabID
+        }
+    }
+
     /// Identifiers to withdraw in response to a focus change, forgetting them.
     ///
     /// A session with no resolved tab is always withdrawn when Ghostty comes

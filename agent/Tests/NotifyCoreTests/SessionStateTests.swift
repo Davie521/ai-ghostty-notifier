@@ -321,41 +321,110 @@ struct FocusDismissalTests {
 
 @Suite("Tab switches inside Ghostty")
 struct TabSelectionWatchTests {
-    // A notification posted onto the tab the user is watching gets a short
-    // grace instead of vanishing; the poll that starts with it must not read
-    // "they are on that tab" as "they just went there".
-    @Test func theFirstAnswerIsOnlyABaseline() {
+    private let waiting = ["b": "TAB-B"]
+
+    // A notification posted onto the tab the user is watching keeps its short
+    // grace: being there already is not arriving there.
+    @Test func beingOnTheTabWhenItWasPostedIsNotAnArrival() {
         var watch = TabSelectionWatch()
-        #expect(watch.observe("TAB-1") == nil)
-        #expect(watch.lastSeen == "TAB-1")
+        watch.posted(sessionID: "b", selected: nil)
+        watch.postedSelectionKnown(sessionID: "b", selected: "TAB-B")
+        #expect(watch.observe("TAB-B", waiting: waiting) == [])
     }
 
-    @Test func stayingOnATabIsNotASwitch() {
+    // Codex review of #42, HIGH: posted while the user watched A, and they
+    // reached B before the first poll. A baseline taken at that poll read B
+    // as where they had always been, and the notification never went.
+    @Test func reachingTheTabBeforeTheFirstPollIsAnArrival() {
         var watch = TabSelectionWatch()
-        _ = watch.observe("TAB-1")
-        #expect(watch.observe("TAB-1") == nil)
+        watch.posted(sessionID: "b", selected: nil)
+        watch.postedSelectionKnown(sessionID: "b", selected: "TAB-A")
+        #expect(watch.observe("TAB-B", waiting: waiting) == ["b"])
     }
 
-    @Test func movingReportsTheTabMovedTo() {
+    // Codex review of #42, MEDIUM: a poll already running for another session
+    // had last seen A; the user moved to B and B's round then finished. That
+    // arrival preceded the notification, so it must not end B's grace.
+    @Test func anArrivalBeforeThePostDoesNotCountForIt() {
         var watch = TabSelectionWatch()
-        _ = watch.observe("TAB-1")
-        #expect(watch.observe("TAB-2") == "TAB-2")
-        #expect(watch.observe("TAB-2") == nil)
-        #expect(watch.observe("TAB-1") == "TAB-1")
+        watch.posted(sessionID: "other", selected: .tab("TAB-A"))
+        _ = watch.observe("TAB-A", waiting: ["other": "TAB-O"])
+        watch.posted(sessionID: "b", selected: nil)
+        watch.postedSelectionKnown(sessionID: "b", selected: "TAB-B")
+        #expect(watch.observe("TAB-B", waiting: ["other": "TAB-O", "b": "TAB-B"]) == [])
     }
 
-    @Test func aFailedQueryNeitherSwitchesNorForgets() {
+    @Test func leavingAndComingBackIsAnArrival() {
         var watch = TabSelectionWatch()
-        _ = watch.observe("TAB-1")
-        #expect(watch.observe(nil) == nil)
-        #expect(watch.observe("TAB-2") == "TAB-2")
+        watch.posted(sessionID: "b", selected: .tab("TAB-B"))
+        #expect(watch.observe("TAB-A", waiting: waiting) == [])
+        #expect(watch.observe("TAB-B", waiting: waiting) == ["b"])
     }
 
-    @Test func leavingGhosttyStartsANewBaseline() {
+    @Test func postedWhileGhosttyWasBehindArrivesOnFirstSight() {
         var watch = TabSelectionWatch()
-        _ = watch.observe("TAB-1")
-        watch.reset()
-        #expect(watch.observe("TAB-2") == nil)
+        watch.posted(sessionID: "b", selected: .outside)
+        #expect(watch.observe("TAB-B", waiting: waiting) == ["b"])
+    }
+
+    @Test func leavingGhosttyMakesTheNextSightAnArrival() {
+        var watch = TabSelectionWatch()
+        watch.posted(sessionID: "b", selected: .tab("TAB-B"))
+        watch.leftGhostty()
+        #expect(watch.observe("TAB-B", waiting: waiting) == ["b"])
+    }
+
+    // Nothing is known about where the user was: the answer is only a baseline.
+    @Test func withNoPostTimeAnswerTheFirstPollIsABaseline() {
+        var watch = TabSelectionWatch()
+        watch.posted(sessionID: "b", selected: nil)
+        #expect(watch.observe("TAB-B", waiting: waiting) == [])
+        #expect(watch.observe("TAB-A", waiting: waiting) == [])
+        #expect(watch.observe("TAB-B", waiting: waiting) == ["b"])
+    }
+
+    // The post-time query and the first poll describe the same moment; a poll
+    // that answered first is not overwritten.
+    @Test func aLatePostTimeAnswerDoesNotOverwriteAPoll() {
+        var watch = TabSelectionWatch()
+        watch.posted(sessionID: "b", selected: nil)
+        _ = watch.observe("TAB-A", waiting: waiting)
+        watch.postedSelectionKnown(sessionID: "b", selected: "TAB-B")
+        #expect(watch.seen["b"] == .tab("TAB-A"))
+    }
+
+    // A replacement notification starts over from where the user is now.
+    @Test func aNewNotificationReplacesWhatTheOldOneSaw() {
+        var watch = TabSelectionWatch()
+        watch.posted(sessionID: "b", selected: .outside)
+        watch.posted(sessionID: "b", selected: .tab("TAB-B"))
+        #expect(watch.observe("TAB-B", waiting: waiting) == [])
+    }
+
+    @Test func aFailedQueryNeitherArrivesNorForgets() {
+        var watch = TabSelectionWatch()
+        watch.posted(sessionID: "b", selected: .tab("TAB-A"))
+        #expect(watch.observe(nil, waiting: waiting) == [])
+        #expect(watch.seen["b"] == .tab("TAB-A"))
+        #expect(watch.observe("TAB-B", waiting: waiting) == ["b"])
+    }
+
+    @Test func sessionsNoLongerWaitingAreForgotten() {
+        var watch = TabSelectionWatch()
+        watch.posted(sessionID: "gone", selected: .outside)
+        _ = watch.observe("TAB-A", waiting: waiting)
+        #expect(watch.seen["gone"] == nil)
+    }
+
+    @Test func onlyWithdrawableSessionsOnKnownTabsAreWatched() {
+        var state = SessionState()
+        _ = state.newNotification(sessionID: "untabbed", now: 1)
+        state.anchor(sessionID: "kept", tabID: "TAB-1", now: 1)
+        _ = state.newNotification(sessionID: "kept", clearOnFocus: false, now: 1)
+        state.anchor(sessionID: "tabbed", tabID: "TAB-2", now: 1)
+        _ = state.newNotification(sessionID: "tabbed", now: 1)
+        state.anchor(sessionID: "idle", tabID: "TAB-3", now: 1)
+        #expect(state.waitingOnKnownTabs() == ["tabbed": "TAB-2"])
     }
 }
 

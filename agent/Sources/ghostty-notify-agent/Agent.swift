@@ -279,9 +279,11 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         let identifier = SessionState.notificationID(sessionID: notify.stateKey)
         let postedAt = state.sessions[notify.stateKey]?.postedAt
         Ghostty.selectedTabID { [weak self] selected in
-            guard let self, let selected, selected == tabID, self.frontmostIsGhostty,
+            guard let self, let selected,
                 self.state.sessions[notify.stateKey]?.postedAt == postedAt
             else { return }
+            self.tabWatch.postedSelectionKnown(sessionID: notify.stateKey, selected: selected)
+            guard selected == tabID, self.frontmostIsGhostty else { return }
             self.log("\(notify.sessionID) is already on screen; clearing in short order")
             self.scheduleExpiry(identifier: identifier, after: Agent.watchedGraceSeconds)
             self.saveState()
@@ -307,6 +309,10 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         notifier.post(identifier: identifier, sessionID: notify.stateKey, request: notify)
         log("posted \(identifier)")
         scheduleExpiry(identifier: identifier, after: notify.timeout)
+        // Where the user was when it arrived: reaching its tab counts only
+        // from somewhere else. In front, the answer comes from the query in
+        // `shortenIfAlreadyWatching`.
+        tabWatch.posted(sessionID: notify.stateKey, selected: frontmostIsGhostty ? nil : .outside)
         stateChanged()
         startTabPoll()
     }
@@ -389,9 +395,9 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         }
         lastActivatedBundleID = bundleID
         guard bundleID == AgentConstants.ghosttyBundleID else {
-            // Coming back is judged by the activation itself. The tab that was
-            // selected when the user left is no baseline for a switch after it.
-            tabWatch.reset()
+            // Whatever Ghostty shows when the user comes back, they arrive
+            // there from outside.
+            tabWatch.leftGhostty()
             return
         }
         withdrawForGhostty(retriesLeft: 1)
@@ -424,7 +430,6 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     private func stopTabPoll() {
         tabPollRunning = false
-        tabWatch.reset()
     }
 
     private func pollSelectedTab() {
@@ -442,9 +447,14 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                 self.stopTabPoll()
                 return
             }
-            if let tabID = self.tabWatch.observe(selected) {
+            let arrived = self.tabWatch.observe(
+                selected, waiting: self.state.waitingOnKnownTabs())
+            if let tabID = selected, !arrived.isEmpty {
+                // Only the sessions judged arrived, and only as they were
+                // when the question was put.
                 let identifiers = self.state.takeNotifications(
-                    for: .ghosttyTabSelected(tabID: tabID), among: asked)
+                    for: .ghosttyTabSelected(tabID: tabID),
+                    among: asked.filter { arrived.contains($0.key) })
                 if !identifiers.isEmpty {
                     self.log("selected \(tabID) inside Ghostty")
                     self.cancelExpiry(identifiers)
