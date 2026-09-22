@@ -84,6 +84,9 @@ public enum FocusEvent: Equatable, Sendable {
     /// front window, or nil when the Apple Event query failed or Ghostty is not
     /// scriptable.
     case ghosttyActivated(selectedTabID: String?)
+    /// The user moved to this tab while Ghostty stayed frontmost. No app came
+    /// forward, so macOS reported nothing; only a poll of the selection sees it.
+    case ghosttyTabSelected(tabID: String)
     case otherAppActivated
 }
 
@@ -328,6 +331,15 @@ public struct SessionState: Equatable, Sendable {
         .keys.sorted()
     }
 
+    /// True when switching between Ghostty tabs could withdraw something: an
+    /// outstanding clear-on-focus notification whose tab is known. Checked
+    /// before every poll of the selection, which costs an Apple Event.
+    public var hasNotificationsOnKnownTabs: Bool {
+        sessions.values.contains {
+            !$0.notificationIDs.isEmpty && $0.clearOnFocus && $0.tabID != nil
+        }
+    }
+
     /// Identifiers to withdraw in response to a focus change, forgetting them.
     ///
     /// A session with no resolved tab is always withdrawn when Ghostty comes
@@ -337,13 +349,30 @@ public struct SessionState: Equatable, Sendable {
     /// notification for a tab the user is not on. A session that opted out of
     /// clear-on-focus is never withdrawn this way at all.
     ///
+    /// A tab switch inside Ghostty withdraws only a positive match. The
+    /// no-tab fallback does not carry over: the user was in Ghostty all along,
+    /// so moving between its tabs says nothing about a session that cannot be
+    /// placed in one, and applying it would take such a notification down
+    /// about a second after it was posted.
+    ///
     /// With `among`, only sessions unchanged since that snapshot.
     public mutating func takeNotifications(
         for event: FocusEvent, among asked: [String: Double]? = nil
     ) -> [String] {
-        guard case .ghosttyActivated(let selectedTabID) = event else { return [] }
+        let matching: [String]
+        switch event {
+        case .ghosttyActivated(let selectedTabID):
+            matching = sessionsMatching(selectedTabID: selectedTabID)
+        case .ghosttyTabSelected(let tabID):
+            matching = sessionsMatching(selectedTabID: tabID).filter {
+                sessions[$0]?.tabID != nil
+            }
+        case .otherAppActivated:
+            return []
+        }
         // Deterministic order so assertions do not depend on dictionary layout.
-        return sessionsMatching(selectedTabID: selectedTabID)
+        return
+            matching
             .filter { unchanged($0, since: asked) }
             .flatMap { takeNotifications(sessionID: $0) }
     }

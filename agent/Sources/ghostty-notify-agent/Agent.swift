@@ -23,6 +23,8 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private var permission: NotificationPermission = .unknown
     private var alertStyle = ""
     private var lastActivatedBundleID: String?
+    private var tabWatch = TabSelectionWatch()
+    private var tabPollRunning = false
     private var shuttingDown = false
     /// Per-identifier expiry timers, so a replacement notification restarts the
     /// clock instead of inheriting the old one's deadline.
@@ -118,6 +120,8 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         }
 
         observeActivation()
+        // A restart while Ghostty is in front has no activation to start it.
+        startTabPoll()
         startPruning()
         handleTermination()
         installMenuBar()
@@ -304,6 +308,7 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         log("posted \(identifier)")
         scheduleExpiry(identifier: identifier, after: notify.timeout)
         stateChanged()
+        startTabPoll()
     }
 
     /// Mirrors the shell path's `--timeout`: without it a notification for a
@@ -356,7 +361,8 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     /// The replacement for the shell version's one-second poll loop. macOS tells
     /// us when an app comes forward; between events this process is idle and
-    /// spawns nothing.
+    /// spawns nothing. What it cannot tell us is a switch between Ghostty's own
+    /// tabs, which `startTabPoll` covers for as long as that can matter.
     private func observeActivation() {
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
@@ -382,8 +388,72 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             refreshSettings()
         }
         lastActivatedBundleID = bundleID
-        guard bundleID == AgentConstants.ghosttyBundleID else { return }
+        guard bundleID == AgentConstants.ghosttyBundleID else {
+            // Coming back is judged by the activation itself. The tab that was
+            // selected when the user left is no baseline for a switch after it.
+            tabWatch.reset()
+            return
+        }
         withdrawForGhostty(retriesLeft: 1)
+        startTabPoll()
+    }
+
+    /// How often the selection is read while a tab switch could clear something.
+    private static let tabPollInterval: Double = 1
+
+    /// Watch Ghostty's selected tab while it is frontmost and a notification is
+    /// waiting on a known tab, so that reaching that tab inside Ghostty clears
+    /// it as coming back from another app does.
+    ///
+    /// Idle the rest of the time: the loop ends itself once either condition
+    /// stops holding, and what can make them hold again — Ghostty coming
+    /// forward, a notification being posted, a restart — starts it again.
+    private func startTabPoll() {
+        guard !tabPollRunning, frontmostIsGhostty, state.hasNotificationsOnKnownTabs else {
+            return
+        }
+        tabPollRunning = true
+        scheduleTabPoll()
+    }
+
+    private func scheduleTabPoll() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + Agent.tabPollInterval) { [weak self] in
+            self?.pollSelectedTab()
+        }
+    }
+
+    private func stopTabPoll() {
+        tabPollRunning = false
+        tabWatch.reset()
+    }
+
+    private func pollSelectedTab() {
+        guard !shuttingDown, frontmostIsGhostty, state.hasNotificationsOnKnownTabs else {
+            stopTabPoll()
+            return
+        }
+        let asked = state.outstanding()
+        // One query at a time. The next is scheduled from this answer, so a slow
+        // Ghostty (each send is bounded at three seconds) stretches the interval
+        // instead of stacking Apple Events behind it.
+        Ghostty.selectedTabID { [weak self] selected in
+            guard let self else { return }
+            guard !self.shuttingDown, self.frontmostIsGhostty else {
+                self.stopTabPoll()
+                return
+            }
+            if let tabID = self.tabWatch.observe(selected) {
+                let identifiers = self.state.takeNotifications(
+                    for: .ghosttyTabSelected(tabID: tabID), among: asked)
+                if !identifiers.isEmpty {
+                    self.log("selected \(tabID) inside Ghostty")
+                    self.cancelExpiry(identifiers)
+                    self.notifier.withdraw(identifiers)
+                    self.stateChanged()
+                }
+            }
+            self.scheduleTabPoll()
+        }
     }
 
     private func withdrawForGhostty(retriesLeft: Int) {

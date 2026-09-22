@@ -265,6 +265,98 @@ struct FocusDismissalTests {
         #expect(state.sessionsMatching(selectedTabID: "TAB-404") == [])
         #expect(state.hasOutstandingNotifications)
     }
+
+    // Reproduced on 2026-09-22: Ghostty frontmost throughout, the session's tab
+    // selected five times for up to 25 seconds, and the notification stayed
+    // until Ghostty was left and re-entered.
+    @Test func switchingToTheSessionsTabInsideGhosttyWithdrawsIt() {
+        var state = stateWithTwoSessions()
+        #expect(state.takeNotifications(for: .ghosttyTabSelected(tabID: "TAB-1")) == ["claude-aaa"])
+        #expect(state.sessions["bbb"]?.notificationIDs == ["claude-bbb"])
+    }
+
+    // Unlike activation, a switch is no evidence about a session that cannot be
+    // placed in a tab: the user never left Ghostty. The fallback would take its
+    // notification down about a second after posting.
+    @Test func aTabSwitchLeavesASessionWithNoKnownTabAlone() {
+        var state = SessionState()
+        _ = state.newNotification(sessionID: "ccc", now: 1)
+        #expect(state.takeNotifications(for: .ghosttyTabSelected(tabID: "TAB-9")) == [])
+        #expect(state.sessions["ccc"]?.notificationIDs == ["claude-ccc"])
+    }
+
+    @Test func aTabSwitchHonoursTheOptOut() {
+        var state = SessionState()
+        state.anchor(sessionID: "keep", tabID: "TAB-1", now: 1)
+        _ = state.newNotification(sessionID: "keep", clearOnFocus: false, now: 1)
+        #expect(state.takeNotifications(for: .ghosttyTabSelected(tabID: "TAB-1")) == [])
+    }
+
+    @Test func aLateSwitchAnswerDoesNotWithdrawWhatArrivedWhileItWasPending() {
+        var state = stateWithTwoSessions()
+        let asked = state.outstanding()
+        _ = state.newNotification(sessionID: "aaa", now: 5)
+        #expect(
+            state.takeNotifications(for: .ghosttyTabSelected(tabID: "TAB-1"), among: asked) == [])
+        #expect(state.sessions["aaa"]?.notificationIDs == ["claude-aaa"])
+    }
+
+    // Each poll of the selection is an Apple Event; with nothing a switch could
+    // clear, the agent must not be asking at all.
+    @Test func pollingIsOnlyWorthItForNotificationsOnKnownTabs() {
+        var state = SessionState()
+        #expect(!state.hasNotificationsOnKnownTabs)
+        _ = state.newNotification(sessionID: "untabbed", now: 1)
+        #expect(!state.hasNotificationsOnKnownTabs)
+        state.anchor(sessionID: "kept", tabID: "TAB-1", now: 1)
+        _ = state.newNotification(sessionID: "kept", clearOnFocus: false, now: 1)
+        #expect(!state.hasNotificationsOnKnownTabs)
+        state.anchor(sessionID: "tabbed", tabID: "TAB-2", now: 1)
+        _ = state.newNotification(sessionID: "tabbed", now: 1)
+        #expect(state.hasNotificationsOnKnownTabs)
+        _ = state.takeNotifications(sessionID: "tabbed")
+        #expect(!state.hasNotificationsOnKnownTabs)
+    }
+}
+
+@Suite("Tab switches inside Ghostty")
+struct TabSelectionWatchTests {
+    // A notification posted onto the tab the user is watching gets a short
+    // grace instead of vanishing; the poll that starts with it must not read
+    // "they are on that tab" as "they just went there".
+    @Test func theFirstAnswerIsOnlyABaseline() {
+        var watch = TabSelectionWatch()
+        #expect(watch.observe("TAB-1") == nil)
+        #expect(watch.lastSeen == "TAB-1")
+    }
+
+    @Test func stayingOnATabIsNotASwitch() {
+        var watch = TabSelectionWatch()
+        _ = watch.observe("TAB-1")
+        #expect(watch.observe("TAB-1") == nil)
+    }
+
+    @Test func movingReportsTheTabMovedTo() {
+        var watch = TabSelectionWatch()
+        _ = watch.observe("TAB-1")
+        #expect(watch.observe("TAB-2") == "TAB-2")
+        #expect(watch.observe("TAB-2") == nil)
+        #expect(watch.observe("TAB-1") == "TAB-1")
+    }
+
+    @Test func aFailedQueryNeitherSwitchesNorForgets() {
+        var watch = TabSelectionWatch()
+        _ = watch.observe("TAB-1")
+        #expect(watch.observe(nil) == nil)
+        #expect(watch.observe("TAB-2") == "TAB-2")
+    }
+
+    @Test func leavingGhosttyStartsANewBaseline() {
+        var watch = TabSelectionWatch()
+        _ = watch.observe("TAB-1")
+        watch.reset()
+        #expect(watch.observe("TAB-2") == nil)
+    }
 }
 
 @Suite("State persistence")
