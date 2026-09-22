@@ -390,10 +390,15 @@ def install(codex_home, claude_settings):
         print()
         print("Removing a retired entry moved other hooks under {}. Codex keys hook trust "
               "by position, so those now need another look in /hooks.".format(", ".join(renumbered)))
-    print()
-    print("Next: start `codex` in Ghostty and run /hooks to trust the ghostty-notify")
-    print("entries Codex has not seen before (only new or changed ones ask).")
-    print("Sessions already running pick the hooks up after a restart.")
+    # Codex keys trust to the entry's definition in hooks.json: an unchanged
+    # file asks for nothing, and the launchers behind it are read on each event.
+    if merged != existing:
+        print()
+        print("Next: start `codex` in Ghostty and run /hooks to trust the ghostty-notify")
+        print("entries it has not seen before. Sessions already running pick the")
+        print("registration up after a restart.")
+    else:
+        print("Hook registrations unchanged: nothing new to trust in /hooks.")
     return destination
 
 

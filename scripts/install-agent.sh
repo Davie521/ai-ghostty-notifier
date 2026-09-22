@@ -565,7 +565,11 @@ else
 fi
 echo "    app:   $APP"
 echo "    plist: $PLIST"
-echo "    stop:  bash scripts/install-agent.sh --uninstall"
+# From scripts/setup.sh there is no checkout to run this from; setup.sh names
+# its own --uninstall, and prints the one list of what is left to the user.
+if [[ -z "${GHOSTTY_NOTIFY_FROM_SETUP:-}" ]]; then
+    echo "    stop:  bash scripts/install-agent.sh --uninstall"
+fi
 echo
 # The one setting the product needs and no code can set. macOS ignores
 # NSUserNotificationAlertStyle for UNUserNotificationCenter apps — verified with a
@@ -585,11 +589,21 @@ if [[ "$(cat "$STYLE_FILE" 2>/dev/null)" == "banner" ]]; then
     "$BIN" --send '{"type":"style_hint"}' 2>/dev/null || true
 fi
 
+[[ -z "${GHOSTTY_NOTIFY_FROM_SETUP:-}" ]] || exit 0
 echo
-echo "On first notification macOS will ask twice:"
-echo "  1. permission to send notifications"
-echo "  2. permission to control Ghostty (needed for click-to-jump)"
-echo "Both are one-time and both must be allowed."
+case "$ANSWER" in
+    authorized)
+        echo "The first time you click a notification, macOS may ask for permission to"
+        echo "control Ghostty (needed for click-to-jump). Allow it."
+        ;;
+    denied) ;;  # reported above; macOS will not ask again
+    *)
+        echo "On first notification macOS will ask twice:"
+        echo "  1. permission to send notifications"
+        echo "  2. permission to control Ghostty (needed for click-to-jump)"
+        echo "Both are one-time and both must be allowed."
+        ;;
+esac
 echo
 echo "If you use Focus modes, add AI Ghostty Notifier to their allowed apps:"
 echo "a Focus that already lets Terminal (an external backend's identity) through"

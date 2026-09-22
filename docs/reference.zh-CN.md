@@ -11,12 +11,15 @@
 查找终端、判断通知和回退投递。shell 文件只是保留原名称的启动入口；
 每次 hook 不再依赖 jq 或 Python。App 的常驻进程可以不一直运行，但 App 文件必须保留。
 
-仓库有 [release](releasing.md) 之后，一条命令就能完成下面第 1–3 步：装的是签名并公证过的
+一条命令就能完成下面第 1–3 步：装的是当前 [release](releasing.md) 里签名并公证过的
 构建，不用 clone、不用 Swift 工具链。[agent-install.md](agent-install.md) 也是先走这条路：
 
 ```bash
 curl -fsSL https://github.com/Davie521/ai-ghostty-notifier/releases/latest/download/setup.sh | bash
 ```
+
+有多个 Claude 配置目录的话，对其余每个目录再跑一次：在 `bash` 前面加
+`CLAUDE_CONFIG_DIR=<目录>`，在 `bash -s --` 后面加 `--claude --no-codex`。
 
 ### 1. 先构建并安装必需的 App
 

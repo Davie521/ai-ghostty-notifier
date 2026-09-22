@@ -64,6 +64,14 @@ Developer ID build. It then does steps 1–3 below by itself:
 Read its output, then go to step 4. If it stops on an error, report the error:
 do not retry with `--allow-unnotarized`, which exists only for testing.
 
+If the user has more than one Claude configuration directory, run it once more
+for each of the others. The App is already installed; that run replaces it with
+the same one and registers the hooks in that directory:
+
+```bash
+curl -fsSL https://github.com/Davie521/ai-ghostty-notifier/releases/latest/download/setup.sh | CLAUDE_CONFIG_DIR=<dir> bash -s -- --claude --no-codex
+```
+
 Without a release, build from source: steps 1–3.
 
 ## 1. Build and install the companion app

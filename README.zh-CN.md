@@ -48,8 +48,8 @@ agent 会构建并安装配套 App、把 hook 合并进你的设置而不碰其�
 检查。[docs/agent-install.md](docs/agent-install.md) 是写给它执行的英文说明，你不用读。
 有两件事留给你：在系统设置里允许通知和自动化权限，以及重启已经开着的 CLI 会话。
 
-**需要：** macOS、支持 AppleScript 的 [Ghostty](https://ghostty.org)、Swift 6 工具链
-（App 从源码构建，暂时没有现成的下载包），以及 Claude Code 或 Codex CLI。
+**需要：** macOS 13 或更新、支持 AppleScript 的 [Ghostty](https://ghostty.org)，
+以及 Claude Code 或 Codex CLI。Swift 6 工具链只在从源码构建时才需要。
 
 ## 文档
 

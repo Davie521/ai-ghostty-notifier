@@ -124,7 +124,10 @@ main() {
 
     step "Installing the App"
     # shellcheck disable=SC2086  # start_flag is empty or one word
-    GHOSTTY_NOTIFY_INSTALL_FROM="$app" bash "$dist/scripts/install-agent.sh" $start_flag </dev/null
+    # GHOSTTY_NOTIFY_FROM_SETUP: the installers leave their own next-steps out;
+    # this script prints one list at the end, from what they actually found.
+    GHOSTTY_NOTIFY_FROM_SETUP=1 GHOSTTY_NOTIFY_INSTALL_FROM="$app" \
+        bash "$dist/scripts/install-agent.sh" $start_flag </dev/null
 
     local claude_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
     if [[ "$claude" == "yes" || ( "$claude" == "auto" && ( -d "$claude_dir" || -n "$(command -v claude || true)" ) ) ]]; then
@@ -135,14 +138,18 @@ main() {
     fi
 
     local codex_dir="${CODEX_HOME:-$HOME/.codex}"
-    local codex_registered=0
+    local codex_hooks_changed=0
     if [[ "$codex" == "yes" || ( "$codex" == "auto" && ( -d "$codex_dir" || -n "$(command -v codex || true)" ) ) ]]; then
         step "Registering the Codex CLI hooks in $codex_dir"
-        local python
+        local python before after
         python=$(python311)
         if [[ -n "$python" ]]; then
+            # Codex asks the user to trust a hook entry only when its definition
+            # in hooks.json is new or changed; an unchanged file needs nothing.
+            before=$(shasum -a 256 "$codex_dir/hooks.json" 2>/dev/null || true)
             "$python" "$dist/scripts/install-codex.py" </dev/null
-            codex_registered=1
+            after=$(shasum -a 256 "$codex_dir/hooks.json" 2>/dev/null || true)
+            [[ "$before" == "$after" ]] || codex_hooks_changed=1
         else
             echo "    Skipped: the Codex installer needs Python 3.11+ and none was found."
             echo "    Install one (brew install python) and rerun this command with --codex."
@@ -151,19 +158,37 @@ main() {
         echo "Codex CLI not found; skipping its hooks (rerun with --codex to force)."
     fi
 
+    # What is left is what the installer could not settle. install-agent.sh
+    # asked for notification permission and recorded the answer; the agent
+    # recorded the alert style it found. Both are per user, not per config dir.
+    local state="$HOME/.claude/notifications/ghostty-agent" answer style n=1
+    answer=$(cat "$state/ready" 2>/dev/null || true)
+    style=$(cat "$state/alert-style" 2>/dev/null || true)
     echo
     echo "─────────────────────────────────────────────────────────"
     echo "Installed. What only you can do:"
-    echo "  1. Allow notifications for AI Ghostty Notifier when macOS asks, and"
-    echo "     choose Persistent under System Settings → Notifications to keep the"
-    echo "     alert and its Go to tab button on screen."
-    echo "  2. Allow it to control Ghostty the first time you click a notification."
-    echo "  3. Allow it in any Focus mode you use, or alerts go straight to"
+    if [[ "$answer" != authorized ]]; then
+        echo "  $n. Allow notifications for AI Ghostty Notifier when macOS asks."
+        n=$((n + 1))
+    fi
+    if [[ "$style" != alert ]]; then
+        echo "  $n. Choose Persistent under System Settings → Notifications → AI Ghostty"
+        echo "     Notifier, so the alert and its Go to tab button stay on screen."
+        n=$((n + 1))
+    fi
+    echo "  $n. Allow it to control Ghostty if macOS asks the first time you click a"
+    echo "     notification."
+    n=$((n + 1))
+    echo "  $n. Allow it in any Focus mode you use, or alerts go straight to"
     echo "     Notification Center."
-    if [[ $codex_registered -eq 1 ]]; then
-        echo "  4. Start Codex in Ghostty, run /hooks and trust the new entries."
+    n=$((n + 1))
+    if [[ $codex_hooks_changed -eq 1 ]]; then
+        echo "  $n. Start Codex in Ghostty, run /hooks and trust the new entries."
     fi
     echo "  Then restart the Claude Code / Codex sessions you already have open."
+    echo
+    echo "To remove the App later, run the same command with --uninstall:"
+    echo "  curl -fsSL https://github.com/$repo_slug/releases/latest/download/setup.sh | bash -s -- --uninstall"
     echo "─────────────────────────────────────────────────────────"
 }
 

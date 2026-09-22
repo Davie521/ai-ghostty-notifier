@@ -52,9 +52,9 @@ settings without touching anything else, and checks every step
 the notification and Automation permissions, and restarting the CLI sessions you
 already have open.
 
-**Requirements:** macOS, [Ghostty](https://ghostty.org) with AppleScript
-support, a Swift 6 toolchain (the app is built from source; there is no prebuilt
-download yet), and Claude Code or Codex CLI.
+**Requirements:** macOS 13 or later, [Ghostty](https://ghostty.org) with
+AppleScript support, and Claude Code or Codex CLI. A Swift 6 toolchain is
+needed only to build from source.
 
 ## Docs
 
