@@ -42,6 +42,18 @@ The first command only builds and signs the checkout's app. The second
 and opens the notification-permission flow. Do not use the install command when
 you only want to test a build.
 
+Upgrading while sessions are in use is fine. Before it stops the previous
+version, the installer takes the execute bit off the installed binary and leaves
+a marker beside it, so that a hook firing in those seconds cannot start a process
+of the old version that would outlive the replacement. Hooks registered from a
+checkout or a plugin honour the marker too, rather than starting the build beside
+them. Until the new copy is in place, usually a second or two and at most about a minute, hooks do nothing:
+a notification due in that window is not shown. The previous version is replaced
+only once none of its processes is left. If that cannot be confirmed, or the
+install fails or is interrupted, the bit goes back on, its LaunchAgent is loaded
+again and the previous version keeps working. Only `kill -9` on the installer
+can leave the way in shut; rerun the installer to put that right.
+
 The app is copied to
 `~/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app`.
 Both hook entrypoints and launchd use this durable location, so moving the source
@@ -294,6 +306,28 @@ NATIVE_TEST_BINARY="$PWD/build/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-no
 python3 -m unittest discover -s tests -p 'test_native_install.py'
 bash tests/test-agent.sh
 ```
+
+### Builds and notification clicks
+
+macOS resolves a click on a notification by bundle identifier, and
+LaunchServices may pick any copy of the app it knows, not the installed one. It
+gets to know a copy in two ways, both measured here: starting the agent from a
+bundle registers it, and the registration outlives the process; and a bundle
+that merely sits in a directory Spotlight indexes, a checkout on the Desktop
+for instance, is registered within a minute without ever having run.
+`lsregister -u` removes it for about that long. A copy inside a directory
+named `*.noindex` was not picked up.
+
+What a wrongly chosen copy does depends on the installed agent. Once the
+installed agent has the single-instance lock, the copy finds the lock taken and
+exits, and that click goes nowhere. An installed agent from before the lock
+holds none: on 2026-09-20 a click started a build next to it, and two residents
+drained one spool until the stray was stopped.
+
+So do not keep a build around on a machine you use: delete `build/` when you
+are done, or take the execute bit off its binary. `tests/test-agent.sh`
+unregisters the build it ran, which helps only until the bundle is found
+again.
 
 The resident integration suite requires Aqua and test-only jq; it explicitly
 reports SKIP without Aqua. Installation tests use private homes, the real signed

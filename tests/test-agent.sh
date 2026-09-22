@@ -24,6 +24,9 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
 APP="${GHOSTTY_NOTIFY_AGENT_APP:-$REPO/build/ClaudeGhosttyNotify.app}"
 BIN="$APP/Contents/MacOS/ghostty-notify-agent"
+# Before HOME becomes the sandbox: where the copy that must stay registered lives.
+INSTALLED_APP="$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app"
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
 command -v jq >/dev/null 2>&1 || { echo "FATAL: jq required" >&2; exit 2; }
 
@@ -87,9 +90,23 @@ cleanup() {
     fi
     # Reap even a hung test app before deleting its private state directory.
     stop_agent || echo "Test cleanup required a forced agent exit" >&2
-    # Every contender of section 1 too, should the run have ended in there.
+    # Every contender of section 1 too, should the run have ended in there,
+    # before they were collected.
     local pid
     for pid in ${STARTED[@]+"${STARTED[@]}"}; do kill -KILL "$pid" 2>/dev/null || true; done
+    # Starting the agent from a bundle registers that bundle with LaunchServices,
+    # and it stays registered after the process has gone. macOS resolves a click
+    # on a notification by bundle identifier, so the next click could start
+    # this build, with the user's real HOME, beside or instead of the installed
+    # app: on 2026-09-20 one did, and two residents drained the same spool.
+    # Unregistering undoes what running it did, and no more than that: a bundle
+    # in a directory Spotlight indexes is found again within a minute, whether
+    # it ever ran or not. See "Builds and notification clicks" in the README.
+    # The installed copy is never touched, by whatever name it was given: a
+    # trailing slash or a symlink is another string and the same bundle.
+    if [[ ! "$APP" -ef "$INSTALLED_APP" && -x "$LSREGISTER" ]]; then
+        "$LSREGISTER" -u "$APP" >/dev/null 2>&1 || true
+    fi
     rm -rf "$SANDBOX"
 }
 trap cleanup EXIT
@@ -189,6 +206,10 @@ for pid in "${STARTED[@]}"; do
     fi
     wait "$pid" 2>/dev/null || LEAVERS_OK=0
 done
+# All collected, and the one that stays is AGENT_PID's business from here on.
+# The exit trap must not signal these numbers again later: by then they may
+# belong to someone else.
+STARTED=()
 check "the others left by themselves with status 0, so launchd does not restart them" \
     test "$LEAVERS_OK" = 1
 check "and said why" log_has "another agent is already running"
