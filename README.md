@@ -10,6 +10,9 @@
 
 <p align="center">
   <a href="https://github.com/Davie521/ai-ghostty-notifier/actions/workflows/ci.yml"><img src="https://github.com/Davie521/ai-ghostty-notifier/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Davie521/ai-ghostty-notifier/releases/latest"><img src="https://img.shields.io/github/v/release/Davie521/ai-ghostty-notifier" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20%2B%20Commons%20Clause-blue" alt="License: MIT + Commons Clause"></a>
+  <a href="#install"><img src="https://img.shields.io/badge/macOS-13%2B-lightgrey?logo=apple" alt="macOS 13+"></a>
 </p>
 
 <p align="center"><a href="README.md">English</a> · <a href="README.zh-CN.md">中文</a></p>
@@ -70,4 +73,11 @@ needed only to build from source.
 Inspired by the Claude Code notification ecosystem, including the TTY-marker
 idea discussed in [claude-code-notifier](https://github.com/kovoor/claude-code-notifier).
 
-[MIT](LICENSE).
+[MIT with the Commons Clause](LICENSE). Use it anywhere, at work included,
+change it and share your changes. What you may not do is sell it, or sell a
+product or service whose value comes entirely or substantially from it; paid
+hosting, consulting and support count as selling. For a commercial license,
+write to [daviefan@outlook.com](mailto:daviefan@outlook.com).
+
+Everything released before this condition was added, up to and including
+v0.5.1, stays under the plain MIT License.
