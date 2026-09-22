@@ -294,9 +294,12 @@ RELOAD=""
 reopen_previous() {
     if [[ -n "$CLOSED" ]]; then
         chmod u+x "$BIN" 2>/dev/null || true
-        rm -f "$GATE"
         CLOSED=""
     fi
+    # Whatever was recorded: a signal can land between the moment the script
+    # stops counting the way in as shut and the moment it removes the marker,
+    # and a marker that outlives the script leaves every hook doing nothing.
+    rm -f "$GATE"
     if [[ -n "$RELOAD" && -e "$PLIST" ]]; then
         launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null || true
         RELOAD=""

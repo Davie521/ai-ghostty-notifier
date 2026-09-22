@@ -308,6 +308,8 @@ STATE="$HOME/.claude/notifications/ghostty-agent"
         # Stands in for the agent answering the permission prompt.
         self.stub("open", 'STATE="$HOME/.claude/notifications/ghostty-agent"\n'
                   '[[ -e "$STATE/agent.pid" ]] && echo "agent.pid was there at the permission check" >> "$CALLS"\n'
+                  '[[ -e "$HOME/Library/Application Support/claude-ghostty-notify/.admission-closed" ]] '
+                  '&& echo "the way in was still shut at the permission check" >> "$CALLS"\n'
                   'mkdir -p "$STATE" && echo authorized > "$STATE/ready"\n')
         self.stub("ps", ps_stub)
         return subprocess.Popen(
@@ -579,15 +581,41 @@ while :; do /bin/sleep 0.05; done
 esac
 exec /bin/mv "$@"
 '''.format(bundle=BUNDLE, installed=installed, mark=mark, home=home, hooks=hooks))
-        result, _ = self.full_install(home, self.REAL_PS_FOR_ONE_PID)
+        result, recorded = self.full_install(home, self.REAL_PS_FOR_ONE_PID)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(mark.read_text(), "hook exit 0\n")
         self.assertFalse(Path(str(mark) + ".note").exists(), "the hook did not fire between the moves")
+        # And open as soon as the new version is in place, not only when the
+        # script ends: the permission check alone can take two minutes.
+        self.assertNotIn("the way in was still shut at the permission check", recorded)
         self.assertFalse(build_started.exists(), "a hook started the build beside it between the moves")
         self.assertFalse(started.exists())
         self.assertIn("being reinstalled", Path(str(mark) + ".stderr").read_text())
         # Open again once the new version is in place.
         self.assertFalse((installed.parent / ".admission-closed").exists())
+
+    def test_the_marker_does_not_outlive_an_interrupted_script(self):
+        # The script stops counting the way in as shut a moment before it
+        # removes the marker. A signal in that moment used to leave the marker
+        # behind, and every hook doing nothing until the next install. Here
+        # the first attempt to remove it is where the signal lands.
+        rm_stub = '''if [[ "$*" == *.admission-closed* && ! -e "$CALLS.interrupted" ]]; then
+    : > "$CALLS.interrupted"; kill -TERM "$PPID"; /bin/sleep 0.3; exit 0
+fi
+exec /bin/rm "$@"
+'''
+        for args in ((), ("--uninstall",)):
+            with self.subTest(args):
+                home = self.root / ("home interrupted at the marker" + "".join(args))
+                installed, _ = self.previous_version(home)
+                self.stub("rm", rm_stub)
+                result, _ = self.full_install(home, self.REAL_PS_FOR_ONE_PID, args=args)
+                self.assertTrue((self.root / "full-install-calls.interrupted").exists(), "the signal never came")
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse((installed.parent / ".admission-closed").exists(),
+                                 "the marker outlived the script")
+                (self.root / "full-install-calls.interrupted").unlink()
+                (self.root / "full-install-calls").unlink(missing_ok=True)
 
     def test_the_previous_version_can_start_again_when_the_install_fails(self):
         home = self.root / "home-where-the-swap-fails"
@@ -770,8 +798,12 @@ echo "ps: cannot get process list" >&2; exit 1
             home, self.REAL_PS_FOR_ONE_PID + 'cat "{}"\n'.format(self.root / "process-table"),
             args=("--uninstall",))
         self.addCleanup(installer.kill)
+        # Interrupted once the LaunchAgent has been taken away, while it waits
+        # for the hook: earlier, putting nothing back would be right.
+        calls_file = self.root / "full-install-calls"
         deadline = time.monotonic() + 10
-        while os.access(installed / EXECUTABLE, os.X_OK) and time.monotonic() < deadline:
+        while time.monotonic() < deadline and not (
+                calls_file.exists() and "launchctl bootout" in calls_file.read_text().splitlines()):
             time.sleep(0.02)
         self.assertFalse(os.access(installed / EXECUTABLE, os.X_OK), "the way in was never shut")
         installer.terminate()
