@@ -286,6 +286,30 @@ class ReleaseSetupTests(unittest.TestCase):
         self.assertIn("launchctl bootout gui/", self.calls.read_text())
         self.assertIn("Hooks are still registered", result.stdout)
 
+    def test_a_long_signature_report_does_not_end_setup_early(self):
+        # A Developer ID signature makes codesign -dvv report several Authority
+        # lines and more after them. A reader that stopped at the first one left
+        # codesign to die of SIGPIPE, and under pipefail and set -e setup.sh
+        # ended right there with status 141, silently, having installed nothing.
+        # This codesign reports a Developer ID first and then more than a pipe
+        # holds, so that race is lost every time instead of sometimes.
+        fake = self.root / "fake-codesign"
+        fake.mkdir()
+        (fake / "codesign").write_text(
+            '#!/bin/bash\n'
+            'if [[ "$1" == "-dvv" ]]; then\n'
+            '    echo "Authority=Developer ID Application: Stub Co. (STUBTEAM01)" >&2\n'
+            '    for i in $(seq 1 20000); do echo "Filler=$i" >&2; done\n'
+            '    exit 0\n'
+            'fi\n'
+            'exec /usr/bin/codesign "$@"\n')
+        (fake / "codesign").chmod(0o755)
+        self.env["PATH"] = f"{fake}:{self.env['PATH']}"
+        result = self.setup_sh("--no-start", "--no-claude", "--no-codex", "--allow-unnotarized")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("signed by: Developer ID Application: Stub Co. (STUBTEAM01)", result.stdout)
+        self.assertTrue((self.app / EXECUTABLE).exists())
+
     def test_the_archive_carries_what_setup_installs_and_nothing_local(self):
         with zipfile.ZipFile(self.out / ASSET) as archive:
             names = set(archive.namelist())

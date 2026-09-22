@@ -108,7 +108,10 @@ main() {
     # A Mac with Gatekeeper switched off may not say either; the way past that
     # is --allow-unnotarized, on purpose, not a quiet exception.
     local authority assessment
-    authority=$(codesign -dvv "$app" 2>&1 </dev/null | awk -F= '/^Authority=/ { print $2; exit }')
+    # awk reads to the end rather than exiting at the first match: under
+    # pipefail, codesign still writing into a closed pipe dies of SIGPIPE, and
+    # set -e would end this script there, silently and before installing.
+    authority=$(codesign -dvv "$app" 2>&1 </dev/null | awk -F= '/^Authority=/ && !seen { print $2; seen = 1 }')
     assessment=$(spctl --assess --type execute --verbose=2 "$app" 2>&1 </dev/null || true)
     if [[ "$authority" == "Developer ID Application:"* && "$assessment" == *"source=Notarized Developer ID"* ]]; then
         echo "    $authority, notarized"
