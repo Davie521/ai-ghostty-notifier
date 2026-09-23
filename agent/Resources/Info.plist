@@ -4,6 +4,11 @@
 <dict>
     <key>CFBundleName</key>
     <string>AI Ghostty Notifier</string>
+    <!-- The strings are written in English; en.lproj and zh-Hans.lproj under
+         agent/Resources carry the translations, and scripts/build-agent.sh
+         copies them into Contents/Resources. -->
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
     <!-- Notification authorization and the Automation grant are both keyed to
          this identifier. Changing it re-prompts the user for both.
          An identifier can also be BURNED: if the process ever touches

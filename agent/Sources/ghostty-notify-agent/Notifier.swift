@@ -37,7 +37,7 @@ final class Notifier {
     func registerCategories() {
         let goto = UNNotificationAction(
             identifier: AgentConstants.gotoActionID,
-            title: "Go to tab",
+            title: UIText.text("Go to tab"),
             options: [.foreground]
         )
         let category = UNNotificationCategory(

@@ -15,6 +15,12 @@
 `docs/reference.zh-CN.md` are everything else. Keep the two languages in step:
 a change to one is a change to both.
 
+The same goes for text the app shows. It goes through `UIText` in NotifyCore,
+with the English as the key, and every key has a row in both
+`agent/Resources/en.lproj/Localizable.strings` and
+`agent/Resources/zh-Hans.lproj/Localizable.strings`; `UITextTests` fails when
+the tables or the code drift apart.
+
 ## What stays out of the repository
 
 Process records: verification runs, deployment reports, review transcripts,

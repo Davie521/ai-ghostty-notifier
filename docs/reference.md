@@ -179,6 +179,12 @@ earlier. Focusing the session's tab or submitting another prompt withdraws its
 notification. Permission/input prompts are silent unless
 `GHOSTTY_NOTIFY_ON_PROMPT=1`.
 
+Notifications, the menu bar and the alert-style guidance are in English or
+Simplified Chinese. macOS chooses per app from your language list; to give this
+app a different language from the system, use System Settings › General ›
+Language & Region › Applications. A session title or a message from the CLI is
+shown as it came.
+
 ## Configuration
 
 Claude reads environment variables from its `settings.json` `env` block.

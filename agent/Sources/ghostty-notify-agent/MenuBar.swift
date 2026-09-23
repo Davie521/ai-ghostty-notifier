@@ -142,13 +142,16 @@ final class MenuBar: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
         // Always here, not only when something is wrong: it is also where the
         // sound, the Focus modes and the lock screen are set.
-        menu.addItem(action("Notification Settings…", symbol: "bell", #selector(openSettings)))
         menu.addItem(
-            action("Setup Guidance…", symbol: "questionmark.circle", #selector(showGuidance)))
-        menu.addItem(action("Open Log", symbol: "doc.text", #selector(openLog)))
+            action(UIText.text("Notification Settings…"), symbol: "bell", #selector(openSettings)))
+        menu.addItem(
+            action(
+                UIText.text("Setup Guidance…"), symbol: "questionmark.circle",
+                #selector(showGuidance)))
+        menu.addItem(action(UIText.text("Open Log"), symbol: "doc.text", #selector(openLog)))
         menu.addItem(.separator())
         let quit = action(
-            "Quit \(AgentConstants.displayName)", symbol: "power", #selector(quit))
+            UIText.format("Quit %@", AgentConstants.displayName), symbol: "power", #selector(quit))
         quit.keyEquivalent = "q"
         menu.addItem(quit)
     }
@@ -182,7 +185,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
     /// The sessions waiting on the user, each row a way back to its tab.
     private func addWaitingSection(to menu: NSMenu, waiting: [WaitingSession], now: Double) {
         guard !waiting.isEmpty else {
-            menu.addItem(disabled("No sessions waiting"))
+            menu.addItem(disabled(UIText.text("No sessions waiting")))
             return
         }
 
@@ -258,12 +261,13 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private static func statusSymbol(_ tone: MenuStatusTone) -> NSImage? {
         switch tone {
         case .ok:
-            return symbol("checkmark.circle.fill", label: "OK", colors: [.white, .systemGreen])
-        case .checking: return symbol("clock", label: "Checking")
-        case .unrecognised: return symbol("circle.dashed", label: "Unknown")
+            return symbol(
+                "checkmark.circle.fill", label: UIText.text("OK"), colors: [.white, .systemGreen])
+        case .checking: return symbol("clock", label: UIText.text("Checking"))
+        case .unrecognised: return symbol("circle.dashed", label: UIText.text("Unknown"))
         case .problem:
             return symbol(
-                "exclamationmark.triangle.fill", label: "Problem",
+                "exclamationmark.triangle.fill", label: UIText.text("Problem"),
                 colors: [.white, .systemOrange])
         }
     }

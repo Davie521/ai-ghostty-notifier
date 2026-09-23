@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import NotifyCore
 
 /// The alert-style setup guidance, as a NON-modal window.
 ///
@@ -48,26 +49,29 @@ final class StyleHintWindow: NSObject {
 
         super.init()
 
-        let heading = NSTextField(labelWithString: "Keep notifications on screen")
+        let heading = NSTextField(labelWithString: UIText.text("Keep notifications on screen"))
         heading.font = .boldSystemFont(ofSize: 14)
 
         let body = NSTextField(
-            wrappingLabelWithString: """
-                macOS shows this app's notifications as Temporary, so they slide away after \
-                about five seconds — and clicking a notification is how you jump back to the \
-                Claude or Codex session's tab.
+            wrappingLabelWithString: UIText.text(
+                "style-hint.body",
+                default: """
+                    macOS shows this app's notifications as Temporary, so they slide away after \
+                    about five seconds — and clicking a notification is how you jump back to the \
+                    Claude or Codex session's tab.
 
-                Set Alert Style to Persistent and they wait for you instead.
+                    Set Alert Style to Persistent and they wait for you instead.
 
-                Apps cannot change this themselves; only you can. (On older macOS the two \
-                choices are called Banners and Alerts.)
-                """)
+                    Apps cannot change this themselves; only you can. (On older macOS the two \
+                    choices are called Banners and Alerts.)
+                    """))
         body.font = .systemFont(ofSize: 12)
 
         let openButton = NSButton(
-            title: "Open Settings", target: self, action: #selector(openSettings))
+            title: UIText.text("Open Settings"), target: self, action: #selector(openSettings))
         openButton.keyEquivalent = "\r"
-        let laterButton = NSButton(title: "Not now", target: self, action: #selector(dismiss))
+        let laterButton = NSButton(
+            title: UIText.text("Not now"), target: self, action: #selector(dismiss))
 
         let buttons = NSStackView(views: [laterButton, openButton])
         buttons.orientation = .horizontal

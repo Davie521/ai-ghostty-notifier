@@ -37,6 +37,8 @@ in the same project.
 - **Gets out of the way.** Return to the tab or send another prompt and the
   notification disappears; one nobody answers expires after 20 minutes.
 - **A menu bar list** of the sessions waiting on you.
+- **In your language.** Notifications and the menu bar in English or Simplified
+  Chinese, following macOS.
 - **Nothing extra.** No Node, no telemetry, no Accessibility permission.
 
 ## Install

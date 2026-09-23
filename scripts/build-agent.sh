@@ -85,6 +85,19 @@ install -m 755 "$BUILT" "$CONTENTS/MacOS/$BINARY_NAME"
 install -m 644 "$REPO/agent/Resources/Info.plist" "$CONTENTS/Info.plist"
 install -m 644 "$REPO/agent/Resources/native-hook-v1" "$CONTENTS/Resources/native-hook-v1"
 
+# The translations. macOS chooses among the bundle's .lproj directories from
+# the user's language list, so en.lproj must be there too or a Chinese-only
+# bundle would speak Chinese to everyone. UIText in NotifyCore reads them.
+for lproj in "$REPO"/agent/Resources/*.lproj; do
+    [[ -d "$lproj" ]] || continue
+    mkdir -p "$CONTENTS/Resources/$(basename "$lproj")"
+    for strings in "$lproj"/*.strings; do
+        [[ -f "$strings" ]] || continue
+        plutil -lint "$strings" >/dev/null || { echo "FATAL: $strings does not parse" >&2; exit 2; }
+        install -m 644 "$strings" "$CONTENTS/Resources/$(basename "$lproj")/"
+    done
+done
+
 # The icon this notification carries. It used to be Claude's own icon, copied
 # out of /Applications/Claude.app — which stopped being honest once the agent
 # started serving Codex CLI too, and was never there on a machine with only the

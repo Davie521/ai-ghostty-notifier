@@ -1,0 +1,40 @@
+/* 通知本身。 */
+"Task Complete" = "任务完成";
+"Input Required" = "需要你输入";
+"Finished after %.0fm %.0fs" = "耗时 %.0f 分 %.0f 秒";
+"Claude is waiting for you" = "Claude 在等你";
+"Go to tab" = "回到标签页";
+
+/* 菜单栏。 */
+"Notification Settings…" = "通知设置…";
+"Setup Guidance…" = "设置指引…";
+"Open Log" = "打开日志";
+"Quit %@" = "退出 %@";
+"No sessions waiting" = "没有会话在等你";
+"Waiting · %ld" = "等待中 · %ld";
+"1 session seen in the last 24h" = "过去 24 小时见过 1 个会话";
+"%ld sessions seen in the last 24h" = "过去 24 小时见过 %ld 个会话";
+"Session %@" = "会话 %@";
+"now" = "刚刚";
+"%ldm ago" = "%ld 分钟前";
+"%ldh ago" = "%ld 小时前";
+"%ldd ago" = "%ld 天前";
+"Notifications on · Persistent" = "通知已开启 · 持续显示";
+"Checking notification settings…" = "正在检查通知设置…";
+"Checking notification permission…" = "正在检查通知权限…";
+"Notifications not allowed — Fix…" = "通知未获允许 — 去修复…";
+"Notification permission unavailable — relaunch" = "通知权限不可用 — 请重新启动";
+"Alert style: Temporary — Fix…" = "提醒样式：临时 — 去修复…";
+"Alerts turned off — Fix…" = "提醒已关闭 — 去修复…";
+"Checking alert style…" = "正在检查提醒样式…";
+"Alert style: %@" = "提醒样式：%@";
+"OK" = "正常";
+"Checking" = "检查中";
+"Unknown" = "未知";
+"Problem" = "有问题";
+
+/* 提醒样式引导窗口。 */
+"Keep notifications on screen" = "让通知留在屏幕上";
+"style-hint.body" = "macOS 目前把这个 App 的通知显示为「临时」，大约五秒后就会滑走；而点通知正是回到 Claude 或 Codex 会话所在标签页的方式。\n\n把提醒样式改成「持续」，通知就会一直等你。\n\nApp 自己改不了这个设置，只有你能改。（旧版 macOS 里这两项叫「横幅」和「提醒」。）";
+"Open Settings" = "打开系统设置";
+"Not now" = "以后再说";
