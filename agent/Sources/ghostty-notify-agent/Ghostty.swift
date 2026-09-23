@@ -37,7 +37,7 @@ enum Ghostty {
             tell application "Ghostty"
                 return id of selected tab of front window
             end tell
-            """
+            """, label: "selected tab"
         ) { value in
             completion(value.flatMap { isPlausibleTabID($0) ? $0 : nil })
         }
@@ -71,18 +71,20 @@ enum Ghostty {
             """
             tell application "Ghostty"
                 repeat with w in every window
-                    repeat with t in every tab of w
-                        try
-                            if (id of t as text) is \(literal) then
-                                focus (focused terminal of t)
-                                return (id of selected tab of front window as text)
-                            end if
-                        end try
-                    end repeat
+                    try
+                        repeat with t in every tab of w
+                            try
+                                if (id of t as text) is \(literal) then
+                                    focus (focused terminal of t)
+                                    return (id of selected tab of front window as text)
+                                end if
+                            end try
+                        end repeat
+                    end try
                 end repeat
                 return ""
             end tell
-            """, onMainThread: true
+            """, label: "focus", onMainThread: true
         ) { selected in
             if let paths = try? AgentPaths(env: ProcessInfo.processInfo.environment) {
                 AgentLog.append(
@@ -131,7 +133,7 @@ enum Ghostty {
     }
 
     private static func run(
-        _ source: String, onMainThread: Bool = false,
+        _ source: String, label: String, onMainThread: Bool = false,
         _ completion: @escaping @MainActor (String?) -> Void
     ) {
         // Focusing pumps WindowServer events, which require the main queue.
@@ -143,7 +145,18 @@ enum Ghostty {
             if let script = NSAppleScript(source: bounded) {
                 var errorInfo: NSDictionary?
                 let descriptor = script.executeAndReturnError(&errorInfo)
-                if errorInfo == nil, let value = descriptor.stringValue, !value.isEmpty {
+                if let errorInfo {
+                    // A nil result reads the same whether Ghostty is gone, the
+                    // tab is, or the script tripped over a tab that closed
+                    // mid-enumeration ("Invalid index", issue #40). The log
+                    // is the only place those can be told apart.
+                    let number = errorInfo[NSAppleScript.errorNumber] ?? "?"
+                    let message = errorInfo[NSAppleScript.errorMessage] ?? "no message"
+                    if let paths = try? AgentPaths(env: ProcessInfo.processInfo.environment) {
+                        AgentLog.append(
+                            "applescript \(label) failed: \(number) \(message)", to: paths.log)
+                    }
+                } else if let value = descriptor.stringValue, !value.isEmpty {
                     result = value
                 }
             }

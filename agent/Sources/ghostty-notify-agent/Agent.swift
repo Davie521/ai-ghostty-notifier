@@ -572,21 +572,59 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Focusing the terminal raises its window and selects its tab together.
         // Do not issue a second app-wide activation after success: it can put
         // the previously active window back in front of the verified target.
-        Ghostty.focus(tabID: tabID) { [weak self] selected in
-            guard let self else { return }
-            switch selected {
-            case nil:
-                Ghostty.activate()
-                self.log("jump: \(tabID) not found, activated Ghostty only")
-            case tabID:
-                self.log("jump: focused \(tabID), verified selected")
-            case .some(let other):
-                Ghostty.activate()
-                // Selecting reported success but the selection did not stick.
-                // Worth its own line: it is the difference between "we asked"
-                // and "it happened", and the two look identical from outside.
-                self.log("jump: asked for \(tabID) but \(other) is selected")
+        //
+        // The selection the focus command reports can be read before Ghostty
+        // has finished moving it (issue #40), so a mismatch gets a settle
+        // re-read and, if the selection really has not moved, one more focus.
+        // TabJump bounds all of it; this only carries out its steps.
+        let finish: @MainActor (TabJump.Outcome) -> Void = { [weak self] outcome in
+            self?.finishJump(tabID: tabID, outcome: outcome)
+        }
+        func carryOut(_ plan: TabJump, _ step: TabJump.Step) {
+            switch step {
+            case .focus:
+                Ghostty.focus(tabID: tabID) { selected in
+                    var next = plan
+                    let step = next.observe(focusResult: selected)
+                    carryOut(next, step)
+                }
+            case .verify(let delay):
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    Ghostty.selectedTabID { selected in
+                        var next = plan
+                        let step = next.observe(selected: selected)
+                        carryOut(next, step)
+                    }
+                }
+            case .stop(let outcome):
+                finish(outcome)
             }
+        }
+        let plan = TabJump(requested: tabID)
+        carryOut(plan, plan.start)
+    }
+
+    private func finishJump(tabID: String, outcome: TabJump.Outcome) {
+        switch outcome {
+        case .notFound:
+            Ghostty.activate()
+            log("jump: \(tabID) not found, activated Ghostty only")
+        case .verified(reads: 0, focusAttempts: 1):
+            log("jump: focused \(tabID), verified selected")
+        case .verified(let reads, let attempts):
+            // The first read raced the focus. Logged apart from the plain
+            // case so the log keeps counting how often that happens.
+            log(
+                "jump: focused \(tabID), verified selected after \(reads) re-read(s), "
+                    + "\(attempts) focus attempt(s)")
+        case .unverified(let selected, let attempts):
+            Ghostty.activate()
+            // Focusing reported success but the selection never followed.
+            // Worth its own line: it is the difference between "we asked"
+            // and "it happened", and the two look identical from outside.
+            log(
+                "jump: asked for \(tabID) but \(selected ?? "<none>") is selected "
+                    + "after \(attempts) focus attempt(s)")
         }
     }
 
