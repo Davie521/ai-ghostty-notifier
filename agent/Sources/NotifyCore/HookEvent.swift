@@ -186,14 +186,15 @@ public enum NotificationPolicy {
             : (event.settings["GHOSTTY_NOTIFY_APP_NAME"].flatMap { $0.isEmpty ? nil : $0 }
                 ?? "Claude")
         let subtitle =
-            (title.isEmpty ? (completed ? "Task Complete" : "Input Required") : title)
+            (title.isEmpty
+                ? UIText.text(completed ? "Task Complete" : "Input Required") : title)
             + " — " + event.project
         let body =
             completed
-            ? String(
-                format: "Finished after %.0fm %.0fs", floor(elapsed / 60),
+            ? UIText.format(
+                "Finished after %.0fm %.0fs", floor(elapsed / 60),
                 floor(elapsed.truncatingRemainder(dividingBy: 60)))
-            : (event.payload.message ?? "Claude is waiting for you")
+            : (event.payload.message ?? UIText.text("Claude is waiting for you"))
         return NotifyRequest(
             sessionID: event.sessionID, title: app,
             subtitle: clean(subtitle), body: clean(body),

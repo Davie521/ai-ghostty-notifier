@@ -1,0 +1,40 @@
+/* The notification. */
+"Task Complete" = "Task Complete";
+"Input Required" = "Input Required";
+"Finished after %.0fm %.0fs" = "Finished after %.0fm %.0fs";
+"Claude is waiting for you" = "Claude is waiting for you";
+"Go to tab" = "Go to tab";
+
+/* The menu bar. */
+"Notification Settings…" = "Notification Settings…";
+"Setup Guidance…" = "Setup Guidance…";
+"Open Log" = "Open Log";
+"Quit %@" = "Quit %@";
+"No sessions waiting" = "No sessions waiting";
+"Waiting · %ld" = "Waiting · %ld";
+"1 session seen in the last 24h" = "1 session seen in the last 24h";
+"%ld sessions seen in the last 24h" = "%ld sessions seen in the last 24h";
+"Session %@" = "Session %@";
+"now" = "now";
+"%ldm ago" = "%ldm ago";
+"%ldh ago" = "%ldh ago";
+"%ldd ago" = "%ldd ago";
+"Notifications on · Persistent" = "Notifications on · Persistent";
+"Checking notification settings…" = "Checking notification settings…";
+"Checking notification permission…" = "Checking notification permission…";
+"Notifications not allowed — Fix…" = "Notifications not allowed — Fix…";
+"Notification permission unavailable — relaunch" = "Notification permission unavailable — relaunch";
+"Alert style: Temporary — Fix…" = "Alert style: Temporary — Fix…";
+"Alerts turned off — Fix…" = "Alerts turned off — Fix…";
+"Checking alert style…" = "Checking alert style…";
+"Alert style: %@" = "Alert style: %@";
+"OK" = "OK";
+"Checking" = "Checking";
+"Unknown" = "Unknown";
+"Problem" = "Problem";
+
+/* The alert-style guidance window. */
+"Keep notifications on screen" = "Keep notifications on screen";
+"style-hint.body" = "macOS shows this app's notifications as Temporary, so they slide away after about five seconds — and clicking a notification is how you jump back to the Claude or Codex session's tab.\n\nSet Alert Style to Persistent and they wait for you instead.\n\nApps cannot change this themselves; only you can. (On older macOS the two choices are called Banners and Alerts.)";
+"Open Settings" = "Open Settings";
+"Not now" = "Not now";

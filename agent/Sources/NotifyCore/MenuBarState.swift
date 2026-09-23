@@ -190,10 +190,13 @@ public struct MenuStatusLine: Equatable, Sendable {
 
         let open = [permissionLine, Self.alertStyle(alertStyle)].compactMap { $0 }
         if open.isEmpty {
-            return [MenuStatusLine(tone: .ok, text: "Notifications on · Persistent")]
+            return [MenuStatusLine(tone: .ok, text: UIText.text("Notifications on · Persistent"))]
         }
         if open.count > 1, open.allSatisfy({ $0.tone == .checking }) {
-            return [MenuStatusLine(tone: .checking, text: "Checking notification settings…")]
+            return [
+                MenuStatusLine(
+                    tone: .checking, text: UIText.text("Checking notification settings…"))
+            ]
         }
         return open
     }
@@ -204,16 +207,19 @@ public struct MenuStatusLine: Equatable, Sendable {
         case .granted:
             return nil
         case .unknown:
-            return MenuStatusLine(tone: .checking, text: "Checking notification permission…")
+            return MenuStatusLine(
+                tone: .checking, text: UIText.text("Checking notification permission…"))
         case .denied:
             return MenuStatusLine(
-                tone: .problem, text: "Notifications not allowed — Fix…", opensSettings: true)
+                tone: .problem, text: UIText.text("Notifications not allowed — Fix…"),
+                opensSettings: true)
         case .unavailable:
             // Not the user's answer: the system never asked. Settings has no row
             // for this app yet, so sending them there would be a dead end; a
             // relaunch is what fixes it.
             return MenuStatusLine(
-                tone: .problem, text: "Notification permission unavailable — relaunch")
+                tone: .problem,
+                text: UIText.text("Notification permission unavailable — relaunch"))
         }
     }
 
@@ -226,16 +232,18 @@ public struct MenuStatusLine: Equatable, Sendable {
             // but it slides away before it can be clicked, and the fix is one
             // setting away.
             return MenuStatusLine(
-                tone: .problem, text: "Alert style: Temporary — Fix…", opensSettings: true)
+                tone: .problem, text: UIText.text("Alert style: Temporary — Fix…"),
+                opensSettings: true)
         case "none":
             return MenuStatusLine(
-                tone: .problem, text: "Alerts turned off — Fix…", opensSettings: true)
+                tone: .problem, text: UIText.text("Alerts turned off — Fix…"), opensSettings: true)
         case "":
-            return MenuStatusLine(tone: .checking, text: "Checking alert style…")
+            return MenuStatusLine(tone: .checking, text: UIText.text("Checking alert style…"))
         default:
             // Distinct from "checking", which would otherwise sit there forever
             // claiming an answer is still coming.
-            return MenuStatusLine(tone: .unrecognised, text: "Alert style: \(style)")
+            return MenuStatusLine(
+                tone: .unrecognised, text: UIText.format("Alert style: %@", style))
         }
     }
 }
@@ -247,12 +255,16 @@ public enum MenuText {
     /// right now" — and useful mainly as a sign of life: a count stuck at zero
     /// while Claude runs means the hooks are not reaching the agent.
     public static func sessionsSeen(_ count: Int) -> String {
-        count == 1 ? "1 session seen in the last 24h" : "\(count) sessions seen in the last 24h"
+        count == 1
+            ? UIText.text("1 session seen in the last 24h")
+            : UIText.format("%ld sessions seen in the last 24h", count)
     }
 
     /// Heads the list of waiting sessions; the count is there so a long list
     /// does not have to be counted by eye.
-    public static func waitingHeader(_ count: Int) -> String { "Waiting · \(count)" }
+    public static func waitingHeader(_ count: Int) -> String {
+        UIText.format("Waiting · %ld", count)
+    }
 }
 
 /// Which part of the notification a row line came from.
@@ -359,18 +371,18 @@ public struct WaitingSession: Equatable, Sendable {
 
     /// A stand-in for a row with nothing to show, so a session waiting on the
     /// user is never invisible just because an old state file predates the text.
-    public var fallbackLabel: String { "Session " + sessionID.prefix(8) }
+    public var fallbackLabel: String { UIText.format("Session %@", String(sessionID.prefix(8))) }
 
     /// Relative time in Notification Center's vocabulary — the same phrasing
     /// shown on the notification this row stands in for.
     public func relativeTime(now: Double) -> String {
         let elapsed = max(0, now - postedAt)
-        if elapsed < 60 { return "now" }
+        if elapsed < 60 { return UIText.text("now") }
         let minutes = Int(elapsed / 60)
-        if minutes < 60 { return "\(minutes)m ago" }
+        if minutes < 60 { return UIText.format("%ldm ago", minutes) }
         let hours = minutes / 60
-        if hours < 24 { return "\(hours)h ago" }
-        return "\(hours / 24)d ago"
+        if hours < 24 { return UIText.format("%ldh ago", hours) }
+        return UIText.format("%ldd ago", hours / 24)
     }
 
     /// Long text is clipped rather than wrapped, the way a notification clips
