@@ -10,9 +10,18 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same pull request cancels the run it supersedes. Runs on
+# main are never cancelled: each merge gets its own verdict.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   check:
     runs-on: macos-latest
+    # A full run takes about five minutes. Anything past this is a hung test,
+    # not a slow one (docs/incident-2026-09-17-pretooluse-hang.md).
+    timeout-minutes: 30
     steps:
       # Pinned by commit, as in release.yml: a tag can be moved to other code.
       # Dependabot (.github/dependabot.yml) proposes the updates.
@@ -55,6 +64,11 @@ jobs:
       # The native bundle is required. Swift failures fail the product gate.
       - name: Swift toolchain
         run: swift --version
+
+      # .swift-format at the repository root is the configuration; lint is
+      # clean today and this keeps it so.
+      - name: swift-format lint
+        run: swift format lint --strict --recursive --configuration .swift-format agent/Sources agent/Tests
 
       - name: NotifyCore unit tests
         run: swift test --package-path agent --quiet
