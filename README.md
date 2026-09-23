@@ -41,7 +41,16 @@ in the same project.
 
 ## Install
 
-Paste this into Claude Code or Codex CLI:
+One command installs the current release: a signed, notarized build, no clone,
+no Swift toolchain. It installs the app, then registers the hooks for whichever
+of Claude Code and Codex CLI it finds, without touching anything else in their
+settings.
+
+```bash
+curl -fsSL https://github.com/Davie521/ai-ghostty-notifier/releases/latest/download/setup.sh | bash
+```
+
+Or hand the job to your agent. Paste this into Claude Code or Codex CLI:
 
 ```text
 Install https://github.com/Davie521/ai-ghostty-notifier on this Mac.
@@ -49,11 +58,10 @@ Clone it, then follow docs/agent-install.md exactly, including its checks,
 and finish by telling me the steps only I can do.
 ```
 
-The agent builds and installs the companion app, merges the hooks into your
-settings without touching anything else, and checks every step
-([what it follows](docs/agent-install.md)). Two things stay with you: allowing
-the notification and Automation permissions, and restarting the CLI sessions you
-already have open.
+The agent installs from the release, or builds from source when it has to, and
+checks every step ([what it follows](docs/agent-install.md)). Either way, two
+things stay with you: allowing the notification and Automation permissions, and
+restarting the CLI sessions you already have open.
 
 **Requirements:** macOS 13 or later, [Ghostty](https://ghostty.org) with
 AppleScript support, and Claude Code or Codex CLI. A Swift 6 toolchain is

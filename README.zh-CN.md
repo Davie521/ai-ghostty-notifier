@@ -39,7 +39,14 @@
 
 ## 安装
 
-把这段贴进 Claude Code 或 Codex CLI：
+一条命令装当前 release：签名并公证过的构建，不用 clone、不用 Swift 工具链。
+它先装 App，再给检测到的 Claude Code 和 Codex CLI 注册 hook，不碰它们设置里的其他内容。
+
+```bash
+curl -fsSL https://github.com/Davie521/ai-ghostty-notifier/releases/latest/download/setup.sh | bash
+```
+
+也可以交给 agent 做。把这段贴进 Claude Code 或 Codex CLI：
 
 ```text
 把 https://github.com/Davie521/ai-ghostty-notifier 装到这台 Mac 上。
@@ -47,9 +54,9 @@
 最后告诉我哪些步骤只能我自己做。
 ```
 
-agent 会构建并安装配套 App、把 hook 合并进你的设置而不碰其他配置，并且每一步都实际
-检查。[docs/agent-install.md](docs/agent-install.md) 是写给它执行的英文说明，你不用读。
-有两件事留给你：在系统设置里允许通知和自动化权限，以及重启已经开着的 CLI 会话。
+agent 会从 release 安装，装不了才从源码构建，并且每一步都实际检查。
+[docs/agent-install.md](docs/agent-install.md) 是写给它执行的英文说明，你不用读。
+两种方式都有两件事留给你：在系统设置里允许通知和自动化权限，以及重启已经开着的 CLI 会话。
 
 **需要：** macOS 13 或更新、支持 AppleScript 的 [Ghostty](https://ghostty.org)，
 以及 Claude Code 或 Codex CLI。Swift 6 工具链只在从源码构建时才需要。

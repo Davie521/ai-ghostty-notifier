@@ -74,7 +74,7 @@ gh secret list -R $R
 A run that should sign fails at *Check the signing secrets*, naming what is
 missing, and never builds or publishes an ad-hoc App instead.
 
-### 4. Rehearse before the first tag
+### 4. Rehearse a signed run without publishing
 
 Actions → **Release** → **Run workflow**, with *Sign with the Developer ID and
 notarize* ticked. It signs, notarizes, packages, installs the package into a
