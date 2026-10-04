@@ -225,6 +225,11 @@ class ReleaseSetupTests(unittest.TestCase):
         self.assertEqual(self.settings.read_text(), self.original_settings)
 
     def test_installs_the_app_and_claude_hooks_from_a_release(self):
+        # An earlier install's permission answer is still on disk. --no-start
+        # starts no agent, so it must not try to send a test through one.
+        state = self.home / ".claude/notifications/ghostty-agent"
+        state.mkdir(parents=True)
+        (state / "ready").write_text("authorized\n")
         result = self.setup_sh("--no-start", "--claude", "--no-codex", "--allow-unnotarized")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(self.app)], check=True)
