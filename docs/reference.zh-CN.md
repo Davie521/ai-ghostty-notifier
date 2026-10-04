@@ -287,9 +287,10 @@ JSON 解析、状态文件、锁、进程看守和终端恢复逻辑。只把常
   外部投递仍需要已安装、已授权的后端；空的 `AGENT_APP` 会禁用启动尝试。
 - **点击只消失、不跳转：** 使用常驻投递。alerter 已退役；terminal-notifier 不接点击跳转，
   因为它的 execute 动作也可能在关闭通知时触发。
-- **重复通知：** 检查是否同时注册了手动和插件 hook，并停用其他完成提醒。Claude Code
-  自己的桌面通知会在回答结束约一分钟后照常弹出；在 `settings.json` 里设置
-  `"preferredNotifChannel": "terminal_bell"`，把它改成终端响铃。
+- **重复通知：** 检查是否同时注册了手动和插件 hook，并停用其他完成提醒。回答结束后
+  如果你一直没打字，Claude Code 自己的桌面通知约一分钟后照常弹出；在 `settings.json` 里
+  设置 `"preferredNotifChannel": "terminal_bell"`，把它改成终端响铃（Ghostty 默认是 Dock
+  图标跳一下、标签页标题前多一个 🔔）。
   ECC 桌面通知已有的关闭项是 `ECC_DISABLED_HOOKS=stop:desktop-notify`。
 - **无法精确定位标签页：** Ghostty 需要 AppleScript 接口和自动化授权；
   tmux、标题动画可能使标记无法往返。失败或歧义绑定会退避/重试并降级为只激活应用；

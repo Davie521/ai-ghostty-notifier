@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Tasks under 3 minutes never notify; that is by design. To check that an install works, run:
+        By default a task notifies only when it ran for 3 minutes or more; that is by design. To check that an install works, run:
 
         ```bash
         "$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --test

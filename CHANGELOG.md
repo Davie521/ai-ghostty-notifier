@@ -52,5 +52,5 @@ and a one-command installer (#28, #35).
   the next prompt, or after 20 minutes (#5, #6).
 - A menu bar list of the sessions waiting on you (#8).
 - Tab bindings survive a Ghostty restart (#11).
-- Hooks run in a native runtime that never holds the CLI: every terminal query
-  is bounded, and a hook ends itself after 12 seconds (#13, #15).
+- Hooks run in a native runtime with bounded waits: every terminal query has a
+  deadline, and a hook ends itself after 12 seconds by default (#13, #15).

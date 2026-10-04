@@ -341,9 +341,11 @@ without removing any of the macOS-specific integration.
   action, since its execute action can also run on dismissal.
 - **Duplicate alerts:** check that manual and plugin hooks are not both
   registered, and disable other completion notifiers. Claude Code's own desktop
-  notification keeps coming about a minute after a reply; set
-  `"preferredNotifChannel": "terminal_bell"` in `settings.json` to turn it into
-  a terminal bell. For ECC's desktop notifier the existing opt-out is
+  notification still comes about a minute after a reply you haven't typed
+  after; set `"preferredNotifChannel": "terminal_bell"` in `settings.json` to
+  turn it into a terminal bell (in Ghostty, by default, the Dock icon bounces
+  once and 🔔 goes in the tab title). For ECC's desktop notifier the existing
+  opt-out is
   `ECC_DISABLED_HOOKS=stop:desktop-notify`.
 - **No precise tab:** Ghostty must expose its AppleScript interface and permit
   Automation. tmux/title redraws can defeat the marker. Failed or ambiguous

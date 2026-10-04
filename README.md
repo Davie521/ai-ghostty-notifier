@@ -56,12 +56,14 @@ back its tab. What differs is when you hear about a run, and how often:
 | **Still waiting** | — | A menu bar list of the sessions waiting on you |
 | **Goes away** | When you focus that tab | Also when you send the next prompt, or after 20 minutes |
 
-The two run side by side, so out of the box a long run can reach you twice:
-from this app when it ends, and from Claude Code a minute later. To hear about
-it once, add `"preferredNotifChannel": "terminal_bell"` to
-`~/.claude/settings.json`; Claude Code's own alerts, permission prompts
-included, then ring the terminal bell instead. The installer already turns off
-Codex CLI's duplicate turn-complete alert.
+The two run side by side, so out of the box a long run can bring two banners:
+one from this app when it ends, and one from Claude Code a minute later if you
+haven't typed. For one banner, add `"preferredNotifChannel": "terminal_bell"`
+to `~/.claude/settings.json`. Claude Code's own alerts, permission prompts
+included, then ring the terminal bell instead, which in Ghostty by default
+bounces the Dock icon once and puts 🔔 in the tab title;
+`"notifications_disabled"` turns them off altogether. The installer already
+turns off Codex CLI's duplicate turn-complete alert.
 
 ## Install
 

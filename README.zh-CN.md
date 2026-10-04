@@ -47,16 +47,18 @@ Claude Code 在 Ghostty 里本来就会发通知，点它也能回到对应的�
 | | 自带通知 | ai-ghostty-notifier |
 | --- | --- | --- |
 | **什么时候** | 每次回答结束约一分钟后，前提是你一直没打字 | 任务一结束就通知，而且只针对跑满 3 分钟的任务 |
-| **声音** | 每次都响 | 10 分钟以内不响 |
+| **声音** | 每次都响 | 少于 10 分钟不响 |
 | **写了什么** | "Claude is waiting for your input" | 会话、项目，以及「耗时 12 分 4 秒」 |
 | **Codex CLI** | 各发各的 | 和 Claude Code 一样的通知 |
 | **谁还在等你** | — | 菜单栏列出等你的会话 |
 | **什么时候消失** | 你切到那个标签页时 | 另外在你提下一个问题时，或者 20 分钟后 |
 
-两者同时存在，所以默认情况下，一个长任务可能通知你两次：结束时本工具一次，一分钟后
-Claude Code 自己再来一次。想只收一次，在 `~/.claude/settings.json` 里加上
-`"preferredNotifChannel": "terminal_bell"`；之后 Claude Code 自己的提醒（包括权限确认）
-改成终端响铃。Codex CLI 那边重复的「回合结束」提醒，安装器已经替你关掉了。
+两者同时存在，所以默认情况下，一个长任务可能弹出两条横幅：结束时本工具一条；如果你
+一直没打字，一分钟后 Claude Code 自己再来一条。想只留一条，在 `~/.claude/settings.json`
+里加上 `"preferredNotifChannel": "terminal_bell"`。之后 Claude Code 自己的提醒（包括
+权限确认）改成终端响铃：在 Ghostty 里默认是 Dock 图标跳一下、标签页标题前多一个 🔔；
+设成 `"notifications_disabled"` 则全部关掉。Codex CLI 那边重复的「回合结束」提醒，
+安装器已经替你关掉了。
 
 ## 安装
 
