@@ -285,6 +285,12 @@ JSON 解析、状态文件、锁、进程看守和终端恢复逻辑。只把常
   `~/.claude/notifications/ghostty-sessions/`，Codex 使用自己的 `notifications/` 目录。
 - **常驻进程停了：** 默认会尝试启动 App，并由临时 Swift worker 处理当前事件。
   外部投递仍需要已安装、已授权的后端；空的 `AGENT_APP` 会禁用启动尝试。
+- **菜单栏里没有图标：** 有刘海的 Mac 上，放不下的菜单栏图标会被 macOS 悄悄藏起来。
+  退出几个菜单栏 App，或者用 Ice、Bartender 这类菜单栏管理工具。
+- **通知显示旧图标，或者点通知启动的是旧副本：** macOS 还记着这个 App 的其他副本，比如
+  废纸篓里的旧版、挪过位置的构建。重新安装一次会把它们注销掉，并列出还留在磁盘上的副本；
+  把这些删掉，否则 macOS 可能再次登记它们。已经缓存的旧图标用
+  `killall NotificationCenter usernoted` 刷新。
 - **点击只消失、不跳转：** 使用常驻投递。alerter 已退役；terminal-notifier 不接点击跳转，
   因为它的 execute 动作也可能在关闭通知时触发。
 - **重复通知：** 检查是否同时注册了手动和插件 hook，并停用其他完成提醒。回答结束后

@@ -336,6 +336,14 @@ without removing any of the macOS-specific integration.
 - **Resident stopped:** normally the hook attempts an app launch and handles the
   current event in a native worker. External delivery still needs an installed,
   authorized backend. Explicit empty `AGENT_APP` disables the launch attempt.
+- **No menu bar icon:** on a Mac with a notch, macOS hides menu bar icons that
+  do not fit, and says nothing. Quit a few menu bar apps, or use a menu bar
+  manager such as Ice or Bartender.
+- **An old icon, or a click that starts an old copy:** macOS also knows other
+  copies of the app, such as one in the Trash or a moved build. Installing again
+  unregisters them and lists those still on disk; delete those, or macOS may
+  register them again. An icon already cached goes with
+  `killall NotificationCenter usernoted`.
 - **Click only dismisses:** use resident delivery. alerter is retired, and
   terminal-notifier deliberately has no click-to-jump
   action, since its execute action can also run on dismissal.

@@ -244,11 +244,28 @@ class ReleaseSetupTests(unittest.TestCase):
         self.assertIn(f'"{self.app}/{EXECUTABLE}" --test', result.stdout)
         # With --no-start there is no agent to send a test through.
         self.assertNotIn("Sending a test notification", result.stdout)
+        # Claude Code's own notification is still on: a long run can come twice.
+        self.assertIn('"preferredNotifChannel": "terminal_bell"', result.stdout)
+        # The icon may be hidden behind the notch (#49).
+        self.assertIn("notch", result.stdout)
         # One list of next steps, not install.sh's as well.
         self.assertEqual(result.stdout.count("Next steps:"), 0)
         # The way out is this script's own, not a checkout the user does not have.
         self.assertIn("setup.sh | bash -s -- --uninstall", result.stdout)
         self.assertNotIn("install-agent.sh --uninstall", result.stdout)
+
+    def test_no_duplicate_warning_once_claude_code_alerts_another_way(self):
+        for channel in ("terminal_bell", "notifications_disabled"):
+            with self.subTest(channel):
+                self.settings.write_text(json.dumps({"model": "opus", "preferredNotifChannel": channel}))
+                result = self.setup_sh("--no-start", "--claude", "--no-codex", "--allow-unnotarized")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertNotIn("preferredNotifChannel", result.stdout)
+        # Set through /config, it lives in the global config instead.
+        self.settings.write_text('{"model": "opus"}')
+        (self.home / ".claude.json").write_text(json.dumps({"preferredNotifChannel": "terminal_bell"}))
+        result = self.setup_sh("--no-start", "--claude", "--no-codex", "--allow-unnotarized")
+        self.assertNotIn("preferredNotifChannel", result.stdout)
 
     def test_claude_config_dir_selects_where_the_hooks_go(self):
         other = self.home / ".claude-b"
@@ -262,6 +279,23 @@ class ReleaseSetupTests(unittest.TestCase):
             self.assertTrue((other / "hooks" / launcher).is_file(), launcher)
         self.assertEqual(self.settings.read_text(), self.original_settings)
         self.assertFalse((self.home / ".claude/hooks").exists())
+
+    def test_the_duplicate_warning_reads_the_selected_config_dirs_global_config(self):
+        # With CLAUDE_CONFIG_DIR set, Claude Code keeps its global config in
+        # that directory, not in ~/.claude.json. The default profile's choice
+        # says nothing about the selected one's.
+        other = self.home / ".claude-b"
+        other.mkdir()
+        self.env["CLAUDE_CONFIG_DIR"] = str(other)
+        (self.home / ".claude.json").write_text(json.dumps({"preferredNotifChannel": "terminal_bell"}))
+        (other / ".claude.json").write_text(json.dumps({"preferredNotifChannel": "auto"}))
+        result = self.setup_sh("--no-start", "--claude", "--no-codex", "--allow-unnotarized")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('"preferredNotifChannel": "terminal_bell"', result.stdout)
+        self.assertIn(str(other / "settings.json"), result.stdout)
+        (other / ".claude.json").write_text(json.dumps({"preferredNotifChannel": "terminal_bell"}))
+        result = self.setup_sh("--no-start", "--claude", "--no-codex", "--allow-unnotarized")
+        self.assertNotIn("preferredNotifChannel", result.stdout)
 
     def test_a_pinned_version_uses_its_own_download_path(self):
         (self.release / "latest").rename(self.root / "latest-moved")
@@ -304,12 +338,28 @@ class ReleaseSetupTests(unittest.TestCase):
         plist = self.home / "Library/LaunchAgents/io.github.davie521.cgnotify.plist"
         plist.parent.mkdir(parents=True, exist_ok=True)
         plist.write_text("<plist/>")
+        # Every registered copy goes too (#50): this one and one in the Trash.
+        trashed = self.home / ".Trash/ClaudeGhosttyNotify.app"
+        separator = "-" * 80 + "\n"
+        dump = self.root / "lsregister-dump"
+        dump.write_text("".join(separator + "path:                       {} (0x1)\n"
+                                "identifier:                 io.github.davie521.cgnotify\n".format(path)
+                                for path in (self.app, trashed)) + separator)
+        lsregister = self.root / "stubs" / "lsregister"
+        lsregister.write_text('#!/bin/bash\nif [[ "$1" == -dump ]]; then exec /bin/cat "{}"; fi\n'
+                              'printf "%s\\n" "$0 $*" >> "$INSTALL_TEST_CALLS"\n'.format(dump))
+        lsregister.chmod(0o755)
+        self.env["GHOSTTY_NOTIFY_LSREGISTER"] = str(lsregister)
         # Pointed at a release that does not exist: an uninstall that downloaded would fail.
-        result = self.setup_sh("--uninstall", release=self.root / "no-release", service_calls=("launchctl", "pkill"))
+        result = self.setup_sh("--uninstall", release=self.root / "no-release",
+                               service_calls=("launchctl", "pkill", "lsregister"))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(self.app.parent.exists())
         self.assertFalse(plist.exists())
-        self.assertIn("launchctl bootout gui/", self.calls.read_text())
+        calls = self.calls.read_text()
+        self.assertIn("launchctl bootout gui/", calls)
+        for path in (self.app, trashed):
+            self.assertIn("lsregister -u {}\n".format(path), calls)
         self.assertIn("Hooks are still registered", result.stdout)
 
     def test_a_long_signature_report_does_not_end_setup_early(self):

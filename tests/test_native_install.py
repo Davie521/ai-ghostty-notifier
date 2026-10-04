@@ -301,7 +301,9 @@ fi
 [[ "$1" == print ]] || echo "launchctl $1" >> "$CALLS"
 STATE="$HOME/.claude/notifications/ghostty-agent"
 ''' + launchd)
-        self.stub("lsregister", 'echo "lsregister $1" >> "$CALLS"\n')
+        # -dump serves $LSDUMP, a stand-in for what LaunchServices has registered.
+        self.stub("lsregister", 'if [[ "$1" == -dump ]]; then [[ -n "${LSDUMP:-}" ]] && exec /bin/cat "$LSDUMP"; exit 0; fi\n'
+                  'echo "lsregister $*" >> "$CALLS"\n')
         self.stub("pkill", 'echo "pkill $*" >> "$CALLS"\n')
         # Only the wait for processes to exit really waits; the rest would take a minute.
         self.stub("sleep", '[[ "$1" == 0.25 ]] && exec /bin/sleep 0.05\nexit 0\n')
@@ -616,6 +618,72 @@ exec /bin/rm "$@"
                                  "the marker outlived the script")
                 (self.root / "full-install-calls.interrupted").unlink()
                 (self.root / "full-install-calls").unlink(missing_ok=True)
+
+    def lsregister_dump(self, *copies):
+        """A `lsregister -dump` with one bundle record per (path, identifier)."""
+        separator = "-" * 80 + "\n"
+        records = [separator + "bundle id:                  AI Ghostty Notifier (0x{:x})\n"
+                   "path:                       {} (0x{:x})\n"
+                   "name:                       AI Ghostty Notifier\n"
+                   "identifier:                 {}\n".format(2 * i + 1, path, 2 * i + 2, identifier)
+                   for i, (path, identifier) in enumerate(copies)]
+        # A record with the identifier and no path of its own must not borrow
+        # the path of the record before it.
+        records.append(separator + "claim id:                   Go to tab (0x99)\n"
+                       "identifier:                 io.github.davie521.cgnotify\n")
+        dump = self.root / "lsregister-dump"
+        dump.write_text("".join(records) + separator)
+        return dump
+
+    def unregistered(self, recorded):
+        return [line[len("lsregister -u "):] for line in recorded if line.startswith("lsregister -u ")]
+
+    def test_every_other_registered_copy_is_unregistered(self):
+        # Issue #50: an old version in the Trash, a backup or a moved build
+        # stays registered under the same identifier, and macOS can resolve a
+        # click, or the icon of a notification, to it.
+        home = self.root / "home with stale copies"
+        installed = home / "Library/Application Support/claude-ghostty-notify" / BUNDLE
+        trashed = home / ".Trash/ClaudeGhosttyNotify 2.app"
+        (trashed / "Contents").mkdir(parents=True)
+        moved = self.root / "a build that was moved away" / BUNDLE
+        other = Path("/Applications/Another App.app")
+        dump = self.lsregister_dump((installed, "io.github.davie521.cgnotify"),
+                                    (trashed, "io.github.davie521.cgnotify"),
+                                    (moved, "io.github.davie521.cgnotify"),
+                                    (other, "com.example.another"))
+        result, recorded = self.full_install(home, self.REAL_PS_FOR_ONE_PID, env={"LSDUMP": str(dump)})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        unregistered = self.unregistered(recorded)
+        self.assertIn(str(trashed), unregistered)
+        self.assertIn(str(moved), unregistered)
+        self.assertNotIn(str(installed), unregistered)
+        self.assertNotIn(str(other), unregistered)
+        self.assertIn("lsregister -f " + str(installed), recorded)
+        # A copy still on disk would be registered again: the user is told to
+        # delete it. One that is gone needs nothing said.
+        self.assertIn(str(trashed), result.stdout)
+        self.assertNotIn(str(moved), result.stdout)
+
+    def test_uninstall_unregisters_every_copy(self):
+        home = self.root / "home of an uninstall"
+        installed, _ = self.previous_version(home)
+        trashed = home / ".Trash" / BUNDLE
+        dump = self.lsregister_dump((installed, "io.github.davie521.cgnotify"),
+                                    (trashed, "io.github.davie521.cgnotify"))
+        result, recorded = self.full_install(home, self.REAL_PS_FOR_ONE_PID, args=("--uninstall",),
+                                             env={"LSDUMP": str(dump)})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(installed.exists())
+        self.assertEqual(sorted(set(self.unregistered(recorded))), sorted([str(installed), str(trashed)]))
+
+    def test_the_installers_name_the_bundle_identifier_of_the_app(self):
+        with open(REPO / "agent/Resources/Info.plist", "rb") as handle:
+            identifier = plistlib.load(handle)["CFBundleIdentifier"]
+        script = (REPO / "scripts/install-agent.sh").read_text()
+        self.assertIn('BUNDLE_ID="{}"'.format(identifier), script)
+        # setup.sh's --uninstall matches registrations by its label, the same string.
+        self.assertIn('local label="{}"'.format(identifier), (REPO / "scripts/setup.sh").read_text())
 
     def test_the_previous_version_can_start_again_when_the_install_fails(self):
         home = self.root / "home-where-the-swap-fails"
