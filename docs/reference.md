@@ -189,6 +189,8 @@ files may remain in upgraded directories but are not invoked or reinstalled.
 | 3–10 minutes | Silent notification |
 | 10 minutes or more | Notification with Glass sound |
 
+<img src="assets/notification.png" alt="A real notification: Claude, 200-second timer test — my-app, Finished after 3m 24s" width="344">
+
 Defaults are configurable ([every setting](#configuration)).
 Resident notifications expire after 20 minutes unless cleared
 earlier. Focusing the session's tab or submitting another prompt withdraws its
@@ -338,8 +340,13 @@ without removing any of the macOS-specific integration.
   terminal-notifier deliberately has no click-to-jump
   action, since its execute action can also run on dismissal.
 - **Duplicate alerts:** check that manual and plugin hooks are not both
-  registered, and disable other completion notifiers. For ECC's desktop notifier
-  the existing opt-out is `ECC_DISABLED_HOOKS=stop:desktop-notify`.
+  registered, and disable other completion notifiers. Claude Code's own desktop
+  notification still comes about a minute after a reply you haven't typed
+  after; set `"preferredNotifChannel": "terminal_bell"` in `settings.json` to
+  turn it into a terminal bell (in Ghostty, by default, the Dock icon bounces
+  once and 🔔 goes in the tab title). For ECC's desktop notifier the existing
+  opt-out is
+  `ECC_DISABLED_HOOKS=stop:desktop-notify`.
 - **No precise tab:** Ghostty must expose its AppleScript interface and permit
   Automation. tmux/title redraws can defeat the marker. Failed or ambiguous
   binding degrades to activation only, with retry/backoff; a closed tab cannot
