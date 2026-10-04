@@ -129,10 +129,16 @@ main() {
     GHOSTTY_NOTIFY_FROM_SETUP=1 GHOSTTY_NOTIFY_INSTALL_FROM="$app" \
         bash "$dist/scripts/install-agent.sh" $start_flag </dev/null
 
-    local claude_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    local claude_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" claude_doubled=0
     if [[ "$claude" == "yes" || ( "$claude" == "auto" && ( -d "$claude_dir" || -n "$(command -v claude || true)" ) ) ]]; then
         step "Registering the Claude Code hooks in $claude_dir"
         GHOSTTY_NOTIFY_FROM_SETUP=1 bash "$dist/install.sh" --register-settings </dev/null
+        # Claude Code's own desktop notification runs alongside these hooks,
+        # about a minute after every reply, unless its channel says otherwise.
+        case "$(claude_channel "$claude_dir")" in
+            terminal_bell | notifications_disabled) ;;
+            *) claude_doubled=1 ;;
+        esac
     else
         echo "Claude Code not found; skipping its hooks (rerun with --claude to force)."
     fi
@@ -195,6 +201,16 @@ main() {
     fi
     echo "  Then restart the Claude Code / Codex sessions you already have open."
     echo
+    if [[ $claude_doubled -eq 1 ]]; then
+        echo "Claude Code also sends its own notification, about a minute after every"
+        echo "reply, so a long run can reach you twice. To hear about it once, add"
+        echo "  \"preferredNotifChannel\": \"terminal_bell\""
+        echo "to $claude_dir/settings.json; its own alerts then ring the terminal bell."
+        echo
+    fi
+    echo "The ghost in the menu bar lists the sessions waiting on you. On a Mac with a"
+    echo "notch, macOS hides menu bar icons that do not fit, without saying so."
+    echo
     echo "Only tasks that run 3 minutes or longer notify you, so a quick prompt to"
     echo "try it gets nothing. To check the install at any time:"
     echo "  \"$agent_bin\" --test"
@@ -227,9 +243,22 @@ uninstall_app() {
     local plist="$HOME/Library/LaunchAgents/$label.plist"
     local install_dir="$HOME/Library/Application Support/claude-ghostty-notify"
     step "Removing the App and its LaunchAgent"
+    local lsregister=${GHOSTTY_NOTIFY_LSREGISTER:-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister}
     launchctl bootout "gui/$(id -u)/$label" 2>/dev/null </dev/null || true
     pkill -f "/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" 2>/dev/null </dev/null || true
     rm -f "$plist"
+    # Every registered copy, as install-agent.sh --uninstall does: with the app
+    # gone, a registration left anywhere is what a click on an old
+    # notification would start. Read to the end, or pipefail sees SIGPIPE.
+    if [[ -x "$lsregister" ]]; then
+        local copy
+        while IFS= read -r copy; do
+            "$lsregister" -u "$copy" >/dev/null 2>&1 </dev/null || true
+        done < <("$lsregister" -dump 2>/dev/null </dev/null | awk -v id="$label" '
+            /^-+$/ { path = "" }
+            /^path:/ { path = $0; sub(/^path:[ \t]*/, "", path); sub(/ \(0x[0-9a-fA-F]+\)$/, "", path) }
+            $1 == "identifier:" && $2 == id && path != "" { print path; path = "" }')
+    fi
     rm -rf "$install_dir"
     echo "    removed $install_dir"
     echo
@@ -237,6 +266,19 @@ uninstall_app() {
     echo "  ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json (commands ending in ghostty-*.sh)"
     echo "  ${CODEX_HOME:-$HOME/.codex}/hooks.json (commands containing ghostty-notify/codex-hook.sh)"
     echo "then restart open Claude Code / Codex sessions."
+}
+
+# The channel Claude Code alerts through, from settings.json and then the
+# global config; empty when neither sets one. plutil reads JSON as it is, so
+# this needs no Python, and an unreadable file only means "not set".
+claude_channel() {
+    local file value
+    for file in "$1/settings.json" "$HOME/.claude.json"; do
+        value=$(plutil -extract preferredNotifChannel raw -o - "$file" 2>/dev/null </dev/null) || continue
+        printf '%s\n' "$value"
+        return 0
+    done
+    return 0
 }
 
 # The python3 on PATH, when it is 3.11 or newer: install-codex.py needs

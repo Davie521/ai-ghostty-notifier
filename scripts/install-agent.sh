@@ -58,6 +58,21 @@ STATE="$HOME/.claude/notifications/ghostty-agent"
 # Overridable so that a test can run the whole install: the real tool would
 # register a sandbox copy under the bundle identifier the installed app uses.
 LSREGISTER=${GHOSTTY_NOTIFY_LSREGISTER:-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister}
+# CFBundleIdentifier in agent/Resources/Info.plist. The same string as the
+# label, but they answer to different systems; tests check that they agree.
+BUNDLE_ID="io.github.davie521.cgnotify"
+
+# Every path LaunchServices has registered under BUNDLE_ID, one per line. In
+# `lsregister -dump` a record's `path:` comes before its `identifier:`, and a
+# line of dashes ends the record, so a path is never carried into another one.
+# awk reads the dump to the end: stopping early would leave lsregister to die
+# of SIGPIPE, which pipefail reports as a failure.
+registered_copies() {
+    "$LSREGISTER" -dump 2>/dev/null | awk -v id="$BUNDLE_ID" '
+        /^-+$/ { path = "" }
+        /^path:/ { path = $0; sub(/^path:[ \t]*/, "", path); sub(/ \(0x[0-9a-fA-F]+\)$/, "", path) }
+        $1 == "identifier:" && $2 == id && path != "" { print path; path = "" }'
+}
 
 # The LaunchAgent as text. The path is XML-escaped: a home directory with & or <
 # in its name otherwise yields a plist launchd cannot read.
@@ -343,8 +358,13 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     stop_agents
     RELOAD=""
     rm -f "$PLIST"
-    if [[ -x "$LSREGISTER" && -d "$APP" ]]; then
-        "$LSREGISTER" -u "$APP" >/dev/null 2>&1 || true
+    # Every copy, not only this one: with the app gone, a registration left
+    # anywhere is what a click on an old notification would start.
+    if [[ -x "$LSREGISTER" ]]; then
+        while IFS= read -r copy; do
+            "$LSREGISTER" -u "$copy" >/dev/null 2>&1 || true
+        done < <(registered_copies)
+        [[ -d "$APP" ]] && { "$LSREGISTER" -u "$APP" >/dev/null 2>&1 || true; }
     fi
     rm -rf "$APP"
     CLOSED=""
@@ -445,6 +465,18 @@ if [[ -x "$LSREGISTER" ]]; then
     # that may be gone tomorrow.
     "$LSREGISTER" -u "$BUILT" >/dev/null 2>&1 || true
     "$LSREGISTER" -f "$APP" >/dev/null 2>&1 || true
+    # The same holds for every other copy LaunchServices has seen: an old
+    # version in the Trash, a backup made while reinstalling, a build that was
+    # moved. macOS can resolve the identifier to any of them, for a click or
+    # for the icon a notification shows (issue #50).
+    while IFS= read -r copy; do
+        [[ -n "$copy" && ! "$copy" -ef "$APP" ]] || continue
+        "$LSREGISTER" -u "$copy" >/dev/null 2>&1 || true
+        if [[ -e "$copy" ]]; then
+            echo "    Unregistered another copy of the app: $copy"
+            echo "    Delete it; while it exists, macOS may register it again."
+        fi
+    done < <(registered_copies)
 fi
 
 mkdir -p "$(dirname "$PLIST")"
@@ -607,6 +639,9 @@ esac
 echo
 echo "Only tasks that run 3 minutes or longer notify you. To check the install:"
 echo "  \"$BIN\" --test"
+echo
+echo "The ghost in the menu bar lists the sessions waiting on you. On a Mac with a"
+echo "notch, macOS hides menu bar icons that do not fit, without saying so."
 echo
 echo "If you use Focus modes, add AI Ghostty Notifier to their allowed apps:"
 echo "a Focus that already lets Terminal (an external backend's identity) through"
