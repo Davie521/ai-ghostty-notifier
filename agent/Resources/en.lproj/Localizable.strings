@@ -4,6 +4,8 @@
 "Finished after %.0fm %.0fs" = "Finished after %.0fm %.0fs";
 "Claude is waiting for you" = "Claude is waiting for you";
 "Go to tab" = "Go to tab";
+"Test notification" = "Test notification";
+"Tasks that run 3 minutes or longer notify you like this." = "Tasks that run 3 minutes or longer notify you like this.";
 
 /* The menu bar. */
 "Notification Settings…" = "Notification Settings…";

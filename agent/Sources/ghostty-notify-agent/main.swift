@@ -11,6 +11,7 @@ import NotifyCore
 //   ghostty-notify-agent --hook claude|codex [event]  stdin JSON, then exit
 //   ghostty-notify-agent --worker                    captured context on stdin
 //   ghostty-notify-agent --resident-pid              read-only installer preflight
+//   ghostty-notify-agent --test                      one notification via the resident
 
 let environment = ProcessInfo.processInfo.environment
 let arguments = CommandLine.arguments
@@ -75,6 +76,16 @@ if arguments.count >= 2, arguments[1] == "--send" {
         exit(2)
     }
     exit(SpoolWriter.write(json: arguments[2], to: paths.spool) ? 0 : 1)
+}
+if arguments.count == 2, arguments[1] == "--test" {
+    // Two bounded waits (a Ghostty query, the spool pickup) and nothing else;
+    // a wait that does not honour its bound still must not hang an installer.
+    DispatchQueue.global().asyncAfter(deadline: .now() + 20) {
+        FileHandle.standardError.write(Data("ghostty-notify: --test timed out\n".utf8))
+        _exit(1)
+    }
+    Task { @MainActor in exit(await SelfTest.run(paths: paths)) }
+    CFRunLoopRun()
 }
 if arguments.dropFirst().contains(where: { $0.hasPrefix("--") }) {
     NativeHookRuntime.diagnostic("unknown option")

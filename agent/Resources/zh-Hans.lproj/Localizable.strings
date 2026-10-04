@@ -4,6 +4,8 @@
 "Finished after %.0fm %.0fs" = "耗时 %.0f 分 %.0f 秒";
 "Claude is waiting for you" = "Claude 在等你";
 "Go to tab" = "回到标签页";
+"Test notification" = "测试通知";
+"Tasks that run 3 minutes or longer notify you like this." = "运行 3 分钟及以上的任务结束时，会这样通知你。";
 
 /* 菜单栏。 */
 "Notification Settings…" = "通知设置…";

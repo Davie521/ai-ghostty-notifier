@@ -1,5 +1,6 @@
 #!/bin/bash
-# Bootstrap only. JSON, process/TTY inspection and all policy live in Swift.
+# Bootstrap only. JSON, process/TTY inspection and all policy live in Swift,
+# except telling the user when that Swift is missing.
 # Sourced by the stable entry filenames so existing hook trust stays valid.
 
 GHOSTTY_NOTIFY_HOOKS_DIR="$(cd -- "${BASH_SOURCE[0]%/*}" && pwd)"
@@ -35,9 +36,36 @@ done
 if [[ -n "$native_app" ]]; then
     exec "$native_app/Contents/MacOS/ghostty-notify-agent" "$@"
 fi
+# A hook's stderr reaches only Claude Code's debug log when it exits 0, so on
+# its own this failure is silent: a plugin installed without the app does
+# nothing and says nothing. Claude's first prompt in each session says it
+# instead, through the systemMessage the CLI shows to the user. Not while the
+# app is being reinstalled: that ends by itself.
+native_warn=""
+if [[ -z "$native_problem" && "${2:-}" == claude && "${3:-}" == UserPromptSubmit ]]; then
+    native_warn=1
+fi
+native_session=""
 # Drain even on failure so the CLI never gets EPIPE. No jq or quiet fallback.
 if [[ ! -t 0 ]]; then
-    while IFS= read -r native_line || [[ -n "$native_line" ]]; do :; done
+    while IFS= read -r native_line || [[ -n "$native_line" ]]; do
+        if [[ -n "$native_warn" && -z "$native_session" &&
+            "$native_line" =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([0-9A-Fa-f-]+)\" ]]; then
+            native_session="${BASH_REMATCH[1]}"
+        fi
+    done
 fi
 printf 'ghostty-notify: %s.\n' "${native_problem:-native runtime missing or too old; build and install ClaudeGhosttyNotify.app}" >&2
+if [[ -n "$native_warn" && -n "$native_session" ]]; then
+    # Once per session: an empty directory per session id, made atomically,
+    # under a private directory the system clears by itself.
+    native_seen="${TMPDIR:-/tmp}/ai-ghostty-notifier-$UID"
+    if { /bin/mkdir -m 700 "$native_seen" 2>/dev/null || [[ -d "$native_seen" ]]; } &&
+        [[ -O "$native_seen" && ! -L "$native_seen" ]] &&
+        /bin/mkdir "$native_seen/$native_session" 2>/dev/null; then
+        native_state="is not installed"
+        [[ -d "$native_installed" ]] && native_state="is too old for this plugin"
+        printf '{"systemMessage": "ai-ghostty-notifier: its companion app %s, so no notifications will appear. Install it with: curl -fsSL https://github.com/Davie521/ai-ghostty-notifier/releases/latest/download/setup.sh | bash"}\n' "$native_state"
+    fi
+fi
 exit 0

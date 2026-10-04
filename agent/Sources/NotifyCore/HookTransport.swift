@@ -11,7 +11,10 @@ public enum AtomicSpool {
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory)
     }
 
-    public static func write(_ data: Data, to directory: String) throws {
+    /// Returns the published path. The agent removes a request once it has
+    /// read it, so a writer can tell when its request was taken.
+    @discardableResult
+    public static func write(_ data: Data, to directory: String) throws -> String {
         guard !data.isEmpty else { throw RequestDecodeError.missingField("request") }
         try prepareDirectory(directory)
         let name =
@@ -29,6 +32,7 @@ public enum AtomicSpool {
         try output.write(contentsOf: data)
         try output.close()
         try FileManager.default.moveItem(at: temporary, to: final)
+        return final.path
     }
 }
 
@@ -66,7 +70,8 @@ public struct HookTransport: Sendable {
         return acceptsHookEvents
             && DiskRoundJournal.read(paths.root + "/native-hook-ready") == "native-hook-v1:\(pid)"
     }
-    public func queue(_ request: AgentRequest) throws {
+    @discardableResult
+    public func queue(_ request: AgentRequest) throws -> String {
         try AtomicSpool.write(RequestCodec.encode(request), to: paths.spool)
     }
     public static func application(event: HookEvent, home: String) -> String? {

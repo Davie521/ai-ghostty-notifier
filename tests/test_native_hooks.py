@@ -80,7 +80,7 @@ class NativeHookTests(unittest.TestCase):
         base = self.root / ("codex-home" if source == "codex" else ".claude")
         return base / "notifications/ghostty-sessions"
 
-    def invoke(self, event, source="claude", payload=None, env=None, owner=True):
+    def invoke(self, event, source="claude", payload=None, env=None, owner=True, stdout=""):
         entry = {"PreToolUse": "ghostty-tab-save.sh", "UserPromptSubmit": "ghostty-round-reset.sh"}.get(event, "ghostty-notify.sh")
         command = ["/bin/bash", str(self.hooks / ("codex-hook.sh" if source == "codex" else entry))]
         if source == "codex": command.append(event)
@@ -89,7 +89,8 @@ class NativeHookTests(unittest.TestCase):
         result = subprocess.run(command, input=data if isinstance(data, str) else json.dumps(data), text=True,
                                 capture_output=True, env={**self.env, **(env or {})}, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, "")
+        if stdout is not None:
+            self.assertEqual(result.stdout, stdout)
         return result
 
     def fixture_processes(self):
@@ -220,6 +221,46 @@ class NativeHookTests(unittest.TestCase):
                              env={"GHOSTTY_NOTIFY_NATIVE_APP": str(self.root / "missing.app")})
         self.assertIn("native runtime missing", result.stderr)
         self.assertFalse(self.state().exists())
+
+    def missing_app(self):
+        # A private TMPDIR: the once-per-session marker lives there, and one
+        # left by an earlier run would silence the first prompt of this one.
+        temporary = self.root / "tmp"
+        temporary.mkdir(exist_ok=True)
+        return {"GHOSTTY_NOTIFY_NATIVE_APP": str(self.root / "missing.app"), "TMPDIR": str(temporary)}
+
+    def prompt(self, session):
+        return {"session_id": session, "hook_event_name": "UserPromptSubmit", "prompt": "hi"}
+
+    def test_a_missing_app_is_shown_to_the_user_once_per_session(self):
+        env = self.missing_app()
+        first = self.invoke("UserPromptSubmit", payload=self.prompt(SID), env=env, stdout=None)
+        message = json.loads(first.stdout)["systemMessage"]
+        self.assertIn("is not installed", message)
+        self.assertIn("releases/latest/download/setup.sh | bash", message)
+        self.assertIn("native runtime missing", first.stderr)
+        self.invoke("UserPromptSubmit", payload=self.prompt(SID), env=env)
+        other = self.invoke("UserPromptSubmit", payload=self.prompt("abcdef-0001"), env=env, stdout=None)
+        self.assertIn("systemMessage", json.loads(other.stdout))
+        # Only Claude's prompt speaks: a tool hook's stdout is a decision, and
+        # Codex reads its hooks' output differently.
+        for event in ("PreToolUse", "Stop", "Notification"):
+            self.invoke(event, payload={"session_id": "abcdef-0002", "hook_event_name": event}, env=env)
+        self.invoke("UserPromptSubmit", source="codex", payload=self.prompt("abcdef-0003"), env=env)
+        self.assertFalse(self.state().exists())
+
+    def test_an_app_too_old_for_the_plugin_says_so(self):
+        installed = self.root / "Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app"
+        (installed / "Contents/MacOS").mkdir(parents=True)
+        result = self.invoke("UserPromptSubmit", payload=self.prompt(SID), env=self.missing_app(), stdout=None)
+        self.assertIn("is too old for this plugin", json.loads(result.stdout)["systemMessage"])
+
+    def test_a_reinstall_in_progress_is_not_reported_as_missing(self):
+        directory = self.root / "Library/Application Support/claude-ghostty-notify"
+        directory.mkdir(parents=True)
+        (directory / ".admission-closed").touch()
+        result = self.invoke("UserPromptSubmit", payload=self.prompt(SID), env=self.missing_app())
+        self.assertIn("being reinstalled", result.stderr)
 
     def test_pretool_is_synchronous_and_repeated_tools_keep_the_start(self):
         self.invoke("UserPromptSubmit")
