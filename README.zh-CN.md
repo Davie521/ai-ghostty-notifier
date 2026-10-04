@@ -5,7 +5,7 @@
 <h1 align="center">ai-ghostty-notifier</h1>
 
 <p align="center">
-  <b>Claude Code 或 Codex CLI 的长任务跑完了 —— macOS 弹一条通知，点一下就回到跑它的那个 Ghostty 标签页。</b>
+  <b>Ghostty 里跑的 Claude Code、Codex CLI 长任务，一结束就告诉你；短任务从不打扰。点一下，回到那个标签页。</b>
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
 <p align="center"><a href="README.md">English</a> · <a href="README.zh-CN.md">中文</a></p>
 
 <p align="center">
-  <img src="docs/assets/demo.zh-CN.gif" alt="演示：20 秒的小任务，Claude Code 自带通知一分钟后照样响铃；用这个工具，短任务不打扰，12 分钟的任务一跑完就通知，点「回到标签页」在三个标签页里正好落在那一个，菜单栏列着还在等你的会话。" width="800">
+  <img src="docs/assets/demo.gif" alt="演示（英文界面）。自带通知：20 秒的小任务跑完，一分钟后 Claude Code 照样响铃提醒。用 ai-ghostty-notifier：再跑一个 20 秒的任务，一分钟后什么也没有。长任务：跑了 12 分钟，一结束就弹出带声音的通知；点 Go to tab，在三个标签页里正好回到那个会话；菜单栏列着一个还在等你的 Codex 会话。" width="800">
 </p>
 
 丢一个长任务给它跑，切去浏览器，然后就忘了。任务结束时弹一条通知，告诉你是哪个
@@ -36,7 +36,29 @@
   过期。
 - **菜单栏列表**：哪些会话在等你。
 - **说你的语言。** 通知和菜单栏有英文和简体中文，跟随 macOS 的语言设置。
-- **不多装东西。** 不需要 Node，没有遥测，不要辅助功能权限。
+- **不多装东西。** 不需要 Node，没有遥测，不联网，不要辅助功能权限。用 Developer ID
+  签名，并经过 Apple 公证。
+
+## 为什么不用自带的通知？
+
+Claude Code 在 Ghostty 里本来就会发通知，点它也能回到对应的标签页。区别在于什么时候
+告诉你、多常打扰你：
+
+| | 自带通知 | ai-ghostty-notifier |
+| --- | --- | --- |
+| **什么时候** | 每次回答结束约一分钟后，前提是你一直没打字 | 任务一结束就通知，而且只针对跑满 3 分钟的任务 |
+| **声音** | 每次都响 | 少于 10 分钟不响 |
+| **写了什么** | "Claude is waiting for your input" | 会话、项目，以及「耗时 12 分 4 秒」 |
+| **Codex CLI** | 各发各的 | 和 Claude Code 一样的通知 |
+| **谁还在等你** | — | 菜单栏列出等你的会话 |
+| **什么时候消失** | 你切到那个标签页时 | 另外在你提下一个问题时，或者 20 分钟后 |
+
+两者同时存在，所以默认情况下，一个长任务可能弹出两条横幅：结束时本工具一条；如果你
+一直没打字，一分钟后 Claude Code 自己再来一条。想只留一条，在 `~/.claude/settings.json`
+里加上 `"preferredNotifChannel": "terminal_bell"`。之后 Claude Code 自己的提醒（包括
+权限确认）改成终端响铃：在 Ghostty 里默认是 Dock 图标跳一下、标签页标题前多一个 🔔；
+设成 `"notifications_disabled"` 则全部关掉。Codex CLI 那边重复的「回合结束」提醒，
+安装器已经替你关掉了。
 
 ## 安装
 
@@ -72,7 +94,9 @@ agent 会从 release 安装，装不了才从源码构建，并且每一步都�
 [配置](docs/reference.zh-CN.md#配置) ·
 [原理](docs/reference.zh-CN.md#原理) ·
 [排查与局限](docs/reference.zh-CN.md#排查与局限) ·
-[卸载](docs/reference.zh-CN.md#卸载)
+[卸载](docs/reference.zh-CN.md#卸载) ·
+[更新日志](CHANGELOG.md)（英文） ·
+[贡献指南](CONTRIBUTING.md)（英文）
 
 ## 致谢与许可证
 

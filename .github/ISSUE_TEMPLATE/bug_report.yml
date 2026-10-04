@@ -1,0 +1,76 @@
+name: Bug report
+description: A notification that does not come, lands on the wrong tab, or an install that fails.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        By default a task notifies only when it ran for 3 minutes or more; that is by design. To check that an install works, run:
+
+        ```bash
+        "$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --test
+        ```
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start Claude Code in a Ghostty tab
+        2. Run a task that takes 4 minutes, and switch to another app
+        3. ...
+  - type: dropdown
+    id: cli
+    attributes:
+      label: CLI
+      options:
+        - Claude Code
+        - Codex CLI
+        - Both
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installed with
+      options:
+        - setup.sh (the curl command)
+        - The agent prompt
+        - From source
+        - The Claude Code plugin
+    validations:
+      required: true
+  - type: textarea
+    id: test
+    attributes:
+      label: Output of --test
+      description: The command at the top of this form.
+      render: text
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions
+      description: |
+        Paste what these print:
+
+        ```bash
+        sw_vers -productVersion
+        defaults read "$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/Info" CFBundleShortVersionString
+        /Applications/Ghostty.app/Contents/MacOS/ghostty +version | head -1
+        claude --version; codex --version
+        ```
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Agent log
+      description: |
+        `tail -n 40 ~/.claude/notifications/ghostty-agent/agent.log`. It names your sessions and project folders; edit out anything private.
+      render: text

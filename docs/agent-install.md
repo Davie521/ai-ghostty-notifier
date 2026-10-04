@@ -186,6 +186,15 @@ the install is not finished until they are done:
 Tell them too that tasks under 3 minutes never notify, so a quick prompt to try
 it shows nothing. That is the design, not a fault.
 
+One choice is theirs to make. Claude Code keeps sending its own desktop
+notification about a minute after a reply they haven't typed after, so a long
+run can bring two banners. Ask whether Claude Code's own alerts, permission
+prompts included, should ring the terminal bell instead: in Ghostty, by
+default, the Dock icon bounces once and 🔔 goes in the tab title. If they say
+yes, back up `settings.json`, merge `"preferredNotifChannel": "terminal_bell"`
+into it without touching any other key, and prove it still parses (the
+`json.tool` check in step 2).
+
 ## 5. Verify
 
 What you can check yourself:
