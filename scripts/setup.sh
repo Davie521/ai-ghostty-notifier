@@ -162,8 +162,16 @@ main() {
     # asked for notification permission and recorded the answer; the agent
     # recorded the alert style it found. Both are per user, not per config dir.
     local state="$HOME/.claude/notifications/ghostty-agent" answer style n=1
+    local agent_bin="$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent"
     answer=$(cat "$state/ready" 2>/dev/null || true)
     style=$(cat "$state/alert-style" 2>/dev/null || true)
+    # Proof that delivery works, while the user is still at the screen: a task
+    # under the minimum duration never notifies, so the quick prompt people
+    # send to try an install would otherwise get nothing and look broken.
+    if [[ -z "$start_flag" && "$answer" == authorized ]]; then
+        step "Sending a test notification"
+        "$agent_bin" --test </dev/null 2>&1 | sed 's/^/    /' || true
+    fi
     echo
     echo "─────────────────────────────────────────────────────────"
     echo "Installed. What only you can do:"
@@ -186,6 +194,10 @@ main() {
         echo "  $n. Start Codex in Ghostty, run /hooks and trust the new entries."
     fi
     echo "  Then restart the Claude Code / Codex sessions you already have open."
+    echo
+    echo "Only tasks that run 3 minutes or longer notify you, so a quick prompt to"
+    echo "try it gets nothing. To check the install at any time:"
+    echo "  \"$agent_bin\" --test"
     echo
     echo "To remove the App later, run the same command with --uninstall:"
     echo "  curl -fsSL https://github.com/$repo_slug/releases/latest/download/setup.sh | bash -s -- --uninstall"

@@ -225,6 +225,11 @@ class ReleaseSetupTests(unittest.TestCase):
         self.assertEqual(self.settings.read_text(), self.original_settings)
 
     def test_installs_the_app_and_claude_hooks_from_a_release(self):
+        # An earlier install's permission answer is still on disk. --no-start
+        # starts no agent, so it must not try to send a test through one.
+        state = self.home / ".claude/notifications/ghostty-agent"
+        state.mkdir(parents=True)
+        (state / "ready").write_text("authorized\n")
         result = self.setup_sh("--no-start", "--claude", "--no-codex", "--allow-unnotarized")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(self.app)], check=True)
@@ -234,6 +239,11 @@ class ReleaseSetupTests(unittest.TestCase):
         self.assertEqual(settings["model"], "opus")
         self.assertEqual(sorted(settings["hooks"]), EVENTS)
         self.assertIn("What only you can do", result.stdout)
+        # A quick prompt never notifies; the summary says so, and how to check.
+        self.assertIn("3 minutes or longer", result.stdout)
+        self.assertIn(f'"{self.app}/{EXECUTABLE}" --test', result.stdout)
+        # With --no-start there is no agent to send a test through.
+        self.assertNotIn("Sending a test notification", result.stdout)
         # One list of next steps, not install.sh's as well.
         self.assertEqual(result.stdout.count("Next steps:"), 0)
         # The way out is this script's own, not a checkout the user does not have.

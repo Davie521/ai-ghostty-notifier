@@ -18,7 +18,7 @@
 <p align="center"><a href="README.md">English</a> · <a href="README.zh-CN.md">中文</a></p>
 
 <p align="center">
-  <img src="docs/assets/notification.png" alt="一条真实通知：Claude，200-second timer test — my-app，Finished after 3m 24s" width="344">
+  <img src="docs/assets/demo.zh-CN.gif" alt="演示：20 秒的小任务，Claude Code 自带通知一分钟后照样响铃；用这个工具，短任务不打扰，12 分钟的任务一跑完就通知，点「回到标签页」在三个标签页里正好落在那一个，菜单栏列着还在等你的会话。" width="800">
 </p>
 
 丢一个长任务给它跑，切去浏览器，然后就忘了。任务结束时弹一条通知，告诉你是哪个
@@ -59,6 +59,9 @@ agent 会从 release 安装，装不了才从源码构建，并且每一步都�
 [docs/agent-install.md](docs/agent-install.md) 是写给它执行的英文说明，你不用读。
 两种方式都有两件事留给你：在系统设置里允许通知和自动化权限，以及重启已经开着的 CLI 会话。
 
+装完随手发一条短 prompt 是看不到通知的：3 分钟以内的任务本来就不通知。所以安装的最后会发一条测试通知；
+以后想再检查，[一条命令](docs/reference.zh-CN.md#4-授权并重启-cli)就能再发一次。
+
 **需要：** macOS 13 或更新、支持 AppleScript 的 [Ghostty](https://ghostty.org)，
 以及 Claude Code 或 Codex CLI。Swift 6 工具链只在从源码构建时才需要。
 
@@ -74,7 +77,7 @@ agent 会从 release 安装，装不了才从源码构建，并且每一步都�
 ## 致谢与许可证
 
 灵感来自 Claude Code 通知生态，包括
-[claude-code-notifier](https://github.com/kovoor/claude-code-notifier) 中讨论的 TTY 标记思路。
+[claude-code-opencode-notifier](https://github.com/kovoor/claude-code-opencode-notifier) 中讨论的 TTY 标记思路。
 
 [MIT 加 Commons Clause](LICENSE)。在哪里用都可以，工作中也可以；可以修改，也可以分享你的修改。
 不可以的是出售它，或者出售价值全部或主要来自它的产品或服务；收费托管、咨询、支持都算出售。

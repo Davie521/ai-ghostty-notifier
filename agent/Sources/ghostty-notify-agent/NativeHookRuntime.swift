@@ -105,11 +105,11 @@ enum NativeHookRuntime {
                         transport.runningPID != nil
                     else { return }
                     if let tab {
-                        try? transport.queue(
+                        _ = try? transport.queue(
                             .anchor(sessionID: event.sessionID, tabID: tab, source: event.source))
                     }
                     if event.options.clearOnFocus {
-                        try? transport.queue(
+                        _ = try? transport.queue(
                             .dismiss(sessionID: event.sessionID, source: event.source))
                     }
                 },

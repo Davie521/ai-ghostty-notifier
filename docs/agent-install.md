@@ -183,6 +183,9 @@ the install is not finished until they are done:
 5. Restart every Claude Code / Codex session that is already open, including the
    one you are running in. Hook registrations load at session start.
 
+Tell them too that tasks under 3 minutes never notify, so a quick prompt to try
+it shows nothing. That is the design, not a fault.
+
 ## 5. Verify
 
 What you can check yourself:
@@ -194,10 +197,25 @@ python3 -m json.tool ~/.codex/hooks.json > /dev/null   # only if Codex was wired
 launchctl list | grep io.github.davie521.cgnotify || true   # the resident service, when started
 ```
 
-What proves it actually works, and only the user can see: after restarting a
-session, run something that takes more than three minutes, switch away from
-Ghostty, and wait for the banner. Clicking **Go to tab** has to land on that
-session's own tab. Ask them to tell you what happened.
+Then, unless you installed with `--no-start`, send a test notification through
+the installed app:
+
+```bash
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --test
+```
+
+It must print `Sent a test notification`. Anything else names the problem (the
+agent is not running, notifications are not allowed) and exits 1: stop and
+report it. A release install already sent one at its end; another one replaces
+it. A `--no-start` install has no resident for it to go through, so `--test`
+always fails there; skip it, and leave the proof to the long task below.
+
+What only the user can see: whether that banner appeared, titled
+**AI Ghostty Notifier**, and whether its **Go to tab** brings back the tab that
+was in front when you ran it, which is yours if they are watching you. Ask
+them. The full proof comes after they restart their sessions: a task that runs
+longer than three minutes, with them switched away from Ghostty, has to end in a
+banner whose **Go to tab** lands on that session's own tab.
 
 Do **not** run `tests/test-live-binding.sh` or `tests/test-live-worker.py` in
 your own tab. They use a tab's title as their fixture, and a working CLI rewrites

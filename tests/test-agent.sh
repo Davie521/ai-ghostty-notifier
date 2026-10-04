@@ -76,7 +76,7 @@ cleanup() {
     # inside cleanup.
     if [[ -n "$AGENT_PID" ]] && kill -0 "$AGENT_PID" 2>/dev/null &&
         command -v agent_queue >/dev/null 2>&1; then
-        for sid in "${SID:-}" "${OTHER:-}" "${NATIVE_SID:-}" "${EXPIRING:-}" "${KEPT:-}"; do
+        for sid in "${SID:-}" "${OTHER:-}" "${NATIVE_SID:-}" "${EXPIRING:-}" "${KEPT:-}" "${TEST_SID:-}"; do
             [[ -n "$sid" ]] || continue
             agent_queue "$(jq -nc --arg s "$sid" '{type:"dismiss",session_id:$s}')" \
                 2>/dev/null || true
@@ -152,6 +152,7 @@ wait_for() {
 
 
 log_has() { grep -qF "$1" "$LOG" 2>/dev/null; }
+not() { ! "$@"; }
 state_outstanding() {
     # Prints the outstanding notification ids for a session, comma-joined.
     jq -r --arg s "$1" '(.sessions[$s].notificationIDs // []) | join(",")' \
@@ -172,6 +173,14 @@ OTHER="deadbeef-9999"
 NATIVE_SID="deadbeef-2222-3333"
 EXPIRING="deadbeef-4444"
 KEPT="deadbeef-5555"
+TEST_SID="00000000-0000-0000-0000-000000007e57"  # TestNotification.sessionID
+
+# ── 0. --test with no agent says so instead of queueing into the void ──────
+selftest() { "$BIN" --test >"$SANDBOX/selftest.out" 2>&1; }
+selftest_says() { grep -qF "$1" "$SANDBOX/selftest.out"; }
+check "--test fails while no agent is running" not selftest
+check "and says the agent is not running" selftest_says "The agent is not running"
+check "and queues nothing" test ! -e "$ROOT/spool"
 
 # ── 1. Three start together, one stays, and it claims its pidfile ──────────
 # launchd and `open -a` can start the agent at the same moment, and two of them
@@ -234,7 +243,29 @@ if wait_for 10 test -s "$ROOT/ready"; then
 else
     printf '  \033[36mINFO\033[0m  no authorization answer (nobody here can answer the prompt)\n'
 fi
+# ── 2b. --test: refused without permission, posted through the spool with it
+# Not `// "none"`: jq's alternative operator treats false as missing too.
+test_session() { jq -r --arg s "$TEST_SID" ".sessions[\$s].$1 | if . == null then \"none\" else tostring end" "$STATE" 2>/dev/null; }
+test_kept() { [[ "$(test_session clearOnFocus)" == false ]]; }
+test_expires() { [[ "$(test_session expiresAt)" =~ ^[0-9.]+$ ]]; }
+printf 'denied\n' > "$ROOT/ready"
+check "--test fails while notifications are not allowed" not selftest
+check "and points at System Settings" selftest_says "System Settings → Notifications"
 printf 'authorized\n' > "$ROOT/ready"
+# An earlier test bound to a tab. Every test shares one session id, so a test
+# that finds no tab of its own must not inherit that one.
+agent_queue "$(jq -nc --arg s "$TEST_SID" '{type:"notify",session_id:$s,title:"earlier test",tab_id:"EARLIER-TAB",owner:"test-earlier"}')"
+earlier_bound() { [[ "$(test_session tabID)" == EARLIER-TAB ]]; }
+check "(an earlier test is bound to a tab)" wait_for 10 earlier_bound
+posts() { grep -cF "posted claude-$TEST_SID" "$LOG" 2>/dev/null; }
+POSTS_BEFORE=$(posts)
+posted_again() { [[ "$(posts)" -gt "$POSTS_BEFORE" ]]; }
+check "--test succeeds once the agent may post" selftest
+check "and reports what it sent" selftest_says "Sent a test notification"
+check "the agent posts it under the fixed test session" wait_for 10 posted_again
+check "it is kept on screen rather than cleared by focus" wait_for 10 test_kept
+check "it expires by itself" wait_for 10 test_expires
+check "it does not inherit the earlier test's tab" not earlier_bound
 
 # ── 3. notify records a stable identifier ──────────────────────────────────
 agent_queue "$(jq -nc --arg s "$SID" \

@@ -18,7 +18,7 @@
 <p align="center"><a href="README.md">English</a> · <a href="README.zh-CN.md">中文</a></p>
 
 <p align="center">
-  <img src="docs/assets/notification.png" alt="A real notification from this tool: Claude, 200-second timer test — my-app, Finished after 3m 24s" width="344">
+  <img src="docs/assets/demo.gif" alt="Demo: a 20-second task still gets Claude Code's built-in alert a minute later, with sound. With this tool short tasks stay quiet; a 12-minute task notifies the moment it finishes, Go to tab lands on that session's tab out of three, and the menu bar lists the sessions still waiting." width="800">
 </p>
 
 You start a long task, switch to the browser, and forget about it. When it
@@ -65,6 +65,11 @@ checks every step ([what it follows](docs/agent-install.md)). Either way, two
 things stay with you: allowing the notification and Automation permissions, and
 restarting the CLI sessions you already have open.
 
+A quick prompt to try it shows nothing, because tasks under 3 minutes never
+notify. The installer ends with a test notification instead, and
+[one command](docs/reference.md#4-permissions-and-restart) sends another
+whenever you want to check.
+
 **Requirements:** macOS 13 or later, [Ghostty](https://ghostty.org) with
 AppleScript support, and Claude Code or Codex CLI. A Swift 6 toolchain is
 needed only to build from source.
@@ -81,7 +86,7 @@ needed only to build from source.
 ## Credits and license
 
 Inspired by the Claude Code notification ecosystem, including the TTY-marker
-idea discussed in [claude-code-notifier](https://github.com/kovoor/claude-code-notifier).
+idea discussed in [claude-code-opencode-notifier](https://github.com/kovoor/claude-code-opencode-notifier).
 
 [MIT with the Commons Clause](LICENSE). Use it anywhere, at work included,
 change it and share your changes. What you may not do is sell it, or sell a

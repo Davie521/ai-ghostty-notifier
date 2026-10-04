@@ -75,7 +75,8 @@ bash install.sh --register-settings
 ```
 
 手动安装和插件注册二选一，避免重复通知。要测试本地 checkout 就用手动安装：
-marketplace 提供的是最近发布的版本，不是你的工作副本。
+marketplace 提供的是最近发布的版本，不是你的工作副本。没装 App 时插件发不了通知，
+每个会话的第一条 prompt 会提示这一点，并给出安装命令。
 
 ### 3. 注册 Codex CLI hook（需要时）
 
@@ -109,6 +110,17 @@ python3 scripts/install-codex.py
 菜单栏可以查看 App 的授权状态和提醒样式（能在系统设置里修的问题点一下直接跳过去），
 并列出等你处理的会话，点一条就跳到对应标签页。
 
+耗时不到阈值（默认 3 分钟）的任务不会通知，所以随手发一条短 prompt 什么也看不到。
+要检查安装是否正常，可以让常驻 App 发一条测试通知：
+
+```bash
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --test
+```
+
+点它的**回到标签页**，会回到你运行命令时在前台的那个标签页；两分钟后它会自动撤回。
+发不出去时会说明原因（agent 没在运行、没有通知权限），并以 1 退出。
+`setup.sh` 在安装的最后会发一条。
+
 ### 只安装原生程序，不启动常驻服务
 
 App 必装，不等于常驻进程必须一直开着：
@@ -120,7 +132,8 @@ bash scripts/install-agent.sh --no-start
 
 这只复制、校验 App，不启动 LaunchAgent、不注册 LaunchServices、不弹权限窗口。
 如果已经安装 LaunchAgent，或仍有常驻进程运行（包括手动启动的 App），它会拒绝
-这个选项；请运行普通安装命令完成升级。
+这个选项；请运行普通安装命令完成升级。`--test` 要经过常驻进程，所以这种装法下
+它只会报告 agent 没在运行；要验证，就跑一个超过耗时阈值的任务。
 
 希望常驻进程不可用时仍能显示通知，可安装 `terminal-notifier`：
 `brew install terminal-notifier`。它没有点击跳转、聚焦监视或自动过期，下一次提问清除通知。
@@ -263,7 +276,8 @@ JSON 解析、状态文件、锁、进程看守和终端恢复逻辑。只把常
 
 ## 排查与局限
 
-- **没有通知：** 检查必需 App 是否存在、耗时阈值、hook 注册/信任、通知授权和专注模式。
+- **没有通知：** 先发一条测试通知（见[第 4 步](#4-授权并重启-cli)）。收到了，说明 App
+  和通知授权没问题，再查耗时阈值和 hook 注册/信任；没收到，它会说明原因，同时检查专注模式。
   运行时诊断写到 hook stderr；常驻状态与日志在
   `~/.claude/notifications/ghostty-agent/`。Claude 会话记录在
   `~/.claude/notifications/ghostty-sessions/`，Codex 使用自己的 `notifications/` 目录。

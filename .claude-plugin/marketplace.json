@@ -4,6 +4,7 @@
     "name": "Davie521",
     "url": "https://github.com/Davie521"
   },
+  "description": "Notifications for long Claude Code and Codex CLI runs in Ghostty, with a button that brings back the session's tab. Needs its companion macOS app.",
   "plugins": [
     {
       "name": "ai-ghostty-notifier",
