@@ -280,6 +280,23 @@ class ReleaseSetupTests(unittest.TestCase):
         self.assertEqual(self.settings.read_text(), self.original_settings)
         self.assertFalse((self.home / ".claude/hooks").exists())
 
+    def test_the_duplicate_warning_reads_the_selected_config_dirs_global_config(self):
+        # With CLAUDE_CONFIG_DIR set, Claude Code keeps its global config in
+        # that directory, not in ~/.claude.json. The default profile's choice
+        # says nothing about the selected one's.
+        other = self.home / ".claude-b"
+        other.mkdir()
+        self.env["CLAUDE_CONFIG_DIR"] = str(other)
+        (self.home / ".claude.json").write_text(json.dumps({"preferredNotifChannel": "terminal_bell"}))
+        (other / ".claude.json").write_text(json.dumps({"preferredNotifChannel": "auto"}))
+        result = self.setup_sh("--no-start", "--claude", "--no-codex", "--allow-unnotarized")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('"preferredNotifChannel": "terminal_bell"', result.stdout)
+        self.assertIn(str(other / "settings.json"), result.stdout)
+        (other / ".claude.json").write_text(json.dumps({"preferredNotifChannel": "terminal_bell"}))
+        result = self.setup_sh("--no-start", "--claude", "--no-codex", "--allow-unnotarized")
+        self.assertNotIn("preferredNotifChannel", result.stdout)
+
     def test_a_pinned_version_uses_its_own_download_path(self):
         (self.release / "latest").rename(self.root / "latest-moved")
         self.addCleanup(lambda: (self.root / "latest-moved").rename(self.release / "latest"))

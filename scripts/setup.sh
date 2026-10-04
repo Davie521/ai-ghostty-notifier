@@ -135,7 +135,7 @@ main() {
         GHOSTTY_NOTIFY_FROM_SETUP=1 bash "$dist/install.sh" --register-settings </dev/null
         # Claude Code's own desktop notification runs alongside these hooks,
         # about a minute after every reply, unless its channel says otherwise.
-        case "$(claude_channel "$claude_dir")" in
+        case "$(claude_channel "$claude_dir" "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json")" in
             terminal_bell | notifications_disabled) ;;
             *) claude_doubled=1 ;;
         esac
@@ -268,12 +268,14 @@ uninstall_app() {
     echo "then restart open Claude Code / Codex sessions."
 }
 
-# The channel Claude Code alerts through, from settings.json and then the
-# global config; empty when neither sets one. plutil reads JSON as it is, so
-# this needs no Python, and an unreadable file only means "not set".
+# The channel Claude Code alerts through: from <config dir>/settings.json, then
+# the global config ($2), which is ~/.claude.json, or .claude.json inside
+# CLAUDE_CONFIG_DIR when that is set. Empty when neither sets one. plutil reads
+# JSON as it is, so this needs no Python, and an unreadable file only means
+# "not set".
 claude_channel() {
     local file value
-    for file in "$1/settings.json" "$HOME/.claude.json"; do
+    for file in "$1/settings.json" "$2"; do
         value=$(plutil -extract preferredNotifChannel raw -o - "$file" 2>/dev/null </dev/null) || continue
         printf '%s\n' "$value"
         return 0

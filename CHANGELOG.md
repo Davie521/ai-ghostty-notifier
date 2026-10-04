@@ -3,6 +3,23 @@
 What changed in each release. The one-command installer always fetches the
 latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-notifier/releases).
 
+## Unreleased
+
+### Added
+
+- The installer's summary says when Claude Code's own notification would come
+  on top of this one, and names the setting that turns it into a terminal bell
+  (#54).
+
+### Fixed
+
+- Installing unregisters every other copy of the app that macOS knows, such as
+  one in the Trash, and lists those still on disk; uninstalling unregisters
+  them all. Before, macOS could show an old icon, or start an old copy on a
+  click (#50, #54).
+- The install summary and the troubleshooting docs say that a notch can hide
+  the menu bar icon (#49, #54).
+
 ## 0.6.0 — 2026-10-04
 
 ### Added
