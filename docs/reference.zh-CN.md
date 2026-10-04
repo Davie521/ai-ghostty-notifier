@@ -132,7 +132,8 @@ bash scripts/install-agent.sh --no-start
 
 这只复制、校验 App，不启动 LaunchAgent、不注册 LaunchServices、不弹权限窗口。
 如果已经安装 LaunchAgent，或仍有常驻进程运行（包括手动启动的 App），它会拒绝
-这个选项；请运行普通安装命令完成升级。
+这个选项；请运行普通安装命令完成升级。`--test` 要经过常驻进程，所以这种装法下
+它只会报告 agent 没在运行；要验证，就跑一个超过耗时阈值的任务。
 
 希望常驻进程不可用时仍能显示通知，可安装 `terminal-notifier`：
 `brew install terminal-notifier`。它没有点击跳转、聚焦监视或自动过期，下一次提问清除通知。

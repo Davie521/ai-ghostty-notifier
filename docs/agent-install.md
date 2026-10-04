@@ -197,7 +197,8 @@ python3 -m json.tool ~/.codex/hooks.json > /dev/null   # only if Codex was wired
 launchctl list | grep io.github.davie521.cgnotify || true   # the resident service, when started
 ```
 
-Then send a test notification through the installed app:
+Then, unless you installed with `--no-start`, send a test notification through
+the installed app:
 
 ```bash
 "$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --test
@@ -206,7 +207,8 @@ Then send a test notification through the installed app:
 It must print `Sent a test notification`. Anything else names the problem (the
 agent is not running, notifications are not allowed) and exits 1: stop and
 report it. A release install already sent one at its end; another one replaces
-it.
+it. A `--no-start` install has no resident for it to go through, so `--test`
+always fails there; skip it, and leave the proof to the long task below.
 
 What only the user can see: whether that banner appeared, titled
 **AI Ghostty Notifier**, and whether its **Go to tab** brings back the tab that

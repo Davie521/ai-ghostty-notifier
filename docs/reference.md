@@ -153,7 +153,9 @@ bash scripts/install-agent.sh --no-start
 This copies and verifies the app without starting a LaunchAgent, registering
 with LaunchServices or opening permission prompts. It refuses an existing
 LaunchAgent installation or a live resident (including a manually started app);
-use the normal installer to upgrade either safely.
+use the normal installer to upgrade either safely. `--test` goes through the
+resident, so here it only reports that the agent is not running; check with a
+task longer than the minimum duration instead.
 
 Install `terminal-notifier` for display-only fallback when the resident is not
 ready or authorized: `brew install terminal-notifier`. It has no click-to-jump,
