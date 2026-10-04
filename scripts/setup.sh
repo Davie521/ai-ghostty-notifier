@@ -202,10 +202,10 @@ main() {
     echo "  Then restart the Claude Code / Codex sessions you already have open."
     echo
     if [[ $claude_doubled -eq 1 ]]; then
-        echo "Claude Code also sends its own notification, about a minute after every"
-        echo "reply, so a long run can reach you twice. To hear about it once, add"
+        echo "Claude Code also shows its own banner about a minute after a reply you"
+        echo "have not typed after, so a long run can bring two. For one, add"
         echo "  \"preferredNotifChannel\": \"terminal_bell\""
-        echo "to $claude_dir/settings.json; its own alerts then ring the terminal bell."
+        echo "to $claude_dir/settings.json: its own alerts then ring the terminal bell."
         echo
     fi
     echo "The ghost in the menu bar lists the sessions waiting on you. On a Mac with a"
