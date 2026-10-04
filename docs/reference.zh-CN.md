@@ -164,6 +164,8 @@ hook 会读取完 stdin、写明诊断并返回成功，避免阻塞 CLI，但�
 | 3–10 分钟 | 无声通知 |
 | 10 分钟及以上 | 通知 + Glass 提示音 |
 
+<img src="assets/notification.png" alt="一条真实通知：Claude，200-second timer test — my-app，Finished after 3m 24s" width="344">
+
 阈值可以修改（[全部配置项](#配置)）。默认 20 分钟后通知过期；回到会话标签页或提交新提问时会提前清除。
 权限/输入提示默认静默，只有设置 `GHOSTTY_NOTIFY_ON_PROMPT=1` 才开启。
 
@@ -285,7 +287,9 @@ JSON 解析、状态文件、锁、进程看守和终端恢复逻辑。只把常
   外部投递仍需要已安装、已授权的后端；空的 `AGENT_APP` 会禁用启动尝试。
 - **点击只消失、不跳转：** 使用常驻投递。alerter 已退役；terminal-notifier 不接点击跳转，
   因为它的 execute 动作也可能在关闭通知时触发。
-- **重复通知：** 检查是否同时注册了手动和插件 hook，并停用其他完成提醒。
+- **重复通知：** 检查是否同时注册了手动和插件 hook，并停用其他完成提醒。Claude Code
+  自己的桌面通知会在回答结束约一分钟后照常弹出；在 `settings.json` 里设置
+  `"preferredNotifChannel": "terminal_bell"`，把它改成终端响铃。
   ECC 桌面通知已有的关闭项是 `ECC_DISABLED_HOOKS=stop:desktop-notify`。
 - **无法精确定位标签页：** Ghostty 需要 AppleScript 接口和自动化授权；
   tmux、标题动画可能使标记无法往返。失败或歧义绑定会退避/重试并降级为只激活应用；

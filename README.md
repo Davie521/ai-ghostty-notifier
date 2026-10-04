@@ -5,7 +5,7 @@
 <h1 align="center">ai-ghostty-notifier</h1>
 
 <p align="center">
-  <b>A long Claude Code or Codex CLI task just finished — macOS tells you, and one click takes you back to that exact Ghostty tab.</b>
+  <b>Long Claude Code and Codex CLI runs in Ghostty tell you the moment they finish. Short ones never interrupt you. One click brings back the tab.</b>
 </p>
 
 <p align="center">
@@ -18,13 +18,13 @@
 <p align="center"><a href="README.md">English</a> · <a href="README.zh-CN.md">中文</a></p>
 
 <p align="center">
-  <img src="docs/assets/demo.gif" alt="Demo: a 20-second task still gets Claude Code's built-in alert a minute later, with sound. With this tool short tasks stay quiet; a 12-minute task notifies the moment it finishes, Go to tab lands on that session's tab out of three, and the menu bar lists the sessions still waiting." width="800">
+  <img src="docs/assets/demo.gif" alt="Demo. Built in: a 20-second task finishes, and a minute later Claude Code still pings, with sound. With ai-ghostty-notifier: another 20-second task, and a minute later nothing. A long task: the moment it ends, 12 minutes in, a notification with sound; Go to tab brings back that session's tab out of three; the menu bar lists a Codex session still waiting." width="800">
 </p>
 
 You start a long task, switch to the browser, and forget about it. When it
-ends, a notification tells you which session finished and how long it took.
+ends, a notification tells you which session finished and how long it took, and
 **Go to tab** brings that session's tab forward, even with several sessions open
-in the same project.
+in one project.
 
 ## Features
 
@@ -39,7 +39,29 @@ in the same project.
 - **A menu bar list** of the sessions waiting on you.
 - **In your language.** Notifications and the menu bar in English or Simplified
   Chinese, following macOS.
-- **Nothing extra.** No Node, no telemetry, no Accessibility permission.
+- **Nothing extra.** No Node, no telemetry, no network, no Accessibility
+  permission. Signed with a Developer ID and notarized by Apple.
+
+## Why not the built-in notifications?
+
+Claude Code already notifies in Ghostty, and clicking that notification brings
+back its tab. What differs is when you hear about a run, and how often:
+
+| | Built in | ai-ghostty-notifier |
+| --- | --- | --- |
+| **When** | About a minute after every reply, if you haven't typed since | The moment a run ends, and only for runs of 3 minutes or more |
+| **Sound** | Every time | None under 10 minutes |
+| **What it says** | "Claude is waiting for your input" | The session, the project and "Finished after 12m 4s" |
+| **Codex CLI** | Its own alerts | The same notifications as Claude Code |
+| **Still waiting** | — | A menu bar list of the sessions waiting on you |
+| **Goes away** | When you focus that tab | Also when you send the next prompt, or after 20 minutes |
+
+The two run side by side, so out of the box a long run can reach you twice:
+from this app when it ends, and from Claude Code a minute later. To hear about
+it once, add `"preferredNotifChannel": "terminal_bell"` to
+`~/.claude/settings.json`; Claude Code's own alerts, permission prompts
+included, then ring the terminal bell instead. The installer already turns off
+Codex CLI's duplicate turn-complete alert.
 
 ## Install
 
@@ -81,7 +103,9 @@ needed only to build from source.
 [Configuration](docs/reference.md#configuration) ·
 [How it works](docs/reference.md#how-it-works) ·
 [Troubleshooting](docs/reference.md#troubleshooting-and-limits) ·
-[Uninstall](docs/reference.md#uninstall)
+[Uninstall](docs/reference.md#uninstall) ·
+[Changelog](CHANGELOG.md) ·
+[Contributing](CONTRIBUTING.md)
 
 ## Credits and license
 
