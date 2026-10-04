@@ -234,6 +234,11 @@ class ReleaseSetupTests(unittest.TestCase):
         self.assertEqual(settings["model"], "opus")
         self.assertEqual(sorted(settings["hooks"]), EVENTS)
         self.assertIn("What only you can do", result.stdout)
+        # A quick prompt never notifies; the summary says so, and how to check.
+        self.assertIn("3 minutes or longer", result.stdout)
+        self.assertIn(f'"{self.app}/{EXECUTABLE}" --test', result.stdout)
+        # With --no-start there is no agent to send a test through.
+        self.assertNotIn("Sending a test notification", result.stdout)
         # One list of next steps, not install.sh's as well.
         self.assertEqual(result.stdout.count("Next steps:"), 0)
         # The way out is this script's own, not a checkout the user does not have.

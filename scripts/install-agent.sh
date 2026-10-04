@@ -605,6 +605,9 @@ case "$ANSWER" in
         ;;
 esac
 echo
+echo "Only tasks that run 3 minutes or longer notify you. To check the install:"
+echo "  \"$BIN\" --test"
+echo
 echo "If you use Focus modes, add AI Ghostty Notifier to their allowed apps:"
 echo "a Focus that already lets Terminal (an external backend's identity) through"
 echo "still sends this app's alerts straight to Notification Center."
