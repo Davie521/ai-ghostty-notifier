@@ -18,7 +18,7 @@ enum SelfTest {
             fail(TestNotification.explain(problem, app: app))
             return 1
         }
-        let tab = await frontTab()
+        let (tab, target) = await frontTab()
         let file: String
         do {
             file = try transport.queue(.notify(TestNotification.request(tabID: tab)))
@@ -37,19 +37,27 @@ enum SelfTest {
             fail(TestNotification.explain(.notCollected, app: app))
             return 1
         }
-        print(TestNotification.sent(toTab: tab != nil))
+        print(TestNotification.sent(target))
         return 0
     }
 
     /// The tab in front when the test was run: the one typed in, by hand or
     /// from an installer. A coding agent's shell has no terminal of its own to
-    /// mark, and its user is most likely looking at its tab. Nil when Ghostty
-    /// is not in front, or does not answer in time.
-    private static func frontTab() async -> String? {
+    /// mark, and its user is most likely looking at its tab. No tab when
+    /// another app is in front, or when Ghostty does not answer in time.
+    private static func frontTab() async -> (String?, TestNotification.Target) {
         AppleEventHost.prepare()
         let automation = MacTerminalAutomation()
-        guard await automation.isFrontmost() == true else { return nil }
-        return try? await QueryDeadline.run(seconds: 4) { await automation.selectedTabID() }
+        switch await automation.isFrontmost() {
+        case false?: return (nil, .ghosttyNotInFront)
+        case nil: return (nil, .tabUnknown)
+        case true?:
+            let tab = try? await QueryDeadline.run(seconds: 4) {
+                await automation.selectedTabID()
+            }
+            if let tab { return (tab, .tab) }
+            return (nil, .tabUnknown)
+        }
     }
 
     private static func fail(_ message: String) {

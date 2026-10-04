@@ -13,7 +13,13 @@ public enum TestNotification {
     /// Long enough to switch away and try Go to tab; then it withdraws itself.
     public static let timeout: Double = 120
 
-    public static func request(tabID: String?, bundle: Bundle = .main) -> NotifyRequest {
+    /// `run` names this one invocation. The session id is shared by every
+    /// test, so the agent keeps the tab an earlier test was bound to; a new
+    /// owner is what makes it drop that tab, the way a resumed CLI's does,
+    /// rather than send a test that found no tab back to the last one's.
+    public static func request(
+        tabID: String?, run: String = UUID().uuidString, bundle: Bundle = .main
+    ) -> NotifyRequest {
         NotifyRequest(
             sessionID: sessionID,
             title: AgentConstants.displayName,
@@ -26,7 +32,18 @@ public enum TestNotification {
             // Posted while its own tab is in front, which is where it is run
             // from, a clearing one would be withdrawn three seconds later,
             // before anyone could try its button.
-            clearOnFocus: false)
+            clearOnFocus: false,
+            owner: "test-" + run)
+    }
+
+    /// Where Go to tab will lead, as far as the test could tell.
+    public enum Target: Equatable, Sendable {
+        case tab
+        /// Another app was in front, so there was no tab to ask about.
+        case ghosttyNotInFront
+        /// Ghostty was in front, or may have been, but did not say which tab:
+        /// no Automation permission, or no answer in time.
+        case tabUnknown
     }
 
     public enum Problem: Equatable, Sendable {
@@ -76,13 +93,22 @@ public enum TestNotification {
         }
     }
 
-    public static func sent(toTab: Bool) -> String {
-        let target =
-            toTab
-            ? "Go to tab brings back the tab you ran this from."
-            : "Ghostty was not in front, so Go to tab only brings Ghostty forward."
+    public static func sent(_ target: Target) -> String {
+        let jump: String
+        switch target {
+        case .tab: jump = "Go to tab brings back the tab you ran this from."
+        case .ghosttyNotInFront:
+            jump = "Ghostty was not in front, so Go to tab only brings Ghostty forward."
+        case .tabUnknown:
+            jump = """
+                Ghostty did not say which tab is in front, so Go to tab only brings \
+                Ghostty forward.
+                If you denied this app control of Ghostty: System Settings → Privacy & \
+                Security → Automation.
+                """
+        }
         return """
-            Sent a test notification. \(target)
+            Sent a test notification. \(jump)
             It withdraws itself after two minutes.
             Nothing on screen? Check Focus modes and System Settings → Notifications → \
             \(AgentConstants.displayName).

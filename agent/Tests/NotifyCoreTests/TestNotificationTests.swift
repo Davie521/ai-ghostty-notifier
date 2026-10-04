@@ -27,6 +27,39 @@ import Testing
                 == TestNotification.request(tabID: nil).sessionID)
     }
 
+    /// What the agent does with each request, in Agent.handle(.notify).
+    static func deliver(_ requests: [NotifyRequest]) -> SessionState {
+        var state = SessionState()
+        for request in requests {
+            state.captureOwner(sessionID: request.stateKey, owner: request.owner)
+            state.anchor(sessionID: request.stateKey, tabID: request.tabID, now: 1)
+        }
+        return state
+    }
+
+    @Test func aTestThatFoundNoTabDoesNotGoBackToTheLastOnes() {
+        let state = Self.deliver([
+            TestNotification.request(tabID: "tab-a"), TestNotification.request(tabID: nil),
+        ])
+        #expect(state.sessions[TestNotification.sessionID]?.tabID == nil)
+    }
+
+    @Test func aTestThatFoundATabGoesThere() {
+        let state = Self.deliver([
+            TestNotification.request(tabID: "tab-a"), TestNotification.request(tabID: "tab-b"),
+        ])
+        #expect(state.sessions[TestNotification.sessionID]?.tabID == "tab-b")
+    }
+
+    @Test func theReportSaysWhyThereIsNoTab() {
+        #expect(TestNotification.sent(.tab).contains("the tab you ran this from"))
+        #expect(TestNotification.sent(.ghosttyNotInFront).contains("Ghostty was not in front"))
+        let unknown = TestNotification.sent(.tabUnknown)
+        #expect(unknown.contains("did not say which tab"))
+        #expect(unknown.contains("Automation"))
+        #expect(!unknown.contains("not in front"))
+    }
+
     @Test func onlyARunningAuthorizedAgentIsSentATest() {
         #expect(TestNotification.problem(running: true, readiness: "authorized") == nil)
         #expect(TestNotification.problem(running: false, readiness: "authorized") == .notRunning)
