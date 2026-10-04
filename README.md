@@ -65,6 +65,11 @@ checks every step ([what it follows](docs/agent-install.md)). Either way, two
 things stay with you: allowing the notification and Automation permissions, and
 restarting the CLI sessions you already have open.
 
+A quick prompt to try it shows nothing, because tasks under 3 minutes never
+notify. The installer ends with a test notification instead, and
+[one command](docs/reference.md#4-permissions-and-restart) sends another
+whenever you want to check.
+
 **Requirements:** macOS 13 or later, [Ghostty](https://ghostty.org) with
 AppleScript support, and Claude Code or Codex CLI. A Swift 6 toolchain is
 needed only to build from source.
@@ -81,7 +86,7 @@ needed only to build from source.
 ## Credits and license
 
 Inspired by the Claude Code notification ecosystem, including the TTY-marker
-idea discussed in [claude-code-notifier](https://github.com/kovoor/claude-code-notifier).
+idea discussed in [claude-code-opencode-notifier](https://github.com/kovoor/claude-code-opencode-notifier).
 
 [MIT with the Commons Clause](LICENSE). Use it anywhere, at work included,
 change it and share your changes. What you may not do is sell it, or sell a

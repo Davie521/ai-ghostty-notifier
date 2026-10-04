@@ -88,7 +88,8 @@ then register the plugin in Claude Code:
 
 Choose manual or plugin registration, not both. To test a checkout, use the
 manual install: the marketplace serves the last published version, not your
-working copy.
+working copy. Without the app the plugin cannot notify; the first prompt of
+each session then says so, with the command that installs it.
 
 ### 3. Register Codex CLI hooks, if used
 
@@ -126,6 +127,19 @@ Restart open Claude/Codex sessions to load their hook registrations and settings
 The app's menu bar item shows authorization and alert-style status — a problem
 System Settings can fix links straight to it — and lists the sessions waiting
 on you; click one to jump to its tab.
+
+Tasks under the minimum duration (3 minutes by default) never notify, so a
+quick prompt shows nothing. To check an install, send a test notification
+through the resident app:
+
+```bash
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --test
+```
+
+Its **Go to tab** returns to the tab that was in front when you ran it, and it
+withdraws itself after two minutes. When it cannot send, it says why (the
+agent is not running, notifications are not allowed) and exits 1.
+`setup.sh` sends one at the end of an install.
 
 ### Runtime-only installation (no resident service)
 
@@ -307,8 +321,10 @@ without removing any of the macOS-specific integration.
 
 ## Troubleshooting and limits
 
-- **No notification:** check the required app exists, the minimum duration, hook
-  registration/trust, notification permission and Focus settings. Native runtime
+- **No notification:** send a test first ([step 4](#4-permissions-and-restart)).
+  If it arrives, the app and its permission work: check the minimum duration and
+  hook registration/trust. If it does not, it says why; check Focus settings
+  too. Native runtime
   diagnostics go to hook stderr; resident state/logs live under
   `~/.claude/notifications/ghostty-agent/`. Claude session records are under
   `~/.claude/notifications/ghostty-sessions/`; Codex uses its own
