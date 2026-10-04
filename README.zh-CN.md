@@ -18,7 +18,7 @@
 <p align="center"><a href="README.md">English</a> · <a href="README.zh-CN.md">中文</a></p>
 
 <p align="center">
-  <img src="docs/assets/notification.png" alt="一条真实通知：Claude，200-second timer test — my-app，Finished after 3m 24s" width="344">
+  <img src="docs/assets/demo.zh-CN.gif" alt="演示：20 秒的小任务，Claude Code 自带通知一分钟后照样响铃；用这个工具，短任务不打扰，12 分钟的任务一跑完就通知，点「回到标签页」在三个标签页里正好落在那一个，菜单栏列着还在等你的会话。" width="800">
 </p>
 
 丢一个长任务给它跑，切去浏览器，然后就忘了。任务结束时弹一条通知，告诉你是哪个
