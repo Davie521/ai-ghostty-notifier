@@ -18,10 +18,10 @@
 <p align="center"><a href="README.md">English</a> · <a href="README.zh-CN.md">中文</a></p>
 
 <p align="center">
-  <img src="docs/assets/demo.webp" alt="Animated demo with English and Chinese subtitles. You give your AI a long task in Ghostty and walk away. The moment it finishes, a notification says which session and how long it took; Go to tab brings back the right tab, even with five sessions in one project. Under three minutes it stays quiet, three to ten minutes is a silent notification, ten minutes or more comes with a sound. Come back to the tab and the notification clears itself; everything still waiting is listed in the menu bar. Setup: give your AI the link." width="360">
+  <img src="docs/assets/demo.webp" alt="Animated demo with English and Chinese subtitles. You give your AI a long task in Ghostty and walk away. The moment it finishes, a notification says which session and how long it took; Go to tab brings back the right tab, even with five sessions in one project. Under three minutes it stays quiet, three to ten minutes is a silent notification, ten minutes or more comes with a sound. Come back to the tab and the notification clears itself; everything still waiting is listed in the menu bar. Setup: give your AI the link. It ends on the project name, Open source on GitHub, and the repository link." width="360">
 </p>
 
-<p align="center"><a href="https://x.com/Daviefan521/status/2103311734048264594">▶ Watch the full video, with sound (1 min)</a></p>
+<p align="center"><a href="https://x.com/Daviefan521/status/2103311734048264594">▶ Watch it with sound (1 min)</a></p>
 
 You start a long task, switch to the browser, and forget about it. When it
 ends, a notification tells you which session finished and how long it took, and
