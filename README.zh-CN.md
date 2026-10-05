@@ -18,8 +18,10 @@
 <p align="center"><a href="README.md">English</a> · <a href="README.zh-CN.md">中文</a></p>
 
 <p align="center">
-  <img src="docs/assets/demo.gif" alt="演示（英文界面）。自带通知：20 秒的小任务跑完，一分钟后 Claude Code 照样响铃提醒。用 ai-ghostty-notifier：再跑一个 20 秒的任务，一分钟后什么也没有。长任务：跑了 12 分钟，一结束就弹出带声音的通知；点 Go to tab，在三个标签页里正好回到那个会话；菜单栏列着一个还在等你的 Codex 会话。" width="800">
+  <img src="docs/assets/demo.webp" alt="动画演示，中英双语字幕。你在 Ghostty 里给 AI 派了个长任务，然后走开了。它一跑完你就知道是哪个会话、跑了多久；点 Go to tab 回到对应的标签页，同一个项目开五个会话也不会认错。少于三分钟不打扰，三到十分钟静音通知，十分钟以上带声音。回到那个标签页，通知自己就消失；还在等你的会话，菜单栏里一眼就能看到。安装：把链接交给你的 AI。" width="360">
 </p>
+
+<p align="center"><a href="https://x.com/Daviefan521/status/2103311734048264594">▶ 看完整版视频（1 分钟，有声音）</a></p>
 
 丢一个长任务给它跑，切去浏览器，然后就忘了。任务结束时弹一条通知，告诉你是哪个
 会话跑完的、跑了多久；点 **Go to tab** 就回到那个会话的标签页——同一个项目里开着
