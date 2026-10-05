@@ -1,5 +1,7 @@
 # Contributing
 
+Everyone taking part is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## Layout
 
 | Path | What lives there |
