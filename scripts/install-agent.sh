@@ -31,6 +31,17 @@
 
 set -euo pipefail
 
+# Ctrl-C reaches the whole group at once: this script and the command it is
+# waiting for. When that command exits normally rather than of the signal, as
+# one that is just finishing does, bash takes the Ctrl-C as dealt with by it
+# and goes on, and an install meant to stop runs to its end and kills the
+# processes it was waiting for (#59). With a trap, bash acts on every Ctrl-C
+# once the command has returned. The trap ends the script the way an untrapped
+# Ctrl-C does, through the EXIT trap and then by the signal, so that a script
+# that ran this one stops as well.
+interrupted() { trap - INT; kill -s INT $$; }
+trap interrupted INT
+
 START=1
 case "${1:-}" in
     --no-start) START=0 ;;
@@ -129,7 +140,8 @@ uninterrupted() {
     trap 'signal=TERM' TERM
     trap 'signal=INT' INT
     "$@" || status=$?
-    trap - TERM INT
+    trap - TERM
+    trap interrupted INT
     if [[ -n "$signal" ]]; then kill -s "$signal" $$; fi
     return "$status"
 }
