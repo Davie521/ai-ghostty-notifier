@@ -3,7 +3,7 @@
 What changed in each release. The one-command installer always fetches the
 latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-notifier/releases).
 
-## Unreleased
+## 0.6.2 — 2026-10-06
 
 ### Fixed
 
