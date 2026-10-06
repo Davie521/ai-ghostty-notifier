@@ -3,6 +3,15 @@
 What changed in each release. The one-command installer always fetches the
 latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-notifier/releases).
 
+## Unreleased
+
+### Fixed
+
+- Ctrl-C always stops the installer. Pressed just as one of its commands was
+  finishing, it could be lost: the install went on and, in the end, killed any
+  process of the previous version that had not stopped by itself, such as a
+  hook of a busy session (#59).
+
 ## 0.6.1 — 2026-10-04
 
 ### Added

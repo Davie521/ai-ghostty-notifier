@@ -286,11 +286,13 @@ echo ready > "$mark.ready"
 while :; do /bin/sleep 0.05; done
 '''
 
-    def start_full_install(self, home, ps_stub, launchd="", args=(), env=None):
+    def start_full_install(self, home, ps_stub, launchd="", args=(), env=None, sleep=None):
         """The whole install, with a stand-in for every service command.
 
         `launchd` is shell that runs inside the launchctl stand-in after the
-        call has been recorded, with the subcommand in $1.
+        call has been recorded, with the subcommand in $1. `sleep` replaces
+        the stand-in for sleep, for which 0.25 is one step of the wait for
+        processes to exit.
         """
         calls = self.root / "full-install-calls"
         self.stub("launchctl", '''if [[ ! -e "$CALLS" ]]; then
@@ -306,7 +308,7 @@ STATE="$HOME/.claude/notifications/ghostty-agent"
                   'echo "lsregister $*" >> "$CALLS"\n')
         self.stub("pkill", 'echo "pkill $*" >> "$CALLS"\n')
         # Only the wait for processes to exit really waits; the rest would take a minute.
-        self.stub("sleep", '[[ "$1" == 0.25 ]] && exec /bin/sleep 0.05\nexit 0\n')
+        self.stub("sleep", sleep or '[[ "$1" == 0.25 ]] && exec /bin/sleep 0.05\nexit 0\n')
         # Stands in for the agent answering the permission prompt.
         self.stub("open", 'STATE="$HOME/.claude/notifications/ghostty-agent"\n'
                   '[[ -e "$STATE/agent.pid" ]] && echo "agent.pid was there at the permission check" >> "$CALLS"\n'
@@ -319,8 +321,11 @@ STATE="$HOME/.claude/notifications/ghostty-agent"
             env={**self.env, "HOME": str(home), "CALLS": str(calls),
                  "GHOSTTY_NOTIFY_LSREGISTER": str(self.bin / "lsregister"), **(env or {})},
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            # A group of its own, so that a test can press Ctrl-C on it.
-            start_new_session=True)
+            # A group of its own, so that a test can press Ctrl-C on it, and
+            # Ctrl-C not ignored: a shell ignores it in what it starts in the
+            # background, tests included, and bash cannot trap a signal it was
+            # started ignoring.
+            start_new_session=True, preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
 
     def full_install(self, home, ps_stub, launchd="", args=(), env=None):
         installer = self.start_full_install(home, ps_stub, launchd, args, env)
@@ -725,6 +730,46 @@ exec /bin/rm "$@"
                 self.assertTrue(os.access(installed / EXECUTABLE, os.X_OK),
                                 "the previous version was left unable to start")
                 self.assertEqual(list(installed.parent.glob(".native-install.*")), [])
+
+    def test_ctrl_c_stops_the_install_even_when_the_command_it_waits_for_exits_normally(self):
+        # Ctrl-C reaches the installer and the command it is waiting for
+        # together. bash takes it as handled when that command exits normally,
+        # as one that was just finishing does, and goes on: on CI an install
+        # meant to stop ran to its end and killed the hook it had been told to
+        # wait for (#59). Here the first step of the wait says when it has
+        # begun, and exits normally when Ctrl-C reaches it.
+        stubborn = self.root / "stubborn"
+        stubborn.write_text(self.STUBBORN)
+        stubborn.chmod(0o755)
+        home = self.root / "home-of-an-install-interrupted-as-a-command-exits"
+        installed, _ = self.previous_version(home)
+        process, _ = self.stand_in("hook that will not stop", stubborn, installed)
+        (self.root / "process-table").write_text(self.listed(process, installed / EXECUTABLE))
+        waiting = self.root / "full-install-calls.waiting"
+        installer = self.start_full_install(
+            home, self.REAL_PS_FOR_ONE_PID + 'cat "{}"\n'.format(self.root / "process-table"),
+            sleep='''if [[ "$1" == 0.25 && ! -e "$CALLS.waiting" ]]; then
+    trap 'exit 0' INT
+    : > "$CALLS.waiting"
+    /bin/sleep 5
+    exit 0
+fi
+[[ "$1" == 0.25 ]] && exec /bin/sleep 0.05
+exit 0
+''')
+        self.addCleanup(installer.kill)
+        deadline = time.monotonic() + 30
+        while not waiting.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertTrue(waiting.exists(), "the installer never began to wait")
+        os.killpg(installer.pid, signal.SIGINT)
+        installer.communicate(timeout=30)
+        # Ended by the signal, as an untrapped Ctrl-C ends a script, so that a
+        # script that ran the installer stops as well.
+        self.assertEqual(installer.returncode, -signal.SIGINT, "the install went on after Ctrl-C")
+        self.assertIsNone(process.poll(), "the hook it was told to wait for was killed after Ctrl-C")
+        self.assertTrue(os.access(installed / EXECUTABLE, os.X_OK), "the previous version was left unable to start")
+        self.assertEqual(list(installed.parent.glob(".native-install.*")), [])
 
     def test_a_process_is_not_even_asked_to_stop_once_its_pid_is_another_process(self):
         # The same reuse, earlier: between the listing and the first signal.
