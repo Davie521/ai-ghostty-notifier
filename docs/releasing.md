@@ -121,9 +121,9 @@ still work together.
    ```
 
 4. Replace the release notes. The workflow publishes the notes GitHub
-   generates: the title of every pull request since the last tag,
-   documentation included, which does not tell a user what changed or whether
-   to upgrade. Write them from the changelog entry, in the shape of the earlier
+   generates: the titles of the pull requests merged since the previous
+   release, documentation included, which do not tell a user what changed or
+   whether to upgrade. Write them from the changelog entry, in the shape of the earlier
    releases: a line on what the tool does, the demo, *What changed* (saying so
    when the App itself did not change and there is no need to upgrade),
    *Install or upgrade*, and the compare link.
