@@ -101,8 +101,10 @@ still work together.
 
 1. Bump `CFBundleShortVersionString` (and `CFBundleVersion`) in
    [agent/Resources/Info.plist](../agent/Resources/Info.plist), and `version` in
-   [.claude-plugin/plugin.json](../.claude-plugin/plugin.json). Merge to `main`.
-   The workflow refuses a tag that does not match `Info.plist`.
+   [.claude-plugin/plugin.json](../.claude-plugin/plugin.json). In
+   [CHANGELOG.md](../CHANGELOG.md), turn `## Unreleased` into
+   `## X.Y.Z — YYYY-MM-DD`. Merge to `main`. The workflow refuses a tag that
+   does not match `Info.plist`.
 2. Tag the merge and push the tag:
 
    ```bash
@@ -116,6 +118,18 @@ still work together.
 
    ```bash
    curl -fsSL https://github.com/Davie521/ai-ghostty-notifier/releases/latest/download/setup.sh | bash
+   ```
+
+4. Replace the release notes. The workflow publishes the notes GitHub
+   generates: the titles of the pull requests merged since the previous
+   release, documentation included, which do not tell a user what changed or
+   whether to upgrade. Write them from the changelog entry, in the shape of the earlier
+   releases: a line on what the tool does, the demo, *What changed* (saying so
+   when the App itself did not change and there is no need to upgrade),
+   *Install or upgrade*, and the compare link.
+
+   ```bash
+   gh release edit vX.Y.Z --notes-file notes.md
    ```
 
 A failed run publishes nothing; fix, then delete and re-push the tag.
