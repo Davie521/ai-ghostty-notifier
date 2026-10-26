@@ -92,6 +92,12 @@ public enum WindowPlace: Equatable, Sendable {
     /// exactly like one that is out of view, and travelling on that guess
     /// would switch a display for nothing.
     ///
+    /// The window server also lists Ghostty's windows that are not terminals —
+    /// an About box, an open menu — which Ghostty's list leaves out. One in
+    /// view that Accessibility does not show as a window titled like one of
+    /// Ghostty's is set aside before pairing. One out of view cannot be told
+    /// apart, and leaves the lists unsettled.
+    ///
     /// `seen` is nil without the Accessibility permission. The order still
     /// places the window then, which is how a jump knows it needed the
     /// permission; there are just no titles to check the pairing against.
@@ -102,8 +108,19 @@ public enum WindowPlace: Equatable, Sendable {
         guard let targetIndex = scripted.firstIndex(where: { $0.id == windowID }) else {
             return .unknown
         }
-        let placed = ordered.filter { !$0.spaces.isEmpty }
         let inView: (OrderedWindow) -> Bool = { $0.spaces.contains(where: visibleSpaces.contains) }
+        let listedTitles = Set(scripted.map(\.title))
+        var seenTitles: [UInt32: String]?
+        if let seen {
+            seenTitles = Dictionary(
+                seen.map { ($0.number, $0.title) }, uniquingKeysWith: { a, _ in a })
+        }
+        let placed = ordered.filter { window in
+            guard !window.spaces.isEmpty else { return false }
+            guard let seenTitles, inView(window) else { return true }
+            guard let title = seenTitles[window.number] else { return false }
+            return listedTitles.contains(title)
+        }
         let hidden = placed.filter { !inView($0) }
         // Nothing of Ghostty's is out of view.
         if hidden.isEmpty { return .showing }

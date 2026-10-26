@@ -229,11 +229,18 @@ echo "test window $WIN: background tab $BG, selected tab $SEL"
 sleep 0.5
 
 # Its window number: the ordered window that was not there before.
-NUMBER=""
-for n in $(where "$BG" | awk '$1=="ordered" {print $2}'); do
-    case " $BEFORE_WINDOWS " in *" $n "*) ;; *) NUMBER=$n ;; esac
-done
-[[ -n "$NUMBER" ]] || fail "could not tell the test window apart in the window server"
+# Exactly one, or nothing is moved: a window someone else opened meanwhile,
+# titled like this one, must not be taken for it.
+new_numbers() {
+    local n found=""
+    for n in $(where "$BG" | awk '$1=="ordered" {print $2}'); do
+        case " $1 " in *" $n "*) ;; *) found="$found $n" ;; esac
+    done
+    echo "$found"
+}
+read -r -a FRESH <<<"$(new_numbers "$BEFORE_WINDOWS")"
+[[ ${#FRESH[@]} == 1 ]] || fail "expected one new window in the window server, found: ${FRESH[*]:-none}"
+NUMBER=${FRESH[0]}
 
 # A display none of the other Ghostty windows is on, with a Space to go to.
 OTHERS=$(where "$BG" | awk -v n="$NUMBER" '$1=="ordered" && $2!=n { sub("spaces=","",$3); print $3 }' | tr '\n' ',')
@@ -313,11 +320,9 @@ AS
     read -r HELPER HELPER_TAB <<<"$MADE_HELPER"
     [[ "$HELPER" == tab-group-* && "$HELPER_TAB" == tab-* ]] || { HELPER=""; fail "unexpected helper ids: $MADE_HELPER"; }
     sleep 0.5
-    HELPER_NUMBER=""
-    for n in $(where "$BG" | awk '$1=="ordered" {print $2}'); do
-        case " $BEFORE_HELPER " in *" $n "*) ;; *) HELPER_NUMBER=$n ;; esac
-    done
-    [[ -n "$HELPER_NUMBER" ]] || fail "could not tell the helper window apart in the window server"
+    read -r -a FRESH <<<"$(new_numbers "$BEFORE_HELPER")"
+    [[ ${#FRESH[@]} == 1 ]] || fail "expected one new helper window in the window server, found: ${FRESH[*]:-none}"
+    HELPER_NUMBER=${FRESH[0]}
     IFS=, read -r ox oy ow oh <<<"$(display_field "$BG" "$OTHER_DISPLAY" bounds)"
     move_own_window "$HELPER" "$HELPER_NUMBER" "$((ox + 80))" "$((oy + 120))"
     echo "helper window $HELPER on display $OTHER_DISPLAY"

@@ -48,6 +48,8 @@ import Testing
             OrderedWindow(number: 1, spaces: [10]), OrderedWindow(number: 2, spaces: [8]),
             OrderedWindow(number: 3, spaces: [1773]),
         ]
+        // Accessibility lists the one window in view, under its own number.
+        let seen = [SeenWindow(number: 1, title: "✳ backend")]
         #expect(
             WindowPlace.of(
                 "tab-group-c", scripted: scripted, ordered: ordered, seen: seen,
@@ -65,6 +67,8 @@ import Testing
             OrderedWindow(number: 1, spaces: [10]), OrderedWindow(number: 2, spaces: [8]),
             OrderedWindow(number: 3, spaces: [1773]),
         ]
+        // Accessibility lists the one window in view, under its own number.
+        let seen = [SeenWindow(number: 1, title: "✳ backend")]
         #expect(
             WindowPlace.of(
                 "tab-group-b", scripted: scripted, ordered: ordered, seen: seen,
@@ -215,5 +219,48 @@ import Testing
     @Test func aTitleMayBeEmpty() {
         let (_, windows) = ScriptedWindow.locateReply("x\u{1E}tab-group-a\u{1F}\u{1E}")
         #expect(windows == [ScriptedWindow(id: "tab-group-a", title: "")])
+    }
+
+    /// An About box in view: the window server lists it, Ghostty does not,
+    /// and Accessibility shows it under a title no terminal has.
+    @Test func aWindowInViewThatIsNoTerminalIsSetAside() {
+        let about = OrderedWindow(number: 5, spaces: [10])
+        let ordered = [about] + self.ordered
+        let seen = self.seen + [SeenWindow(number: 5, title: "About Ghostty")]
+        #expect(
+            WindowPlace.of(
+                "tab-group-b", scripted: scripted, ordered: ordered, seen: seen,
+                visibleSpaces: visible) == .hidden(candidates: [self.ordered[1]]))
+        #expect(
+            WindowPlace.of(
+                "tab-group-a", scripted: scripted, ordered: ordered, seen: seen,
+                visibleSpaces: visible) == .showing)
+    }
+
+    /// An open menu: in view, and not a window Accessibility lists at all.
+    @Test func aWindowInViewAccessibilityDoesNotListIsSetAside() {
+        let ordered = [OrderedWindow(number: 7, spaces: [10])] + self.ordered
+        #expect(
+            WindowPlace.of(
+                "tab-group-b", scripted: scripted, ordered: ordered, seen: seen,
+                visibleSpaces: visible) == .hidden(candidates: [self.ordered[1]]))
+    }
+
+    /// Out of view, a window that is no terminal cannot be told apart.
+    @Test func aWindowOutOfViewThatIsNoTerminalLeavesTheListsUnsettled() {
+        let ordered = self.ordered + [OrderedWindow(number: 9, spaces: [5])]
+        #expect(
+            WindowPlace.of(
+                "tab-group-b", scripted: scripted, ordered: ordered, seen: seen,
+                visibleSpaces: visible) == .unsettled)
+    }
+
+    /// Without Accessibility nothing can be set aside.
+    @Test func withoutAccessibilityAWindowThatIsNoTerminalLeavesTheListsUnsettled() {
+        let ordered = [OrderedWindow(number: 5, spaces: [10])] + self.ordered
+        #expect(
+            WindowPlace.of(
+                "tab-group-b", scripted: scripted, ordered: ordered, seen: nil,
+                visibleSpaces: visible) == .unsettled)
     }
 }
