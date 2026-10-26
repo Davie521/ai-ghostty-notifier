@@ -318,7 +318,7 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private var jumps: [UUID: Task<Void, Never>] = [:]
     /// How long shutdown waits for jumps to wind down. A cancelled trip
     /// finishes the press under way, undoes it should it have gone to the
-    /// other display, and walks back: 1.5 + 2.15 + 8 seconds at the very most,
+    /// other display, and walks back: 1.95 + 1.95 + 8 seconds at the very most,
     /// and well under a second for a trip of a Space or two. Well inside the
     /// twenty seconds launchd and the installer give a stopping agent, and the
     /// hook cleanup runs alongside, not after.

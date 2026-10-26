@@ -161,7 +161,8 @@ enum SpaceHopper {
             let center = CGPoint(x: bounds.midX, y: bounds.midY)
             for _ in 0..<2 {
                 WindowServer.movePointer(to: center)
-                let until = Date().addingTimeInterval(0.15)
+                // Two tries within the time the walk budgets for parking.
+                let until = Date().addingTimeInterval(SpaceWalk.parkSeconds / 2)
                 while Date() < until {
                     if let pointer = WindowServer.pointer, bounds.contains(pointer) { return }
                     await pause(0.01)

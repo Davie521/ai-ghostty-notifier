@@ -25,6 +25,8 @@ final class FakeSpaces: SpaceWalkDriver {
     var stopping = false
     /// When the process will be ended.
     var end = Date.distantFuture
+    /// How long a press takes to show on the display.
+    var switchSeconds = 0.0
     /// Called after each press with the number of presses so far: where a
     /// test makes the app quit or a signal bring the end forward.
     var afterPress: ((FakeSpaces, Int) -> Void)?
@@ -54,7 +56,10 @@ final class FakeSpaces: SpaceWalkDriver {
         -> SpaceTopology?
     {
         let topology = SpaceTopology(displays: displays)
-        if done(topology) { return topology }
+        if done(topology), switchSeconds < timeout {
+            clock += switchSeconds
+            return topology
+        }
         clock += timeout
         return nil
     }
@@ -308,5 +313,31 @@ final class FakeSpaces: SpaceWalkDriver {
         #expect(fake.presses == ["right A", "right A", "left B", "left A"])
         #expect(fake.current("B") == 10)
         #expect(fake.current("A") == 1)
+    }
+
+    /// A press that takes its time — the pointer's move and nearly all of the
+    /// wait — must still leave the time to walk back over it: 5.4 s before the
+    /// end is too close to start.
+    @Test func aSlowPressNearTheEndIsNotStartedWithoutTimeToComeBack() async {
+        let fake = spaces()
+        fake.switchSeconds = 1.49
+        fake.end = fake.clock.addingTimeInterval(5.4)
+        fake.afterPress = { fake, count in if count == 1 { fake.stopping = true } }
+        let outcome = await SpaceWalk.travel(to: 6, deadline: plenty(fake), driver: fake)
+        if case .stranded = outcome { Issue.record("stranded: \(outcome)") }
+        #expect(fake.current("A") == 1)
+        #expect(fake.clock <= fake.end)
+    }
+
+    /// With room to spare the same slow press is made, and walked back over.
+    @Test func aSlowPressWithRoomToSpareIsWalkedBack() async {
+        let fake = spaces()
+        fake.switchSeconds = 1.49
+        fake.end = fake.clock.addingTimeInterval(5.75)
+        fake.afterPress = { fake, count in if count == 1 { fake.stopping = true } }
+        let outcome = await SpaceWalk.travel(to: 6, deadline: plenty(fake), driver: fake)
+        #expect(outcome == .failed("stopping after 1 presses; went back"))
+        #expect(fake.current("A") == 1)
+        #expect(fake.clock <= fake.end)
     }
 }
