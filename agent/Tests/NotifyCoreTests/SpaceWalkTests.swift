@@ -240,7 +240,12 @@ final class FakeSpaces: SpaceWalkDriver {
     /// press that lands on the other display and an undo that waits in vain
     /// must both fit before it.
     @Test func aStrayPressOnTheWayBackStillEndsBeforeTheEnd() async {
-        let fake = spaces()
+        // B shows its second Space, so a press on the way back — leftward —
+        // that lands on B does move it.
+        let fake = FakeSpaces([
+            SpaceTopology.Display(identifier: "A", spaces: [1, 2, 3, 4, 5, 6], current: 1),
+            SpaceTopology.Display(identifier: "B", spaces: [10, 11], current: 11),
+        ])
         // One step out, then a dead press: the trip gives up 2.25 s in.
         fake.effects = [.aimed, .nothing, .stray("B"), .nothing]
         fake.afterPress = { fake, count in
@@ -255,6 +260,8 @@ final class FakeSpaces: SpaceWalkDriver {
             return
         }
         #expect(fake.clock <= fake.end)
+        // Nothing was pressed on the way back: B was never touched.
+        #expect(fake.current("B") == 11)
     }
 
     /// A step out, then a press on the other display whose undo does not
