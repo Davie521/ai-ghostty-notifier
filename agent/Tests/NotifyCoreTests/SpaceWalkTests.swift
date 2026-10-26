@@ -225,4 +225,18 @@ final class FakeSpaces: SpaceWalkDriver {
         }
         #expect(fake.clock <= hard)
     }
+
+    /// A step out, then a press on the other display whose undo does not
+    /// take: the trip stops pressing there and then, walk back included.
+    @Test func aDisplayThatCannotBePutBackStopsEvenTheWalkBack() async {
+        let fake = spaces()
+        fake.effects = [.aimed, .stray("B"), .nothing]
+        let outcome = await SpaceWalk.travel(to: 6, deadline: plenty(fake), driver: fake)
+        guard case .failed(let why) = outcome else {
+            Issue.record("expected a failure, got \(outcome)")
+            return
+        }
+        #expect(why.contains("could not be put back"))
+        #expect(fake.presses == ["right A", "right A", "left B"])
+    }
 }

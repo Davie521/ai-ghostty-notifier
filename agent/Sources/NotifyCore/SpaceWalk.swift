@@ -39,6 +39,9 @@ public enum SpaceWalk {
     public enum Outcome: Equatable, Sendable {
         case arrived(presses: Int, strayRetries: Int)
         case stopped(String)
+        /// A press landed on another display and the undo did not take: no
+        /// more presses of any kind, not even a walk back.
+        case stranded(String)
     }
 
     /// How a trip there, and back if it gave up part-way, ended.
@@ -82,6 +85,8 @@ public enum SpaceWalk {
             return .arrived(
                 display: first.display, direction: first.direction, presses: presses,
                 strayRetries: strayRetries)
+        case .stranded(let why):
+            return .failed(why)
         case .stopped(let why):
             guard let start, driver.topology()?.current(on: first.display) != start else {
                 return .failed(why)
@@ -93,7 +98,8 @@ public enum SpaceWalk {
                 hardDeadline.addingTimeInterval(-undoSeconds))
             switch await walk(to: start, deadline: back, driver: driver) {
             case .arrived: return .failed("\(why); went back")
-            case .stopped(let backWhy): return .failed("\(why); could not go back: \(backWhy)")
+            case .stopped(let backWhy), .stranded(let backWhy):
+                return .failed("\(why); could not go back: \(backWhy)")
             }
         }
     }
@@ -131,7 +137,7 @@ public enum SpaceWalk {
                     guard let original = before.current(on: stray),
                         await undo(stray, backTo: original, pressed: hop.direction, driver: driver)
                     else {
-                        return .stopped(
+                        return .stranded(
                             "the shortcut switched display \(stray.prefix(8)) and it could not be put back"
                         )
                     }
