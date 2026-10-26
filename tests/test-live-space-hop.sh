@@ -45,7 +45,19 @@ pointer() {
 # keypad flag arrow keys carry. System Events' `key code … using control down`
 # switched Spaces only some of the time.
 warp() {
-    osascript -l JavaScript -e "ObjC.import('CoreGraphics'); \$.CGEventPost(0, \$.CGEventCreateMouseEvent(null, 5, {x: $1, y: $2}, 0)); ''" >/dev/null
+    # As the agent does: a warp, the event a mouse would send, then a short
+    # wait until the pointer is seen there, because the shortcut acts on the
+    # display the window server thinks the pointer is on.
+    osascript -l JavaScript -e "ObjC.import('CoreGraphics');
+const to = {x: $1, y: $2};
+\$.CGWarpMouseCursorPosition(to);
+\$.CGEventPost(0, \$.CGEventCreateMouseEvent(null, 5, to, 0));
+for (let i = 0; i < 30; i++) {
+    const at = \$.CGEventGetLocation(\$.CGEventCreate(null));
+    if (Math.abs(at.x - to.x) < 2 && Math.abs(at.y - to.y) < 2) break;
+    delay(0.01);
+}
+''" >/dev/null
 }
 press() {
     # As the agent does: the key up carries only the modifiers physically held
