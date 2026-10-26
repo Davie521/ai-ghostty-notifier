@@ -115,11 +115,16 @@ enum WindowServer {
         return bounds
     }
 
-    /// Ghostty's ordinary windows the window server has ordered in, front to
-    /// back, on every Space. One per tab group: a native tab that is not the
+    /// Ghostty's terminal windows the window server has ordered in, front to
+    /// back, on every Space: the ordinary level and the floating one, where
+    /// "Float on Top" puts a window; Ghostty's own list has both. One per tab group: a native tab that is not the
     /// selected one is an ordered-out window. Closed tabs leave windows behind
     /// that still name a Space for a while; the ordering question tells those
     /// apart, so they are left out when it can be asked.
+    private static let terminalLayers: Set<Int> = [
+        Int(CGWindowLevelForKey(.normalWindow)), Int(CGWindowLevelForKey(.floatingWindow)),
+    ]
+
     static func orderedWindows(ownedBy pid: pid_t) -> [OrderedWindow] {
         let info =
             CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID)
@@ -127,7 +132,8 @@ enum WindowServer {
         var owned = Set<CGWindowID>()
         for entry in info {
             guard (entry[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
-                (entry[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+                let layer = (entry[kCGWindowLayer as String] as? NSNumber)?.intValue,
+                terminalLayers.contains(layer),
                 let number = (entry[kCGWindowNumber as String] as? NSNumber)?.uint32Value
             else { continue }
             owned.insert(number)

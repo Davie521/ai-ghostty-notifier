@@ -51,8 +51,20 @@ enum SpaceHopper {
     /// Presses that switched the wrong display, undone and tried again.
     static let maxStrayRetries = 2
 
-    static func travel(to window: OrderedWindow) async -> Outcome {
-        let deadline = Date().addingTimeInterval(maxTripSeconds)
+    /// Left for the focus after a trip when the caller has a deadline: the
+    /// focus command's own Apple Event timeout, and a little more.
+    static let focusReserveSeconds = 3.5
+
+    /// `before` is when the caller's process will be ended, if it will be:
+    /// the hook runtime's `--focus` mode has one. The trip ends early enough
+    /// to leave the focus its time, and starts no press it could not undo.
+    static func travel(to window: OrderedWindow, before callerDeadline: Date? = nil) async
+        -> Outcome
+    {
+        var deadline = Date().addingTimeInterval(maxTripSeconds)
+        if let callerDeadline {
+            deadline = min(deadline, callerDeadline.addingTimeInterval(-focusReserveSeconds))
+        }
         guard WindowServer.isTrusted else { return .failed("Accessibility not granted") }
         guard var topology = WindowServer.topology() else { return .failed("no Space topology") }
         guard let space = window.spaces.first else {
@@ -71,9 +83,9 @@ enum SpaceHopper {
         var presses = 0
         var strayRetries = 0
         while case .hop(let hop) = route {
-            guard Date() < deadline else {
-                return .failed(
-                    "no arrival within \(Int(maxTripSeconds)) s, after \(presses) presses")
+            // Room for this press and, should it hit another display, its undo.
+            guard Date().addingTimeInterval(2 * pressTimeout) < deadline else {
+                return .failed("out of time after \(presses) presses")
             }
             guard presses < SpaceRoute.maxSteps else {
                 return .failed("\(presses) presses did not reach Space \(space)")

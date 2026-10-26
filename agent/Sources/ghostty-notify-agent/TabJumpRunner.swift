@@ -20,7 +20,9 @@ enum TabJumpRunner {
         let accessibilityMissing: Bool
     }
 
-    static func run(tabID: String) async -> Report {
+    /// `deadline` is when the caller's process will be ended, if it will be;
+    /// a trip to another Space keeps clear of it.
+    static func run(tabID: String, deadline: Date? = nil) async -> Report {
         var plan = TabJump(requested: tabID)
         var step = plan.start
         var scripted: [ScriptedWindow] = []
@@ -62,7 +64,7 @@ enum TabJumpRunner {
                     step = plan.observe(place: .unknown)
                 }
             case .hop(let window):
-                switch await SpaceHopper.travel(to: window) {
+                switch await SpaceHopper.travel(to: window, before: deadline) {
                 case .arrived(let trip):
                     let retried =
                         trip.strayRetries > 0

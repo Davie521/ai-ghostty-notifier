@@ -26,6 +26,13 @@ enum NativeLifecycle {
     nonisolated(unsafe) private static var termination: DispatchSourceSignal?
     nonisolated(unsafe) private static var work: Task<Void, Never>?
     nonisolated(unsafe) private static var terminated = false
+    nonisolated(unsafe) private static var earliest: Date?
+
+    /// When the first armed deadline ends the process; nil in the resident,
+    /// which arms none. Work that leaves something to undo — a trip to
+    /// another Space parks the pointer on the other display — checks it
+    /// first, because `_exit` gives no chance to put things back.
+    static var deadline: Date? { lock.withLock { earliest } }
 
     /// Seconds a mode may run. A hook gets a multiple of its slowest honest
     /// run (three bounded terminal queries). A worker's event expires after
@@ -45,6 +52,8 @@ enum NativeLifecycle {
     /// arrive ends the process. SIGTERM adds a second one for its grace period,
     /// so it can bring the end forward and can never push it back.
     static func arm(seconds: Double, reason: String, logPath: String?) {
+        let end = Date().addingTimeInterval(seconds)
+        lock.withLock { earliest = min(earliest ?? end, end) }
         queue.asyncAfter(deadline: .now() + seconds) {
             let message = "native lifecycle: \(reason); exiting after \(seconds)s"
             let reported = DispatchSemaphore(value: 0)

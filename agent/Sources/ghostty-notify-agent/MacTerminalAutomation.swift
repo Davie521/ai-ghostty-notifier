@@ -65,7 +65,9 @@ struct MacTerminalAutomation: TerminalAutomationProviding {
             // The same jump as a notification click, trip to the window's
             // Space included, so a jump sent from a shell checks what a
             // click does.
-            let report = await TabJumpRunner.run(tabID: tabID)
+            // This runs in the short-lived `--focus` mode, which its own
+            // deadline ends with `_exit`.
+            let report = await TabJumpRunner.run(tabID: tabID, deadline: NativeLifecycle.deadline)
             if let paths = try? AgentPaths(env: ProcessInfo.processInfo.environment) {
                 AgentLog.append(TabJumpRunner.describe(report), to: paths.log)
             }

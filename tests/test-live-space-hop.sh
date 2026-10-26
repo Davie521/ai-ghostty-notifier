@@ -364,6 +364,7 @@ if [[ -n "$HELPER" ]]; then
         KEY_ELSEWHERE=yes
     fi
     echo "key window: ${KEY_AT:-unknown} (on the other display: $KEY_ELSEWHERE)"
+    [[ "$KEY_ELSEWHERE" == yes ]] || fail "could not hand the keyboard focus to the helper window"
     [[ "$(place_of "$BG")" == hidden* ]] || fail "handing the focus to the helper brought the test window into view"
 fi
 
