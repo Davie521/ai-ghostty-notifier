@@ -318,11 +318,15 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private var jumps: [UUID: Task<Void, Never>] = [:]
     /// How long shutdown waits for jumps to wind down. A cancelled trip
     /// finishes the press under way, undoes it should it have gone to the
-    /// other display, and walks back: 1.95 + 1.95 + 8 seconds at the very most,
-    /// and well under a second for a trip of a Space or two. Well inside the
-    /// twenty seconds launchd and the installer give a stopping agent, and the
-    /// hook cleanup runs alongside, not after.
-    static let jumpShutdownGrace = 12.0
+    /// other display, and walks back to where it began: about half a second a
+    /// Space normally, two at the very worst. As long as the twenty seconds
+    /// launchd and the installer give a stopping agent allow, with the hook
+    /// cleanup running alongside, not after. A trip so long, with every step
+    /// back so slow, that it cannot walk back by then stops where it got to,
+    /// and the pointer is put back regardless; capping how far any trip may
+    /// go, to rule that out, would refuse every jump more than five Spaces
+    /// away.
+    static let jumpShutdownGrace = 18.0
     /// How long after posting a notification is left out of reconciliation.
     private static let deliverySettleSeconds: Double = 5
 
