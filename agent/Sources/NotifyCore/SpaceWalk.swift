@@ -145,10 +145,44 @@ public enum SpaceWalk {
         case .unreachable: return .stopped("Space \(spot.space) is out of reach")
         case .hop(let hop): steps = hop.steps
         }
-        let allowance = Double(steps + 2 * maxStrayRetries) * stepSeconds + undoSeconds
+        let allowance = walkBackSeconds(steps: steps + 2 * maxStrayRetries)
         return await walk(
             to: spot.space, deadline: driver.now().addingTimeInterval(allowance), leg: .back,
             driver: driver)
+    }
+
+    /// What walking back over `steps` Spaces is sure to need: a step for each,
+    /// and an undo on top should a press land on another display. Every press
+    /// onward keeps this much clear of the process's end, and so does every
+    /// lookup made while a trip has a display moved.
+    static func walkBackSeconds(steps: Int) -> Double {
+        undoSeconds + Double(steps) * stepSeconds
+    }
+
+    /// What putting these displays back is sure to need. A Space that is on no
+    /// display any more cannot be gone back to however long it is given, and
+    /// counts for nothing.
+    public static func putBackSeconds(_ spots: [SpaceSpot], in topology: SpaceTopology)
+        -> Double
+    {
+        spots.reduce(0) { total, spot in
+            guard case .hop(let hop) = SpaceRoute.to(spot.space, in: topology) else {
+                return total
+            }
+            return total + walkBackSeconds(steps: hop.steps)
+        }
+    }
+
+    /// How long a lookup may take at `now` and still leave the time to put
+    /// these displays back before `hardDeadline`; nil when the process has no
+    /// end in sight. With no topology to measure the way back by, none.
+    public static func timeToLook(
+        puttingBack spots: [SpaceSpot], now: Date, hardDeadline: Date,
+        topology: SpaceTopology?
+    ) -> Double? {
+        guard hardDeadline != .distantFuture else { return nil }
+        guard let topology else { return 0 }
+        return max(0, hardDeadline.timeIntervalSince(now) - putBackSeconds(spots, in: topology))
     }
 
     /// One walk to `space`.
@@ -169,8 +203,7 @@ public enum SpaceWalk {
             // display, and on the way onward the walk back over every Space
             // passed by then.
             let done = driver.now().addingTimeInterval(parkSeconds + pressTimeout)
-            let toPutRight =
-                undoSeconds + (leg == .onward ? Double(presses + 1) * stepSeconds : 0)
+            let toPutRight = walkBackSeconds(steps: leg == .onward ? presses + 1 : 0)
             guard done < deadline, done.addingTimeInterval(toPutRight) < driver.hardDeadline()
             else { return .stopped("out of time after \(presses) presses") }
             guard presses < SpaceRoute.maxSteps else {

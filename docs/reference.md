@@ -313,7 +313,13 @@ What the notification is able to say, and how it finds the tab:
   walks back, the pointer goes back where it was, and nothing is focused. The
   app waits up to 18 seconds for that as it quits; a trip so long and so slow
   that it cannot walk back by then stops where it got to, the pointer still put
-  back. This needs the Accessibility permission and the shortcut
+  back. The looks after a trip, that check it arrived at the window, keep the
+  time to walk back before the process is ended; a jump with no time left for
+  one walks back and gives up. One jump runs at a time, the app's and the
+  `--focus` mode's alike, and a jump that finds another still under way after
+  10 seconds does nothing at all: even a plain focus could pull a window onto
+  a Space the other is only passing through. This needs the Accessibility
+  permission and the shortcut
   switched on under **System Settings → Keyboard → Keyboard Shortcuts →
   Mission Control**; without either, the jump focuses as before.
   `ghostty-notify-agent --where <tab-id>` prints what a jump to that tab would

@@ -640,7 +640,7 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             // of nowhere, as with a tab that was never resolved. Not while
             // quitting, though.
             if !shuttingDown { Ghostty.activate() }
-        case .verified, .abandoned, .strandedTrip:
+        case .verified, .abandoned, .strandedTrip, .busy:
             // Abandoned means quitting, and a stranded trip left a display on
             // a Space the user never chose: bringing Ghostty forward now
             // could pull the very window the trip was on its way to.

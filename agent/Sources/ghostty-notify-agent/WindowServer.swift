@@ -142,18 +142,21 @@ enum WindowServer {
         }
     }
 
-    /// Ghostty's windows as Accessibility lists them — those on Spaces in
-    /// view — with their titles. Empty without the Accessibility permission.
     /// The longest a read of Ghostty's windows may take, all of them.
     static let seenWindowsBudget = 1.5
 
-    /// Nil when Ghostty did not answer in time: a busy Ghostty must not hold
-    /// the click, and the main actor, for a second per window. A partial list
-    /// is no answer either — a window left out of it would be taken for one
-    /// out of view — so the jump then travels nowhere.
-    static func seenWindows(ownedBy pid: pid_t) -> [SeenWindow]? {
+    /// Ghostty's windows as Accessibility lists them — those on Spaces in
+    /// view — with their titles, read within `budget` seconds. Nil without
+    /// the Accessibility permission, and when Ghostty did not answer in time:
+    /// a busy Ghostty must not hold the click, and the main actor, for a
+    /// second per window. A partial list is no answer either — a window left
+    /// out of it would be taken for one out of view — so the jump then
+    /// travels nowhere.
+    static func seenWindows(ownedBy pid: pid_t, within budget: Double = seenWindowsBudget)
+        -> [SeenWindow]?
+    {
         guard isTrusted, let elementWindowNumber else { return nil }
-        let until = Date().addingTimeInterval(seenWindowsBudget)
+        let until = Date().addingTimeInterval(budget)
         // Each read waits at most what is left of the budget, so the budget
         // holds within a window's reads as well as between windows.
         func timeout() -> Float? {

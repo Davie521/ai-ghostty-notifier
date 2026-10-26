@@ -396,4 +396,79 @@ final class FakeSpaces: SpaceWalkDriver {
         #expect(fake.current("A") == 1)
         #expect(fake.current("B") == 11)
     }
+
+    func near(_ value: Double?, _ expected: Double) -> Bool {
+        guard let value else { return false }
+        return abs(value - expected) < 1e-9
+    }
+
+    /// What a lookup made while a trip has a display moved must leave: a step
+    /// for every Space back and an undo, for each display moved.
+    @Test func puttingBackCountsAStepForEverySpaceBetweenAndAnUndo() {
+        let topology = SpaceTopology(displays: [
+            SpaceTopology.Display(identifier: "A", spaces: [1, 2, 3, 4], current: 4),
+            SpaceTopology.Display(identifier: "B", spaces: [10, 11], current: 11),
+        ])
+        let step = SpaceWalk.stepSeconds
+        let undo = SpaceWalk.undoSeconds
+        let a = SpaceSpot(display: "A", space: 1)
+        let b = SpaceSpot(display: "B", space: 10)
+        #expect(near(SpaceWalk.putBackSeconds([a], in: topology), undo + 3 * step))
+        #expect(
+            near(SpaceWalk.putBackSeconds([a, b], in: topology), undo + 3 * step + undo + step))
+        // Already back, and gone: neither needs any time.
+        #expect(SpaceWalk.putBackSeconds([SpaceSpot(display: "B", space: 11)], in: topology) == 0)
+        #expect(SpaceWalk.putBackSeconds([SpaceSpot(display: "A", space: 99)], in: topology) == 0)
+    }
+
+    @Test func aLookupGetsWhatIsLeftOnceTheWayBackIsSetAside() {
+        let topology = SpaceTopology(displays: [
+            SpaceTopology.Display(identifier: "A", spaces: [1, 2, 3, 4], current: 4)
+        ])
+        let now = Date(timeIntervalSince1970: 1_000)
+        let spots = [SpaceSpot(display: "A", space: 1)]
+        let back = SpaceWalk.putBackSeconds(spots, in: topology)
+        #expect(
+            near(
+                SpaceWalk.timeToLook(
+                    puttingBack: spots, now: now, hardDeadline: now + 20, topology: topology),
+                20 - back))
+        // Less than the way back: nothing, never less.
+        #expect(
+            SpaceWalk.timeToLook(
+                puttingBack: spots, now: now, hardDeadline: now + back - 1, topology: topology)
+                == 0)
+        // No end in sight: no limit, topology or not.
+        #expect(
+            SpaceWalk.timeToLook(
+                puttingBack: spots, now: now, hardDeadline: .distantFuture, topology: topology)
+                == nil)
+        #expect(
+            SpaceWalk.timeToLook(
+                puttingBack: spots, now: now, hardDeadline: .distantFuture, topology: nil) == nil)
+        // An end, and no way to tell how long the way back is: no time to look.
+        #expect(
+            SpaceWalk.timeToLook(
+                puttingBack: spots, now: now, hardDeadline: now + 60, topology: nil) == 0)
+    }
+
+    /// The trip and the lookups after it set aside the same way back: a trip
+    /// that only just fitted before the end still leaves time to look whether
+    /// it arrived at the window, instead of having to turn back at once.
+    @Test func aTripThatOnlyJustFittedLeavesTimeToLookAfterIt() async {
+        let fake = spaces()
+        let start = fake.clock
+        // The third press is the last that fits: it starts 0.9 s in.
+        fake.end =
+            start + 0.9 + SpaceWalk.parkSeconds + SpaceWalk.pressTimeout
+            + SpaceWalk.walkBackSeconds(steps: 3) + 0.05
+        let outcome = await SpaceWalk.travel(to: 4, deadline: plenty(fake), driver: fake)
+        #expect(
+            outcome
+                == .arrived(display: "A", from: 1, direction: .right, presses: 3, strayRetries: 0))
+        let left = SpaceWalk.timeToLook(
+            puttingBack: [SpaceSpot(display: "A", space: 1)], now: fake.clock,
+            hardDeadline: fake.end, topology: fake.topology())
+        #expect((left ?? 0) > 1)
+    }
 }

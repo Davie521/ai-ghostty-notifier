@@ -74,6 +74,10 @@ public struct TabJump: Equatable, Sendable {
         /// focused: a focus now would bring the window to wherever the
         /// desktops were left, a Space the user never chose.
         case strandedTrip
+        /// Another jump was still under way, in this process or another, for
+        /// longer than this one waits. Nothing was done: a focus now could
+        /// bring a window across while the other jump is on its way.
+        case busy
     }
 
     public enum Step: Equatable, Sendable {

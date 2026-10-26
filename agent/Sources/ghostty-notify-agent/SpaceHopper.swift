@@ -108,6 +108,25 @@ enum SpaceHopper {
         }
     }
 
+    /// When the process will be ended, less the reserve every press keeps
+    /// clear of it: the `--focus` mode's own deadline, or the resident's once
+    /// it starts to shut down. `distantFuture` otherwise.
+    static func hardDeadline() -> Date {
+        let ends = [NativeLifecycle.deadline, shutdownDeadline].compactMap { $0 }
+        guard let end = ends.min() else { return .distantFuture }
+        return end.addingTimeInterval(-hardReserveSeconds)
+    }
+
+    /// How long a lookup may take now and still leave the time to put these
+    /// displays back before the process is ended; nil when it has no end in
+    /// sight.
+    static func timeToLook(puttingBack spots: [SpaceSpot]) -> Double? {
+        let end = hardDeadline()
+        return SpaceWalk.timeToLook(
+            puttingBack: spots, now: Date(), hardDeadline: end,
+            topology: end == .distantFuture ? nil : WindowServer.topology())
+    }
+
     /// Puts displays back on the Spaces they showed before trips moved them.
     /// Putting right, so it runs even in a jump that is being given up, and
     /// it puts the pointer back. True when every display is back.
@@ -169,11 +188,7 @@ enum SpaceHopper {
 
         func stopRequested() -> Bool { Task.isCancelled }
 
-        func hardDeadline() -> Date {
-            let ends = [NativeLifecycle.deadline, SpaceHopper.shutdownDeadline].compactMap { $0 }
-            guard let end = ends.min() else { return .distantFuture }
-            return end.addingTimeInterval(-SpaceHopper.hardReserveSeconds)
-        }
+        func hardDeadline() -> Date { SpaceHopper.hardDeadline() }
 
         /// Moves the pointer to the middle of `bounds` and waits, briefly,
         /// until it is seen there: the shortcut goes to the display the window

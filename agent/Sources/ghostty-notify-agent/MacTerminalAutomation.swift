@@ -72,7 +72,7 @@ struct MacTerminalAutomation: TerminalAutomationProviding {
                 AgentLog.append(TabJumpRunner.describe(report), to: paths.log)
             }
             switch report.outcome {
-            case .verified, .abandoned, .strandedTrip: return
+            case .verified, .abandoned, .strandedTrip, .busy: return
             case .notFound, .unverified: break
             }
         }

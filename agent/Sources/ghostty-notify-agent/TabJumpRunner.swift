@@ -35,13 +35,25 @@ enum TabJumpRunner {
         // One jump at a time across processes: the resident's and the
         // `--focus` mode's would interleave their presses and take each
         // other's Space changes for their own. Held to the end, putting back
-        // included. Without it — another jump stuck for longer than the wait —
-        // this one still focuses, but travels nowhere.
+        // included. A jump that finds another still under way for longer than
+        // it waits does nothing at all: even a plain focus could pull a window
+        // onto a Space the other jump is only passing through.
         var wait = Date().addingTimeInterval(leaseWait)
         if let deadline {
             wait = min(wait, deadline.addingTimeInterval(-SpaceHopper.focusReserveSeconds))
         }
-        let lease = await jumpLease(until: wait)
+        // Without a lock file to be had at all, the jump goes on as jumps did
+        // before trips: it focuses, and travels nowhere.
+        let lease: FileLease?
+        switch await jumpLease(until: wait) {
+        case .acquired(let held): lease = held
+        case .unavailable: lease = nil
+        case .held:
+            let outcome: TabJump.Outcome = Task.isCancelled ? .abandoned : .busy
+            return Report(
+                plan: plan, outcome: outcome, route: "another jump was still under way",
+                accessibilityMissing: false)
+        }
         defer { lease?.release() }
         /// The last trip, once it has arrived, for the log.
         var travelled: String?
@@ -58,14 +70,37 @@ enum TabJumpRunner {
                 default: step = plan.abandon()
                 }
             }
+            // With a display moved, a lookup leaves the time to put it back
+            // before the process is ended, and a cancellation cuts it short.
+            // When there is no time left for one, or it was cut short, the jump
+            // gives up and the display goes back.
+            var timeToLook: Double?
+            if !plan.moved.isEmpty, Self.looksUp(step),
+                let left = SpaceHopper.timeToLook(puttingBack: plan.moved)
+            {
+                if left < leastLookupSeconds {
+                    route += "; out of time to look again"
+                    step = plan.abandon()
+                } else {
+                    timeToLook = left
+                }
+            }
             switch step {
             case .locate:
-                let (probe, windows) = await Ghostty.locate(tabID: tabID)
+                guard
+                    let (probe, windows) = await locate(
+                        tabID, cutShort: !plan.moved.isEmpty, within: timeToLook)
+                else {
+                    route += "; no answer in time to look again"
+                    step = plan.abandon()
+                    continue
+                }
                 scripted = windows
                 if probe == .unknown { route = "window not located" }
                 step = plan.observe(probe: probe)
             case .survey(let window):
-                let survey = survey(window: window, scripted: scripted, leased: lease != nil)
+                let survey = survey(
+                    window: window, scripted: scripted, leased: lease != nil, within: timeToLook)
                 switch survey {
                 case .placed(let place):
                     if let travelled {
@@ -89,6 +124,9 @@ enum TabJumpRunner {
                 case .unanswered(let why):
                     route = "window not placed: \(why)"
                     step = plan.observe(place: .unknown)
+                case .outOfTime:
+                    route += "; out of time to look again"
+                    step = plan.abandon()
                 }
             case .hop(let window):
                 switch await SpaceHopper.travel(to: window, before: deadline) {
@@ -142,28 +180,66 @@ enum TabJumpRunner {
         /// needed to travel asks for the permission.
         case untrusted(mayBeOutOfView: Bool)
         case unanswered(String)
+        /// The read ran out of the time it had left before a display a trip
+        /// moved had to go back.
+        case outOfTime
     }
 
-    /// The lease every jump holds while it runs; nil when another jump held it
-    /// until `deadline`, when this jump was cancelled meanwhile, or when the
-    /// lock file cannot be had.
-    private static func jumpLease(until deadline: Date) async -> FileLease? {
-        guard let paths = try? AgentPaths(env: ProcessInfo.processInfo.environment) else {
-            return nil
+    /// Less than this, and a lookup would only be cut short.
+    static let leastLookupSeconds = 0.3
+    /// The locate script's Apple Event timeout, and a little more.
+    static let locateSeconds = 3.5
+    /// How long a lookup cancelled with its jump may still take: a healthy one
+    /// has answered by then, and the display it was made for goes back.
+    static let cancelledLookupSeconds = 0.25
+
+    private static func looksUp(_ step: TabJump.Step) -> Bool {
+        switch step {
+        case .locate, .survey: return true
+        default: return false
         }
+    }
+
+    /// The lookup; nil when it was cut short, its late answer dropped. Only a
+    /// lookup made with a display moved is: by `seconds`, at most the locate
+    /// script's own timeout, and by a cancellation of the jump.
+    private static func locate(_ tabID: String, cutShort: Bool, within seconds: Double?) async
+        -> (TabJump.Probe, [ScriptedWindow])?
+    {
+        guard cutShort else { return await Ghostty.locate(tabID: tabID) }
+        return try? await QueryDeadline.run(
+            seconds: min(locateSeconds, seconds ?? locateSeconds),
+            cancelledSeconds: cancelledLookupSeconds
+        ) { await Ghostty.locate(tabID: tabID) }
+    }
+
+    /// The lease every jump holds while it runs. `held` once another jump has
+    /// held it until `deadline`, or this one was cancelled while waiting;
+    /// `unavailable` when there is no lock file to be had at all — no home,
+    /// an unwritable state directory.
+    private static func jumpLease(until deadline: Date) async -> FileLease.Attempt {
+        guard let paths = try? AgentPaths(env: ProcessInfo.processInfo.environment) else {
+            return .unavailable
+        }
+        try? PrivateFile.createDirectory(paths.root)
         while true {
-            // A try, not a wait: `FileLease` waits by blocking its thread,
-            // and this is the main actor.
-            if let lease = FileLease.acquire(paths.root + "/jump", timeout: 0) { return lease }
-            guard Date() < deadline, !Task.isCancelled else { return nil }
+            // A try, not a wait: `FileLease.acquire` waits by blocking its
+            // thread, and this is the main actor.
+            let attempt = FileLease.attempt(paths.root + "/jump")
+            guard case .held = attempt else { return attempt }
+            guard Date() < deadline, !Task.isCancelled else { return .held }
             await withCheckedContinuation { continuation in
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { continuation.resume() }
             }
         }
     }
 
-    private static func survey(window: String, scripted: [ScriptedWindow], leased: Bool) -> Survey {
-        guard leased else { return .unanswered("another jump was still under way") }
+    /// Where the window is. `within` bounds the Accessibility read when a
+    /// display a trip moved has to go back in time.
+    private static func survey(
+        window: String, scripted: [ScriptedWindow], leased: Bool, within limit: Double?
+    ) -> Survey {
+        guard leased else { return .unanswered("no lock file to keep jumps apart") }
         guard let pid = Ghostty.processID else { return .unanswered("Ghostty not running") }
         guard let topology = WindowServer.topology() else {
             return .unanswered("no Space topology")
@@ -175,7 +251,9 @@ enum TabJumpRunner {
                 visibleSpaces: topology.visibleSpaces)
             return .untrusted(mayBeOutOfView: place.mayBeOutOfView)
         }
-        guard let seen = WindowServer.seenWindows(ownedBy: pid) else {
+        let budget = min(WindowServer.seenWindowsBudget, limit ?? .infinity)
+        guard let seen = WindowServer.seenWindows(ownedBy: pid, within: budget) else {
+            if budget < WindowServer.seenWindowsBudget { return .outOfTime }
             return .unanswered("Ghostty did not answer Accessibility in time")
         }
         return .placed(
@@ -192,6 +270,8 @@ enum TabJumpRunner {
             return "jump: gave up on \(tabID) (\(report.route)), stopping"
         case .strandedTrip:
             return "jump: \(tabID) not focused (\(report.route))"
+        case .busy:
+            return "jump: \(tabID) left alone (\(report.route))"
         case .notFound:
             return "jump: \(tabID) not found, activated Ghostty only"
         case .verified(reads: 0, focusAttempts: 1):
