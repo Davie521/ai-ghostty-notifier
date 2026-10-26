@@ -69,7 +69,7 @@ struct MacTerminalAutomation: TerminalAutomationProviding {
             // deadline ends with `_exit`.
             let report = await TabJumpRunner.run(tabID: tabID, deadline: NativeLifecycle.deadline)
             if let paths = try? AgentPaths(env: ProcessInfo.processInfo.environment) {
-                AgentLog.append(TabJumpRunner.describe(report), to: paths.log)
+                AgentLog.append(TabJumpRun.describe(report), to: paths.log)
             }
             switch report.outcome {
             case .verified, .abandoned, .strandedTrip, .busy: return

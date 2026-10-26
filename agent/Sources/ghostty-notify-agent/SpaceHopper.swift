@@ -17,25 +17,6 @@ import NotifyCore
 /// nine live runs, which is what the walk's undo and retry are for.
 @MainActor
 enum SpaceHopper {
-    struct Trip: Equatable, Sendable {
-        let display: String
-        /// The Space the display showed before the trip.
-        let from: UInt64
-        let direction: SpaceHop.Direction
-        let presses: Int
-        /// Presses that switched the wrong display and were undone.
-        let strayRetries: Int
-    }
-
-    enum Outcome: Equatable, Sendable {
-        case arrived(Trip)
-        case alreadyShowing
-        /// Did not get there; the desktops are as they were.
-        case failed(String)
-        /// Did not get there, and could not put the desktops back.
-        case stranded(String)
-    }
-
     /// The longest one trip may take: sixteen presses, the most a route
     /// allows, at the few hundred milliseconds each takes.
     static let maxTripSeconds = 8.0
@@ -71,7 +52,7 @@ enum SpaceHopper {
     /// `--focus` mode sent SIGTERM — stops going onward, walks back, and puts
     /// the pointer back.
     static func travel(to window: OrderedWindow, before callerDeadline: Date? = nil) async
-        -> Outcome
+        -> SpaceWalk.TripOutcome
     {
         guard WindowServer.isTrusted else { return .failed("Accessibility not granted") }
         guard let space = window.spaces.first else {
@@ -88,20 +69,7 @@ enum SpaceHopper {
             pointerToRestore = nil
             isTravelling = false
         }
-        let outcome = await SpaceWalk.travel(to: space, deadline: deadline, driver: LiveDriver())
-        switch outcome {
-        case .arrived(let display, let from, let direction, let presses, let strayRetries):
-            return .arrived(
-                Trip(
-                    display: display, from: from, direction: direction, presses: presses,
-                    strayRetries: strayRetries))
-        case .alreadyShowing:
-            return .alreadyShowing
-        case .failed(let why):
-            return .failed(why)
-        case .stranded(let why):
-            return .stranded(why)
-        }
+        return await SpaceWalk.travel(to: space, deadline: deadline, driver: LiveDriver())
     }
 
     /// When the process will be ended, less the reserve every press keeps

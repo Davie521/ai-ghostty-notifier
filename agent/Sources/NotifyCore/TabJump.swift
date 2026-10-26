@@ -1,5 +1,16 @@
 import Foundation
 
+/// A display and the Space it showed.
+public struct SpaceSpot: Equatable, Sendable {
+    public let display: String
+    public let space: UInt64
+
+    public init(display: String, space: UInt64) {
+        self.display = display
+        self.space = space
+    }
+}
+
 /// The steps of one click-to-jump, decided from what Ghostty and the window
 /// server report back.
 ///
@@ -24,17 +35,6 @@ import Foundation
 ///
 /// Pure bookkeeping, no Apple Events and no window server: the resident
 /// drives it and NotifyCore tests can walk every path.
-/// A display and the Space it showed.
-public struct SpaceSpot: Equatable, Sendable {
-    public let display: String
-    public let space: UInt64
-
-    public init(display: String, space: UInt64) {
-        self.display = display
-        self.space = space
-    }
-}
-
 public struct TabJump: Equatable, Sendable {
     /// What the read-only lookup of the requested tab found.
     public enum Probe: Equatable, Sendable {

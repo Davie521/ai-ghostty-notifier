@@ -633,7 +633,7 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         jumpInFlight = task
     }
 
-    private func finishJump(_ report: TabJumpRunner.Report) {
+    private func finishJump(_ report: TabJumpRun.Report) {
         switch report.outcome {
         case .notFound, .unverified:
             // Front the app at least: the user is one keystroke away instead
@@ -646,7 +646,7 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             // could pull the very window the trip was on its way to.
             break
         }
-        log(TabJumpRunner.describe(report))
+        log(TabJumpRun.describe(report))
         if report.accessibilityMissing { noteAccessibilityMissing() }
     }
 
