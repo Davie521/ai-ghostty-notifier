@@ -457,13 +457,38 @@ if (( HOME_INDEX >= 0 && HOME_INDEX + AWAY_STEPS < ${#SPACE_ROW[@]} )); then AWA
 elif (( HOME_INDEX - AWAY_STEPS >= 0 )); then AWAY_KEY=123
 else fail "display $DISPLAY_ID needs $((AWAY_STEPS + 1)) Spaces in a row for this check"
 fi
+# A press can land on the other display, as the agent's can: it is put back
+# and pressed again, twice at most, the way the agent does it.
+if [[ "$AWAY_KEY" == 124 ]]; then BACK_KEY=123; else BACK_KEY=124; fi
 for _ in $(seq 1 "$AWAY_STEPS"); do
-    was=$(display_field "$BG" "$DISPLAY_ID" current)
-    warp "$((bx + bw / 2))" "$((by + bh / 2))"; sleep 0.2
-    press "$AWAY_KEY"
-    now=$was
-    for _ in $(seq 1 20); do sleep 0.2; now=$(display_field "$BG" "$DISPLAY_ID" current); [[ "$now" != "$was" ]] && break; done
-    [[ "$now" != "$was" ]] || fail "Control-arrow did not switch display $DISPLAY_ID's Space (is the shortcut the default?)"
+    retries=0
+    while :; do
+        before=$(current_spaces)
+        was=$(awk -v id="$DISPLAY_ID" '$1==id {print $2}' <<<"$before")
+        warp "$((bx + bw / 2))" "$((by + bh / 2))"; sleep 0.2
+        press "$AWAY_KEY"
+        now=$was
+        strayed=""
+        for _ in $(seq 1 20); do
+            sleep 0.2
+            after=$(current_spaces)
+            now=$(awk -v id="$DISPLAY_ID" '$1==id {print $2}' <<<"$after")
+            [[ "$now" != "$was" ]] && break
+            strayed=$(awk -v id="$DISPLAY_ID" 'NR==FNR { start[$1]=$2; next } $1!=id && start[$1]!=$2 { print $1; exit }' <(printf '%s\n' "$before") <(printf '%s\n' "$after"))
+            [[ -n "$strayed" ]] && break
+        done
+        [[ "$now" != "$was" ]] && break
+        [[ -n "$strayed" ]] || fail "Control-arrow did not switch display $DISPLAY_ID's Space (is the shortcut the default?)"
+        retries=$((retries + 1))
+        echo "the press switched display $strayed instead; putting it back (retry $retries)"
+        strayed_was=$(awk -v id="$strayed" '$1==id {print $2}' <<<"$before")
+        IFS=, read -r sx sy sw sh <<<"$(display_field "$BG" "$strayed" bounds)"
+        warp "$((sx + sw / 2))" "$((sy + sh / 2))"; sleep 0.2
+        press "$BACK_KEY"
+        for _ in $(seq 1 20); do sleep 0.2; [[ "$(display_field "$BG" "$strayed" current)" == "$strayed_was" ]] && break; done
+        [[ "$(display_field "$BG" "$strayed" current)" == "$strayed_was" ]] || fail "could not put display $strayed back on Space $strayed_was"
+        (( retries <= 2 )) || fail "the press kept switching display $strayed instead of $DISPLAY_ID"
+    done
 done
 for _ in $(seq 1 10); do [[ "$(place_of "$BG")" == hidden* ]] && break; sleep 0.2; done
 AWAY_SPACE=$(display_field "$BG" "$DISPLAY_ID" current)
