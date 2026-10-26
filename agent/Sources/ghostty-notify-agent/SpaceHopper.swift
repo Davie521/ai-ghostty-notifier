@@ -96,7 +96,17 @@ enum SpaceHopper {
                 // The press switched a display the trip was not for. Put it
                 // back, then try again; a trip that gives up leaves the
                 // user's desktops as they were.
-                for stray in strays { await undo(stray, pressed: hop.direction) }
+                for stray in strays {
+                    let original = before.displays.first { $0.identifier == stray }?.current
+                    guard let original, await undo(stray, backTo: original, pressed: hop.direction)
+                    else {
+                        // Pressing on while the desktops are not where they
+                        // were would only make it worse.
+                        return .failed(
+                            "the shortcut switched display \(stray.prefix(8)) and it could not be put back"
+                        )
+                    }
+                }
                 guard strayRetries < maxStrayRetries else {
                     return .failed(
                         "the shortcut switched display \(strays[0].prefix(8)), not "
@@ -147,15 +157,28 @@ enum SpaceHopper {
         }
     }
 
-    /// One press the other way, with the pointer on `display`.
-    private static func undo(_ display: String, pressed direction: SpaceHop.Direction) async {
+    /// One press the other way, with the pointer on `display`; true once that
+    /// display shows `original` again.
+    private static func undo(
+        _ display: String, backTo original: UInt64, pressed direction: SpaceHop.Direction
+    ) async -> Bool {
         let back: SpaceHop.Direction = direction == .left ? .right : .left
-        guard let shortcut = WindowServer.shortcut(back), let before = WindowServer.topology()
-        else { return }
-        if let bounds = WindowServer.displayBounds(display) { await parkPointer(on: bounds) }
+        guard let shortcut = WindowServer.shortcut(back),
+            let bounds = WindowServer.displayBounds(display)
+        else { return false }
+        await parkPointer(on: bounds)
         WindowServer.press(shortcut)
-        _ = await anySpaceChange(from: before)
-        await sleep(settleAfterPress)
+        let deadline = Date().addingTimeInterval(pressTimeout)
+        while Date() < deadline {
+            await sleep(pollInterval)
+            let current = WindowServer.topology()?.displays.first { $0.identifier == display }?
+                .current
+            if current == original {
+                await sleep(settleAfterPress)
+                return true
+            }
+        }
+        return false
     }
 
     private static func sleep(_ seconds: Double) async {

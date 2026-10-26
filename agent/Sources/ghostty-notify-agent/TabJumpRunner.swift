@@ -26,6 +26,8 @@ enum TabJumpRunner {
         var scripted: [ScriptedWindow] = []
         var route = "window in view"
         var accessibilityMissing = false
+        /// The last trip, once it has arrived, for the log.
+        var travelled: String?
         while true {
             switch step {
             case .locate:
@@ -37,7 +39,13 @@ enum TabJumpRunner {
                 let survey = survey(window: window, scripted: scripted)
                 switch survey {
                 case .placed(let place):
-                    if case .unknown = place { route = "window not placed" }
+                    if let travelled {
+                        // The look after a trip, with titles read after it.
+                        let seen = place == .showing ? "window in view" : "window still out of view"
+                        route = "\(travelled), \(seen)"
+                    } else if case .unknown = place {
+                        route = "window not placed"
+                    }
                     step = plan.observe(place: place)
                 case .untrusted(let targetHidden):
                     // Without the permission no trip can happen; the focus
@@ -54,19 +62,20 @@ enum TabJumpRunner {
             case .hop(let window):
                 switch await SpaceHopper.travel(to: window) {
                 case .arrived(let trip):
-                    let confirmed = confirm(window: plan.window, scripted: scripted)
                     let retried =
                         trip.strayRetries > 0
                         ? " after undoing \(trip.strayRetries) press(es) on another display" : ""
-                    route =
+                    travelled =
                         "travelled \(trip.presses) \(trip.direction == .left ? "left" : "right") on "
-                        + "display \(trip.display.prefix(8))\(retried), window "
-                        + "\(confirmed ? "in view" : "still out of view")"
-                    step = plan.observe(hopResult: .arrived(confirmed: confirmed))
+                        + "display \(trip.display.prefix(8))\(retried)"
+                    route = travelled ?? route
+                    step = plan.observe(hopResult: .arrived)
                 case .alreadyShowing:
-                    route = "window in view"
-                    step = plan.observe(hopResult: .arrived(confirmed: true))
+                    travelled = "no travel: the Space came into view by itself"
+                    route = travelled ?? route
+                    step = plan.observe(hopResult: .arrived)
                 case .failed(let why):
+                    travelled = nil
                     route = "no travel: \(why)"
                     step = plan.observe(hopResult: .failed(reason: why))
                 }
@@ -112,13 +121,6 @@ enum TabJumpRunner {
                 window, scripted: scripted, ordered: ordered,
                 seen: WindowServer.seenWindows(ownedBy: pid),
                 visibleSpaces: topology.visibleSpaces))
-    }
-
-    /// After a trip: is the window the jump wants among those in view now?
-    private static func confirm(window: String?, scripted: [ScriptedWindow]) -> Bool {
-        guard let window, case .placed(let place) = survey(window: window, scripted: scripted)
-        else { return false }
-        return place == .showing
     }
 
     /// One line for the log, the same from both callers.

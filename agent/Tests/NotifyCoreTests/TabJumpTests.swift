@@ -49,14 +49,17 @@ import Testing
         #expect(jump.hops == 0)
     }
 
-    /// Issue #63: the window is on a hidden Space. The jump travels there and,
-    /// once the window is confirmed in view, focuses.
+    /// Issue #63: the window is on a hidden Space. The jump travels there,
+    /// looks again with what Ghostty and the window server say now, and
+    /// focuses once that look finds the window in view.
     @Test func aHiddenWindowIsTravelledToBeforeTheFocus() {
         var (jump, step) = located(.hidden(candidates: [hiddenA]))
         #expect(step == .hop(hiddenA))
         #expect(jump.hops == 1)
-        #expect(jump.observe(hopResult: .arrived(confirmed: true)) == .focus)
-        #expect(jump.lastHop == .arrived(confirmed: true))
+        #expect(jump.observe(hopResult: .arrived) == .locate)
+        #expect(jump.lastHop == .arrived)
+        #expect(jump.observe(probe: .found(window: window)) == .survey(window: window))
+        #expect(jump.observe(place: .showing) == .focus)
         #expect(jump.observe(focusResult: tab) == .stop(.verified(reads: 0, focusAttempts: 1)))
     }
 
@@ -69,21 +72,37 @@ import Testing
         #expect(jump.hops == 1)
     }
 
-    /// Arrived, but the window there was another of Ghostty's: one more trip,
-    /// to the next candidate.
-    @Test func anUnconfirmedArrivalTriesTheNextCandidateOnce() {
+    /// Arrived, but the fresh look still finds the window out of view — the
+    /// Space held another of Ghostty's windows: one more trip, to a window
+    /// not yet visited, and no more after that.
+    @Test func anArrivalThatStillLeavesTheWindowHiddenTriesAnotherCandidateOnce() {
         var (jump, step) = located(.hidden(candidates: [hiddenA, hiddenB]))
         #expect(step == .hop(hiddenA))
-        #expect(jump.observe(hopResult: .arrived(confirmed: false)) == .hop(hiddenB))
+        #expect(jump.observe(hopResult: .arrived) == .locate)
+        _ = jump.observe(probe: .found(window: window))
+        // The fresh survey lists the window just visited first; it is skipped.
+        #expect(jump.observe(place: .hidden(candidates: [hiddenA, hiddenB])) == .hop(hiddenB))
         #expect(jump.hops == 2)
-        #expect(jump.observe(hopResult: .arrived(confirmed: false)) == .focus)
+        #expect(jump.observe(hopResult: .arrived) == .locate)
+        _ = jump.observe(probe: .found(window: window))
+        #expect(jump.observe(place: .hidden(candidates: [hiddenA, hiddenB])) == .focus)
         #expect(jump.hops == TabJump.maxHops)
     }
 
-    @Test func anUnconfirmedArrivalWithNoOtherCandidateFocuses() {
+    @Test func anArrivalThatStillLeavesTheWindowHiddenWithNoOtherCandidateFocuses() {
         var (jump, step) = located(.hidden(candidates: [hiddenA]))
         #expect(step == .hop(hiddenA))
-        #expect(jump.observe(hopResult: .arrived(confirmed: false)) == .focus)
+        #expect(jump.observe(hopResult: .arrived) == .locate)
+        _ = jump.observe(probe: .found(window: window))
+        #expect(jump.observe(place: .hidden(candidates: [hiddenA])) == .focus)
+        #expect(jump.hops == 1)
+    }
+
+    /// The tab closed during the trip: the fresh look says so.
+    @Test func aTabThatClosedDuringTheTripStops() {
+        var (jump, _) = located(.hidden(candidates: [hiddenA]))
+        #expect(jump.observe(hopResult: .arrived) == .locate)
+        #expect(jump.observe(probe: .notFound) == .stop(.notFound))
     }
 
     @Test func noCandidatesMeansNoTravel() {
@@ -152,17 +171,14 @@ import Testing
             ]),
         ])
     func everyPathIsBounded(answer: String?, place: WindowPlace) {
-        for hopResult in [
-            TabJump.HopResult.arrived(confirmed: true), .arrived(confirmed: false),
-            .failed(reason: "x"),
-        ] {
+        for hopResult in [TabJump.HopResult.arrived, .failed(reason: "x")] {
             var jump = TabJump(requested: tab)
             var step = jump.start
             var steps = 0
             while true {
                 steps += 1
-                #expect(steps <= 12, "jump did not stop")
-                if steps > 12 { break }
+                #expect(steps <= 20, "jump did not stop")
+                if steps > 20 { break }
                 switch step {
                 case .locate: step = jump.observe(probe: .found(window: window))
                 case .survey: step = jump.observe(place: place)
@@ -173,7 +189,7 @@ import Testing
                 }
                 if case .stop = step { break }
             }
-            #expect(steps <= 10)
+            #expect(steps <= 14)
             #expect(jump.focusAttempts <= TabJump.maxFocusAttempts)
             #expect(jump.hops <= TabJump.maxHops)
         }

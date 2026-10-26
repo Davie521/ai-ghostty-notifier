@@ -37,9 +37,8 @@ public struct TabJump: Equatable, Sendable {
 
     /// How a trip to a hidden window's Space ended.
     public enum HopResult: Equatable, Sendable {
-        /// The Space came into view. `confirmed` is whether the window the
-        /// jump wants is now among the windows showing.
-        case arrived(confirmed: Bool)
+        /// The Space came into view.
+        case arrived
         /// Nothing moved; `reason` is for the log.
         case failed(reason: String)
     }
@@ -55,7 +54,11 @@ public struct TabJump: Equatable, Sendable {
     }
 
     public enum Step: Equatable, Sendable {
-        /// Ask Ghostty, changing nothing, which window holds the tab.
+        /// Ask Ghostty, changing nothing, which window holds the tab. At the
+        /// start, and again after a trip: whether the window is now in view
+        /// is decided from what Ghostty and the window server say then, not
+        /// from titles read before the trip, which a busy session will have
+        /// changed by the time it ends.
         case locate
         /// Ask the window server and Accessibility where that window is.
         case survey(window: String)
@@ -74,8 +77,8 @@ public struct TabJump: Equatable, Sendable {
     public static let settleSeconds = 0.2
     /// Focus commands per jump, in total.
     public static let maxFocusAttempts = 2
-    /// Trips per jump, in total. A second one happens only when the first
-    /// arrived at a Space that turned out to hold another Ghostty window.
+    /// Trips per jump, in total. A second one happens only when a fresh
+    /// look after the first still finds the window out of view.
     public static let maxHops = 2
 
     public let requested: String
@@ -85,8 +88,11 @@ public struct TabJump: Equatable, Sendable {
     public private(set) var window: String?
     public private(set) var hops = 0
     public private(set) var lastHop: HopResult?
-    /// Windows still worth travelling to if the current trip is not confirmed.
+    /// Windows the last survey placed out of view, most likely first.
     private var candidates: [OrderedWindow] = []
+    /// Windows already travelled to; a later survey does not send the jump
+    /// back to one of them.
+    private var visited: Set<UInt32> = []
     /// Re-reads since the last focus command; one is allowed per focus.
     private var readsSinceFocus = 0
 
@@ -126,17 +132,18 @@ public struct TabJump: Equatable, Sendable {
     public mutating func observe(hopResult: HopResult) -> Step {
         lastHop = hopResult
         switch hopResult {
-        case .arrived(confirmed: true), .failed:
-            return .focus
-        case .arrived(confirmed: false):
-            return nextHop() ?? .focus
+        case .arrived: return .locate
+        case .failed: return .focus
         }
     }
 
     private mutating func nextHop() -> Step? {
-        guard hops < Self.maxHops, !candidates.isEmpty else { return nil }
+        guard hops < Self.maxHops,
+            let next = candidates.first(where: { !visited.contains($0.number) })
+        else { return nil }
         hops += 1
-        return .hop(candidates.removeFirst())
+        visited.insert(next.number)
+        return .hop(next)
     }
 
     /// What the focus command reported as the selection of the front window,

@@ -20,6 +20,11 @@ enum Whereabouts {
                 "display \(display.identifier) current=\(display.current.map(String.init) ?? "?")"
                     + " spaces=\(list(display.spaces)) bounds=\(bounds ?? "?")")
         }
+        // Asking a Ghostty that is not running would start it.
+        guard Ghostty.processID != nil else {
+            print("Ghostty is not running")
+            return 1
+        }
         let (probe, windows) = await Ghostty.locate(tabID: tabID)
         for window in windows { print("window \(window.id) title=\(window.title)") }
         var ordered: [OrderedWindow] = []

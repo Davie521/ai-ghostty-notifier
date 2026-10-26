@@ -152,13 +152,20 @@ enum WindowServer {
             AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &value)
                 == .success, let windows = value as? [AXUIElement]
         else { return [] }
-        return windows.compactMap { element in
+        var seen: [SeenWindow] = []
+        for element in windows {
+            // A timeout set on the application does not carry over to the
+            // window elements it returns.
+            AXUIElementSetMessagingTimeout(element, 1)
             var number: CGWindowID = 0
-            guard elementWindowNumber(element, &number) == .success else { return nil }
+            guard elementWindowNumber(element, &number) == .success else { continue }
             var title: CFTypeRef?
-            AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &title)
-            return SeenWindow(number: number, title: title as? String ?? "")
+            let read = AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &title)
+            // A Ghostty that stopped answering will not answer the next one either.
+            if read == .cannotComplete { break }
+            seen.append(SeenWindow(number: number, title: title as? String ?? ""))
         }
+        return seen
     }
 
     // MARK: - Accessibility
@@ -224,7 +231,11 @@ enum WindowServer {
     // MARK: - Displays and the pointer
 
     /// The display's frame in the global coordinates pointer events use.
+    /// With "Displays have separate Spaces" off the window server names one
+    /// shared set of Spaces "Main"; the shortcut then switches every display,
+    /// so the main display does.
     static func displayBounds(_ identifier: String) -> CGRect? {
+        if identifier == "Main" { return CGDisplayBounds(CGMainDisplayID()) }
         var count: UInt32 = 0
         guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return nil }
         var displays = [CGDirectDisplayID](repeating: 0, count: Int(count))

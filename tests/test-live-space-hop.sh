@@ -154,20 +154,11 @@ tell application "Ghostty"
     repeat with w in windows
         set end of seen to (id of w)
     end repeat
-    new window
-    set newWin to missing value
-    repeat 50 times
-        delay 0.1
-        set fresh to 0
-        repeat with w in windows
-            if seen does not contain (id of w) then
-                set newWin to w
-                set fresh to fresh + 1
-            end if
-        end repeat
-        if fresh is 1 then exit repeat
-    end repeat
-    if newWin is missing value then error "no new window appeared"
+    -- The window the command returns is the one it made; a window someone
+    -- else opens meanwhile is never taken for it.
+    set newWin to new window
+    if newWin is missing value then error "no new window"
+    if seen contains (id of newWin) then error "new window returned an existing window"
     if (count of tabs of newWin) is not 1 then error "the new window should have one tab"
     return (id of newWin) & " " & (id of first tab of newWin)
 end tell
@@ -273,20 +264,11 @@ tell application "Ghostty"
     repeat with w in windows
         set end of seen to (id of w)
     end repeat
-    new window
-    set newWin to missing value
-    repeat 50 times
-        delay 0.1
-        set fresh to 0
-        repeat with w in windows
-            if seen does not contain (id of w) then
-                set newWin to w
-                set fresh to fresh + 1
-            end if
-        end repeat
-        if fresh is 1 then exit repeat
-    end repeat
-    if newWin is missing value then error "no new window appeared"
+    -- The window the command returns is the one it made; a window someone
+    -- else opens meanwhile is never taken for it.
+    set newWin to new window
+    if newWin is missing value then error "no new window"
+    if seen contains (id of newWin) then error "new window returned an existing window"
     return (id of newWin) & " " & (id of first tab of newWin)
 end tell
 AS
