@@ -19,6 +19,8 @@ import NotifyCore
 enum SpaceHopper {
     struct Trip: Equatable, Sendable {
         let display: String
+        /// The Space the display showed before the trip.
+        let from: UInt64
         let direction: SpaceHop.Direction
         let presses: Int
         /// Presses that switched the wrong display and were undone.
@@ -91,11 +93,11 @@ enum SpaceHopper {
         }
         let outcome = await SpaceWalk.travel(to: space, deadline: deadline, driver: LiveDriver())
         switch outcome {
-        case .arrived(let display, let direction, let presses, let strayRetries):
+        case .arrived(let display, let from, let direction, let presses, let strayRetries):
             await LiveDriver().pause(settleOnArrival)
             return .arrived(
                 Trip(
-                    display: display, direction: direction, presses: presses,
+                    display: display, from: from, direction: direction, presses: presses,
                     strayRetries: strayRetries))
         case .alreadyShowing:
             return .alreadyShowing
@@ -104,6 +106,26 @@ enum SpaceHopper {
         case .stranded(let why):
             return .stranded(why)
         }
+    }
+
+    /// Puts displays back on the Spaces they showed before trips moved them.
+    /// Putting right, so it runs even in a jump that is being given up, and
+    /// it puts the pointer back. True when every display is back.
+    static func restore(_ spots: [SpaceSpot]) async -> Bool {
+        guard WindowServer.isTrusted else { return false }
+        pointerToRestore = WindowServer.pointer
+        isTravelling = true
+        defer {
+            if let pointerToRestore { WindowServer.movePointer(to: pointerToRestore) }
+            pointerToRestore = nil
+            isTravelling = false
+        }
+        var allBack = true
+        for spot in spots {
+            if case .arrived = await SpaceWalk.goBack(to: spot, driver: LiveDriver()) { continue }
+            allBack = false
+        }
+        return allBack
     }
 
     /// The window server and the keyboard, for `SpaceWalk`.

@@ -97,7 +97,9 @@ final class FakeSpaces: SpaceWalkDriver {
     @Test func aTripWalksToTheSpaceOnePressAtATime() async {
         let fake = spaces()
         let outcome = await SpaceWalk.travel(to: 4, deadline: plenty(fake), driver: fake)
-        #expect(outcome == .arrived(display: "A", direction: .right, presses: 3, strayRetries: 0))
+        #expect(
+            outcome
+                == .arrived(display: "A", from: 1, direction: .right, presses: 3, strayRetries: 0))
         #expect(fake.presses == ["right A", "right A", "right A"])
         #expect(fake.current("A") == 4)
         #expect(fake.current("B") == 10)
@@ -124,7 +126,9 @@ final class FakeSpaces: SpaceWalkDriver {
         let fake = spaces()
         fake.effects = [.stray("B")]
         let outcome = await SpaceWalk.travel(to: 3, deadline: plenty(fake), driver: fake)
-        #expect(outcome == .arrived(display: "A", direction: .right, presses: 2, strayRetries: 1))
+        #expect(
+            outcome
+                == .arrived(display: "A", from: 1, direction: .right, presses: 2, strayRetries: 1))
         #expect(fake.presses == ["right A", "left B", "right A", "right A"])
         #expect(fake.current("B") == 10)
         #expect(fake.current("A") == 3)
@@ -347,5 +351,33 @@ final class FakeSpaces: SpaceWalkDriver {
         #expect(outcome == .failed("stopping after 1 presses; went back"))
         #expect(fake.current("A") == 1)
         #expect(fake.clock <= fake.end)
+    }
+
+    /// Five Spaces out, then a dead press, and every step back slow: the walk
+    /// back is given the time its steps need, not a fixed allowance that runs
+    /// out half-way.
+    @Test func aLongTripIsWalkedBackAllTheWayEvenWhenEachStepIsSlow() async {
+        let fake = FakeSpaces([
+            SpaceTopology.Display(identifier: "A", spaces: Array(1...8), current: 1),
+            SpaceTopology.Display(identifier: "B", spaces: [10, 11], current: 10),
+        ])
+        fake.effects = [.aimed, .aimed, .aimed, .aimed, .aimed, .nothing]
+        fake.afterPress = { fake, count in if count == 6 { fake.switchSeconds = 1.49 } }
+        let outcome = await SpaceWalk.travel(to: 8, deadline: plenty(fake), driver: fake)
+        #expect(outcome == .failed("press 6 did not switch the Space; went back"))
+        #expect(fake.current("A") == 1)
+    }
+
+    /// Putting a display back that an earlier trip moved.
+    @Test func goingBackWalksTheDisplayToWhereItWas() async {
+        let fake = spaces()
+        for _ in 0..<3 { _ = await fake.press(.right, on: "A") }
+        #expect(fake.current("A") == 4)
+        let outcome = await SpaceWalk.goBack(to: SpaceSpot(display: "A", space: 1), driver: fake)
+        #expect(outcome == .arrived(presses: 3, strayRetries: 0))
+        #expect(fake.current("A") == 1)
+        #expect(
+            await SpaceWalk.goBack(to: SpaceSpot(display: "A", space: 1), driver: fake)
+                == .arrived(presses: 0, strayRetries: 0))
     }
 }

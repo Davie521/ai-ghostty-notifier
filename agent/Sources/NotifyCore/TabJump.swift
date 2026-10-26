@@ -24,6 +24,17 @@ import Foundation
 ///
 /// Pure bookkeeping, no Apple Events and no window server: the resident
 /// drives it and NotifyCore tests can walk every path.
+/// A display and the Space it showed.
+public struct SpaceSpot: Equatable, Sendable {
+    public let display: String
+    public let space: UInt64
+
+    public init(display: String, space: UInt64) {
+        self.display = display
+        self.space = space
+    }
+}
+
 public struct TabJump: Equatable, Sendable {
     /// What the read-only lookup of the requested tab found.
     public enum Probe: Equatable, Sendable {
@@ -37,8 +48,9 @@ public struct TabJump: Equatable, Sendable {
 
     /// How a trip to a hidden window's Space ended.
     public enum HopResult: Equatable, Sendable {
-        /// The Space came into view.
-        case arrived
+        /// The Space came into view. `from` is where the display the trip
+        /// moved was before it; nil when no display had to move.
+        case arrived(from: SpaceSpot?)
         /// It did not get there, and the desktops are as they were; `reason`
         /// is for the log.
         case failed(reason: String)
@@ -75,6 +87,9 @@ public struct TabJump: Equatable, Sendable {
         case survey(window: String)
         /// Travel to the Space of this window.
         case hop(OrderedWindow)
+        /// Put these displays back on these Spaces: trips moved them, and the
+        /// jump is to end without having found its window in view.
+        case restore([SpaceSpot])
         /// Send the focus command.
         case focus
         /// Read the selected tab again after this many seconds.
@@ -108,6 +123,12 @@ public struct TabJump: Equatable, Sendable {
     /// Windows already travelled to; a later survey does not send the jump
     /// back to one of them.
     private var visited: Set<UInt32> = []
+    /// Where each display a trip moved was before the first such trip, in
+    /// the order they moved.
+    public private(set) var moved: [SpaceSpot] = []
+    /// What follows once the displays are back: the focus that is every
+    /// jump's fallback, or the end a lookup came to.
+    private var afterRestore: Step = .focus
     /// Re-reads since the last focus command; one is allowed per focus.
     private var readsSinceFocus = 0
 
@@ -129,25 +150,28 @@ public struct TabJump: Equatable, Sendable {
             self.window = window
             return .survey(window: window)
         case .notFound:
-            return .stop(.notFound)
+            return putBackFirst(then: .stop(.notFound))
         case .unknown:
             // The focus command answers for itself, as it did before lookups.
-            return .focus
+            return putBackFirst(then: .focus)
         }
     }
 
     /// Where the survey placed the window.
     public mutating func observe(place: WindowPlace) -> Step {
         switch place {
-        case .showing, .unknown:
+        case .showing:
+            // In view, after a trip or without one: focus it where it is.
             return .focus
+        case .unknown:
+            return putBackFirst(then: .focus)
         case .unsettled:
-            guard rereads < Self.maxRereads else { return .focus }
+            guard rereads < Self.maxRereads else { return putBackFirst(then: .focus) }
             rereads += 1
             return .locate
         case .hidden(let candidates):
             self.candidates = candidates
-            return nextHop() ?? .focus
+            return nextHop() ?? putBackFirst(then: .focus)
         }
     }
 
@@ -155,10 +179,35 @@ public struct TabJump: Equatable, Sendable {
     public mutating func observe(hopResult: HopResult) -> Step {
         lastHop = hopResult
         switch hopResult {
-        case .arrived: return .locate
-        case .failed: return .focus
-        case .stranded: return .stop(.strandedTrip)
+        case .arrived(let from):
+            if let from, !moved.contains(where: { $0.display == from.display }) {
+                moved.append(from)
+            }
+            return .locate
+        case .failed:
+            // This trip put its own display back; an earlier one that arrived
+            // at the wrong window may still have moved one.
+            return putBackFirst(then: .focus)
+        case .stranded:
+            return .stop(.strandedTrip)
         }
+    }
+
+    /// How putting the displays back went.
+    public mutating func observe(restored: Bool) -> Step {
+        guard restored else { return .stop(.strandedTrip) }
+        moved = []
+        return afterRestore
+    }
+
+    /// `next`, from the desktops as the user had them. The jump's fallback —
+    /// the plain focus, which brings the window over — must not happen on a
+    /// Space a trip that arrived at the wrong window left in view: that would
+    /// bring the window to a Space the user never chose.
+    private mutating func putBackFirst(then next: Step) -> Step {
+        guard !moved.isEmpty else { return next }
+        afterRestore = next
+        return .restore(moved)
     }
 
     private mutating func nextHop() -> Step? {

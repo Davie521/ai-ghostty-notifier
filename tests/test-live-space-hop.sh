@@ -49,7 +49,7 @@ SESSION_DIR="${GHOSTTY_NOTIFY_SESSION_DIR:-$HOME/.claude/notifications/ghostty-s
 SESSION=$(uuidgen | tr 'A-Z' 'a-z')
 BINDING="$SESSION_DIR/$SESSION.json"
 
-START_CONTROL=""; WIN=""; FIRST=""; BG=""; SEL=""; HELPER=""; HELPER_TAB=""; MIN_WIN=""; MIN_TAB=""; DISPLAY_ID=""; HOME_SPACE=""; AWAY_KEY=""; POINTER=""; START_SPACES=""
+JUMP_PID=""; START_CONTROL=""; WIN=""; FIRST=""; BG=""; SEL=""; HELPER=""; HELPER_TAB=""; MIN_WIN=""; MIN_TAB=""; DISPLAY_ID=""; HOME_SPACE=""; AWAY_KEY=""; POINTER=""; START_SPACES=""
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 where() { "$BIN" --where "$1" 2>/dev/null || true; }
@@ -163,6 +163,13 @@ cleanup() {
     # broken pipe must not leave the test window open or the Space switched.
     trap '' PIPE
     set +e
+    # A jump still running in the background (--interrupt) stops first: put
+    # back underneath it, the desktop would be switched again by it.
+    if [[ -n "$JUMP_PID" ]] && kill -0 "$JUMP_PID" 2>/dev/null; then
+        kill -TERM "$JUMP_PID" 2>/dev/null
+        wait "$JUMP_PID" 2>/dev/null
+        echo "stopped the jump still running ($JUMP_PID)"
+    fi
     rm -f "$BINDING"
     if [[ -n "$WIN" ]]; then
         # Close only the window this run made, re-checked by id and by its
@@ -546,7 +553,7 @@ if [[ "$INTERRUPT" == yes ]]; then
     JUMP_PID=$!
     # Watch the display without the agent's help, fast enough to see the first
     # of the trip's two steps: the window server's own list, read in a loop.
-    FIRST_STEP=$(osascript -l JavaScript <<JXA
+    FIRST_STEP=$(osascript -l JavaScript <<JXA || true
 ObjC.import("CoreGraphics");
 ObjC.bindFunction("CGSMainConnectionID", ["int", []]);
 ObjC.bindFunction("CGSCopyManagedDisplaySpaces", ["id", ["int"]]);
@@ -569,6 +576,7 @@ JXA
     kill -TERM "$JUMP_PID" 2>/dev/null || true
     JUMP_STATUS=0
     wait "$JUMP_PID" || JUMP_STATUS=$?
+    JUMP_PID=""
     ENDED=$(clock_now)
     ELAPSED=$(awk -v a="$SIGNALLED" -v b="$ENDED" 'BEGIN { printf "%.2f", b - a }')
     [[ -n "$FIRST_STEP" ]] || fail "the trip did not begin within 8 s"

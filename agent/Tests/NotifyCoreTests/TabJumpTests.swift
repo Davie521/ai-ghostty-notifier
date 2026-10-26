@@ -8,6 +8,10 @@ import Testing
     let window = "tab-group-c579d4be0"
     let hiddenA = OrderedWindow(number: 221_248, spaces: [8])
     let hiddenB = OrderedWindow(number: 150_542, spaces: [5])
+    /// Where the built-in display was before a trip moved it.
+    let home = SpaceSpot(display: "37D8", space: 6)
+    /// The external display, before a second trip moved it.
+    let otherHome = SpaceSpot(display: "A756", space: 10)
 
     /// A jump up to its first focus: located, surveyed, placed.
     private func located(_ place: WindowPlace) -> (TabJump, TabJump.Step) {
@@ -56,9 +60,10 @@ import Testing
         var (jump, step) = located(.hidden(candidates: [hiddenA]))
         #expect(step == .hop(hiddenA))
         #expect(jump.hops == 1)
-        #expect(jump.observe(hopResult: .arrived) == .locate)
-        #expect(jump.lastHop == .arrived)
+        #expect(jump.observe(hopResult: .arrived(from: home)) == .locate)
+        #expect(jump.lastHop == .arrived(from: home))
         #expect(jump.observe(probe: .found(window: window)) == .survey(window: window))
+        // In view where the trip went: focused there, nothing put back.
         #expect(jump.observe(place: .showing) == .focus)
         #expect(jump.observe(focusResult: tab) == .stop(.verified(reads: 0, focusAttempts: 1)))
     }
@@ -73,36 +78,76 @@ import Testing
     }
 
     /// Arrived, but the fresh look still finds the window out of view — the
-    /// Space held another of Ghostty's windows: one more trip, to a window
-    /// not yet visited, and no more after that.
+    /// Space held another of Ghostty's windows: one more trip, to a window not
+    /// yet visited, and no more after that. The jump then puts back every
+    /// display the trips moved before the focus it falls back to, so that
+    /// focus does not bring the window to a Space the user never chose.
     @Test func anArrivalThatStillLeavesTheWindowHiddenTriesAnotherCandidateOnce() {
         var (jump, step) = located(.hidden(candidates: [hiddenA, hiddenB]))
         #expect(step == .hop(hiddenA))
-        #expect(jump.observe(hopResult: .arrived) == .locate)
+        #expect(jump.observe(hopResult: .arrived(from: home)) == .locate)
         _ = jump.observe(probe: .found(window: window))
         // The fresh survey lists the window just visited first; it is skipped.
         #expect(jump.observe(place: .hidden(candidates: [hiddenA, hiddenB])) == .hop(hiddenB))
         #expect(jump.hops == 2)
-        #expect(jump.observe(hopResult: .arrived) == .locate)
+        #expect(jump.observe(hopResult: .arrived(from: otherHome)) == .locate)
         _ = jump.observe(probe: .found(window: window))
-        #expect(jump.observe(place: .hidden(candidates: [hiddenA, hiddenB])) == .focus)
+        #expect(
+            jump.observe(place: .hidden(candidates: [hiddenA, hiddenB]))
+                == .restore([home, otherHome]))
         #expect(jump.hops == TabJump.maxHops)
+        #expect(jump.observe(restored: true) == .focus)
+        #expect(jump.moved.isEmpty)
     }
 
-    @Test func anArrivalThatStillLeavesTheWindowHiddenWithNoOtherCandidateFocuses() {
+    @Test func anArrivalThatStillLeavesTheWindowHiddenWithNoOtherCandidateGoesBackFirst() {
         var (jump, step) = located(.hidden(candidates: [hiddenA]))
         #expect(step == .hop(hiddenA))
-        #expect(jump.observe(hopResult: .arrived) == .locate)
+        #expect(jump.observe(hopResult: .arrived(from: home)) == .locate)
         _ = jump.observe(probe: .found(window: window))
-        #expect(jump.observe(place: .hidden(candidates: [hiddenA])) == .focus)
+        #expect(jump.observe(place: .hidden(candidates: [hiddenA])) == .restore([home]))
+        #expect(jump.observe(restored: true) == .focus)
         #expect(jump.hops == 1)
     }
 
-    /// The tab closed during the trip: the fresh look says so.
-    @Test func aTabThatClosedDuringTheTripStops() {
+    /// The second trip gave up and put its own display back — to where the
+    /// first trip, which arrived at the wrong window, had left it. The first
+    /// trip's display goes back too before the focus.
+    @Test func aSecondTripThatFailsPutsTheFirstOneBackToo() {
+        var (jump, _) = located(.hidden(candidates: [hiddenA, hiddenB]))
+        _ = jump.observe(hopResult: .arrived(from: home))
+        _ = jump.observe(probe: .found(window: window))
+        #expect(jump.observe(place: .hidden(candidates: [hiddenA, hiddenB])) == .hop(hiddenB))
+        #expect(
+            jump.observe(hopResult: .failed(reason: "press 1 did not switch")) == .restore([home]))
+        #expect(jump.observe(restored: true) == .focus)
+    }
+
+    /// Displays that cannot be put back: no focus, for the same reason.
+    @Test func displaysThatCannotBePutBackEndTheJumpWithoutAFocus() {
         var (jump, _) = located(.hidden(candidates: [hiddenA]))
-        #expect(jump.observe(hopResult: .arrived) == .locate)
-        #expect(jump.observe(probe: .notFound) == .stop(.notFound))
+        _ = jump.observe(hopResult: .arrived(from: home))
+        _ = jump.observe(probe: .found(window: window))
+        #expect(jump.observe(place: .unknown) == .restore([home]))
+        #expect(jump.observe(restored: false) == .stop(.strandedTrip))
+    }
+
+    /// No display had to move — the Space came into view by itself — so there
+    /// is nothing to put back.
+    @Test func anArrivalWithoutAMoveHasNothingToPutBack() {
+        var (jump, _) = located(.hidden(candidates: [hiddenA]))
+        _ = jump.observe(hopResult: .arrived(from: nil))
+        _ = jump.observe(probe: .found(window: window))
+        #expect(jump.observe(place: .hidden(candidates: [hiddenA])) == .focus)
+    }
+
+    /// The tab closed during the trip: the fresh look says so, and the display
+    /// goes back to where it was before the jump ends.
+    @Test func aTabThatClosedDuringTheTripGoesBackThenStops() {
+        var (jump, _) = located(.hidden(candidates: [hiddenA]))
+        #expect(jump.observe(hopResult: .arrived(from: home)) == .locate)
+        #expect(jump.observe(probe: .notFound) == .restore([home]))
+        #expect(jump.observe(restored: true) == .stop(.notFound))
     }
 
     /// Lists that do not pair are read again, twice at most; then the jump
@@ -213,7 +258,11 @@ import Testing
             ]),
         ])
     func everyPathIsBounded(answer: String?, place: WindowPlace) {
-        for hopResult in [TabJump.HopResult.arrived, .failed(reason: "x"), .stranded(reason: "y")] {
+        for (hopResult, restored) in [
+            (TabJump.HopResult.arrived(from: home), true), (.arrived(from: home), false),
+            (.arrived(from: nil), true), (.failed(reason: "x"), true),
+            (.stranded(reason: "y"), true),
+        ] {
             var jump = TabJump(requested: tab)
             var step = jump.start
             var steps = 0
@@ -225,6 +274,7 @@ import Testing
                 case .locate: step = jump.observe(probe: .found(window: window))
                 case .survey: step = jump.observe(place: place)
                 case .hop: step = jump.observe(hopResult: hopResult)
+                case .restore: step = jump.observe(restored: restored)
                 case .focus: step = jump.observe(focusResult: answer)
                 case .verify: step = jump.observe(selected: answer)
                 case .stop: break

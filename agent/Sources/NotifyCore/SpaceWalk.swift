@@ -61,7 +61,8 @@ public enum SpaceWalk {
     /// How a trip there, and back if it gave up part-way, ended.
     public enum TripOutcome: Equatable, Sendable {
         case arrived(
-            display: String, direction: SpaceHop.Direction, presses: Int, strayRetries: Int)
+            display: String, from: UInt64, direction: SpaceHop.Direction, presses: Int,
+            strayRetries: Int)
         case alreadyShowing
         /// The trip did not get there, and the desktops are as they were.
         case failed(String)
@@ -84,8 +85,6 @@ public enum SpaceWalk {
     public static let settleAfterPress = 0.15
     /// Presses that switched the wrong display, undone and tried again.
     public static let maxStrayRetries = 2
-    /// The longest a walk back may take, after a trip that gave up.
-    public static let maxWalkBackSeconds = 8.0
     /// The longest the driver spends getting the pointer onto a display
     /// before a press.
     public static let parkSeconds = 0.3
@@ -108,25 +107,46 @@ public enum SpaceWalk {
         guard case .hop(let first) = route else {
             return route == .showing ? .alreadyShowing : .failed("Space \(space) is on no display")
         }
-        let start = topology.current(on: first.display)
+        guard let start = topology.current(on: first.display) else {
+            return .failed("display \(first.display.prefix(8)) shows no Space")
+        }
         switch await walk(to: space, deadline: deadline, leg: .onward, driver: driver) {
         case .arrived(let presses, let strayRetries):
             return .arrived(
-                display: first.display, direction: first.direction, presses: presses,
+                display: first.display, from: start, direction: first.direction, presses: presses,
                 strayRetries: strayRetries)
         case .stranded(let why):
             return .stranded(why)
         case .stopped(let why):
-            guard let start, driver.topology()?.current(on: first.display) != start else {
+            guard driver.topology()?.current(on: first.display) != start else {
                 return .failed(why)
             }
-            let back = driver.now().addingTimeInterval(maxWalkBackSeconds)
-            switch await walk(to: start, deadline: back, leg: .back, driver: driver) {
+            switch await goBack(to: SpaceSpot(display: first.display, space: start), driver: driver)
+            {
             case .arrived: return .failed("\(why); went back")
             case .stopped(let backWhy), .stranded(let backWhy):
                 return .stranded("\(why); could not go back: \(backWhy)")
             }
         }
+    }
+
+    /// Walks `spot.display` back to `spot.space`, allowing it a step's time for
+    /// every Space between and an undo on top: the walk back after a trip that
+    /// gave up, and the putting back of a trip that arrived at the wrong
+    /// window. The process's end bounds it as it bounds every press.
+    @MainActor
+    public static func goBack(to spot: SpaceSpot, driver: some SpaceWalkDriver) async -> Outcome {
+        guard let topology = driver.topology() else { return .stopped("no Space topology") }
+        let steps: Int
+        switch SpaceRoute.to(spot.space, in: topology) {
+        case .showing: return .arrived(presses: 0, strayRetries: 0)
+        case .unreachable: return .stopped("Space \(spot.space) is out of reach")
+        case .hop(let hop): steps = hop.steps
+        }
+        let allowance = Double(steps) * stepSeconds + undoSeconds
+        return await walk(
+            to: spot.space, deadline: driver.now().addingTimeInterval(allowance), leg: .back,
+            driver: driver)
     }
 
     /// One walk to `space`.

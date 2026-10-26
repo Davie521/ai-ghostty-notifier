@@ -306,7 +306,9 @@ What the notification is able to say, and how it finds the tab:
   pointer moved there for the moment, until that Space shows; only then does it
   focus the tab. Every press is checked, and a press that switched another
   display is undone and tried again, twice at most. A trip that cannot finish
-  walks back to the Space it started from. Quitting the app during a jump, or
+  walks back to the Space it started from, and one that arrives where the
+  window turns out not to be is walked back before the plain focus the jump
+  falls back to. Quitting the app during a jump, or
   stopping the `--focus` mode with SIGTERM, stops it the same way: the trip
   walks back, the pointer goes back where it was, and nothing is focused. This needs the Accessibility permission and the shortcut
   switched on under **System Settings → Keyboard → Keyboard Shortcuts →

@@ -38,7 +38,8 @@ enum TabJumpRunner {
             // or unverified jump the callers would bring Ghostty forward.
             if Task.isCancelled {
                 switch step {
-                case .stop(.verified), .stop(.abandoned), .stop(.strandedTrip): break
+                // Putting displays back is putting right: it still happens.
+                case .restore, .stop(.verified), .stop(.abandoned), .stop(.strandedTrip): break
                 default: step = plan.abandon()
                 }
             }
@@ -84,11 +85,13 @@ enum TabJumpRunner {
                         "travelled \(trip.presses) \(trip.direction == .left ? "left" : "right") on "
                         + "display \(trip.display.prefix(8))\(retried)"
                     route = travelled ?? route
-                    step = plan.observe(hopResult: .arrived)
+                    step = plan.observe(
+                        hopResult: .arrived(
+                            from: SpaceSpot(display: trip.display, space: trip.from)))
                 case .alreadyShowing:
                     travelled = "no travel: the Space came into view by itself"
                     route = travelled ?? route
-                    step = plan.observe(hopResult: .arrived)
+                    step = plan.observe(hopResult: .arrived(from: nil))
                 case .failed(let why):
                     travelled = nil
                     route = "no travel: \(why)"
@@ -98,6 +101,10 @@ enum TabJumpRunner {
                     route = "trip left unfinished: \(why)"
                     step = plan.observe(hopResult: .stranded(reason: why))
                 }
+            case .restore(let spots):
+                let back = await SpaceHopper.restore(spots)
+                route += back ? "; went back to where the jump began" : "; could not go back"
+                step = plan.observe(restored: back)
             case .focus:
                 let selected = await Ghostty.focus(tabID: tabID)
                 step = plan.observe(focusResult: selected)
