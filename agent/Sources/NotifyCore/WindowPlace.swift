@@ -17,7 +17,8 @@ extension ScriptedWindow {
     /// every window's id and title, records split by U+001E and fields by
     /// U+001F, which no title contains. Nil is a failed script, which is
     /// "don't know", never "not there": the script says that with an empty
-    /// first field.
+    /// first field, and says "?" when a window or tab could not be read on
+    /// the way — the tab may be the one that could not be read.
     public static func locateReply(_ answer: String?) -> (TabJump.Probe, [ScriptedWindow]) {
         guard let answer else { return (.unknown, []) }
         var records = answer.split(separator: "\u{1E}", omittingEmptySubsequences: false)
@@ -30,6 +31,7 @@ extension ScriptedWindow {
             return ScriptedWindow(id: String(id), title: fields.count > 1 ? String(fields[1]) : "")
         }
         guard !found.isEmpty else { return (.notFound, windows) }
+        guard found != "?" else { return (.unknown, windows) }
         return (.found(window: found), windows)
     }
 }
@@ -66,7 +68,12 @@ public enum WindowPlace: Equatable, Sendable {
     /// Out of view. The ordered windows on hidden Spaces that may be it, the
     /// most likely first.
     case hidden(candidates: [OrderedWindow])
-    /// The listing has no such window, or nothing tells which one it is.
+    /// The two lists do not pair: they differ in length, or a title in view
+    /// contradicts the pairing. A window opening or closing, or a title that
+    /// changed between the two reads — a busy session retitles its tab twice
+    /// a second — both look like this, and both pass; a fresh read decides.
+    case unsettled
+    /// The listing has no such window.
     case unknown
 
     /// Ghostty names its windows by their own stable ids, which nothing
@@ -80,16 +87,14 @@ public enum WindowPlace: Equatable, Sendable {
     /// the windows in view; titles cannot pair windows themselves, because
     /// shells in different windows are often titled exactly alike.
     ///
-    /// When the lengths differ or a title contradicts the pairing, titles are
-    /// all there is. A window whose title is in view only as often as it is
-    /// listed is showing; one whose title is not in view at all may be any
-    /// hidden window. A title in view less often than it is listed could be
-    /// either, and then nothing is concluded: travelling on a guess could take
-    /// the user away from the very window they wanted.
+    /// When the lengths differ or a title contradicts the pairing, nothing is
+    /// concluded from titles alone: a window whose title just changed looks
+    /// exactly like one that is out of view, and travelling on that guess
+    /// would switch a display for nothing.
     ///
     /// `seen` is nil without the Accessibility permission. The order still
-    /// places the window then — which is how a jump knows it needed the
-    /// permission — but titles cannot, so the fallback concludes nothing.
+    /// places the window then, which is how a jump knows it needed the
+    /// permission; there are just no titles to check the pairing against.
     public static func of(
         _ windowID: String, scripted: [ScriptedWindow], ordered: [OrderedWindow],
         seen: [SeenWindow]?, visibleSpaces: Set<UInt64>
@@ -103,18 +108,12 @@ public enum WindowPlace: Equatable, Sendable {
         // Nothing of Ghostty's is out of view.
         if hidden.isEmpty { return .showing }
 
-        if placed.count == scripted.count, titlesAgree(scripted, placed, seen ?? []) {
-            let window = placed[targetIndex]
-            if inView(window) { return .showing }
-            return .hidden(candidates: [window] + hidden.filter { $0 != window })
+        guard placed.count == scripted.count, titlesAgree(scripted, placed, seen ?? []) else {
+            return .unsettled
         }
-
-        guard let seen else { return .unknown }
-        let title = scripted[targetIndex].title
-        let inViewCount = seen.filter { !title.isEmpty && $0.title == title }.count
-        if inViewCount == 0 { return .hidden(candidates: hidden) }
-        let listedCount = scripted.filter { $0.title == title }.count
-        return inViewCount >= listedCount ? .showing : .unknown
+        let window = placed[targetIndex]
+        if inView(window) { return .showing }
+        return .hidden(candidates: [window] + hidden.filter { $0 != window })
     }
 
     /// Whether every window in view pairs with a listed window of its title.

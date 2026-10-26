@@ -28,7 +28,7 @@ SESSION_DIR="${GHOSTTY_NOTIFY_SESSION_DIR:-$HOME/.claude/notifications/ghostty-s
 SESSION=$(uuidgen | tr 'A-Z' 'a-z')
 BINDING="$SESSION_DIR/$SESSION.json"
 
-WIN=""; FIRST=""; BG=""; SEL=""; HELPER=""; HELPER_TAB=""; DISPLAY_ID=""; HOME_SPACE=""; AWAY_KEY=""; POINTER=""; START_SPACES=""
+START_CONTROL=""; WIN=""; FIRST=""; BG=""; SEL=""; HELPER=""; HELPER_TAB=""; DISPLAY_ID=""; HOME_SPACE=""; AWAY_KEY=""; POINTER=""; START_SPACES=""
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 where() { "$BIN" --where "$1" 2>/dev/null || true; }
@@ -48,14 +48,28 @@ warp() {
     osascript -l JavaScript -e "ObjC.import('CoreGraphics'); \$.CGEventPost(0, \$.CGEventCreateMouseEvent(null, 5, {x: $1, y: $2}, 0)); ''" >/dev/null
 }
 press() {
+    # As the agent does: the key up carries only the modifiers physically held
+    # (a foot pedal holding Control, say). One that carried the shortcut's own
+    # would leave Control held.
     osascript -l JavaScript -e "ObjC.import('CoreGraphics');
+const held = \$.CGEventSourceFlagsState(1) & 0x9e0000;
 for (const down of [true, false]) {
     const e = \$.CGEventCreateKeyboardEvent(null, $1, down);
-    \$.CGEventSetFlags(e, 0x840000);
+    \$.CGEventSetFlags(e, down ? (0x840000 | held) : held);
     \$.CGEventPost(0, e);
 }
 ''" >/dev/null
 }
+# Control released. Only called when this run left it held: a Control the
+# user holds, by hand or with a pedal, is theirs.
+release_modifiers() {
+    osascript -l JavaScript -e "ObjC.import('CoreGraphics');
+const e = \$.CGEventCreateKeyboardEvent(null, 59, false);
+\$.CGEventSetFlags(e, 0);
+\$.CGEventPost(0, e);
+''" >/dev/null
+}
+modifier_flags() { osascript -l JavaScript -e 'ObjC.import("Cocoa"); $.NSEvent.modifierFlags'; }
 frontmost_app() { osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true'; }
 
 # `<display> <space>` for every display.
@@ -131,6 +145,12 @@ cleanup() {
     fi
     [[ -n "$START_SPACES" ]] && restore_spaces
     if [[ -n "$POINTER" ]]; then read -r px py <<<"$POINTER"; warp "$px" "$py"; fi
+    local now_modifiers
+    now_modifiers=$(modifier_flags 2>/dev/null || echo 0)
+    if [[ "$START_CONTROL" == no && "$now_modifiers" =~ ^[0-9]+$ ]] && (( (now_modifiers & 0x40000) != 0 )); then
+        echo "releasing the Control this run left held"
+        release_modifiers
+    fi
     exit "$status"
 }
 trap cleanup EXIT
@@ -142,6 +162,11 @@ BEFORE=$(where tab-none)
 grep -q '^accessibility=granted' <<<"$BEFORE" || fail "this shell has no Accessibility permission; run it inside a Ghostty that has one"
 BEFORE_WINDOWS=$(awk '$1=="ordered" {print $2}' <<<"$BEFORE" | tr '\n' ' ')
 POINTER=$(pointer)
+# Whether Control is held before anything is pressed: a pedal or a hand may
+# hold it, and then whether the jump left it held cannot be told.
+START_MODIFIERS=$(modifier_flags)
+[[ "$START_MODIFIERS" =~ ^[0-9]+$ ]] || fail "could not read the modifier flags"
+if (( (START_MODIFIERS & 0x40000) != 0 )); then START_CONTROL=yes; else START_CONTROL=no; fi
 START_SPACES=$(current_spaces)
 [[ -n "$START_SPACES" ]] || fail "the agent reports no displays"
 
@@ -344,7 +369,8 @@ fi
 
 # The jump, as a click would make it.
 mkdir -p "$SESSION_DIR"
-(umask 077; printf '{"tab_id":"%s","cwd":"%s","ghostty_pid":"%s"}\n' "$BG" "$PWD" "$GHOSTTY_PID" >"$BINDING")
+(umask 077; jq -nc --arg tab "$BG" --arg cwd "$PWD" --arg pid "$GHOSTTY_PID" \
+    '{tab_id: $tab, cwd: $cwd, ghostty_pid: $pid}' >"$BINDING")
 LOG_LINES=$(wc -l <"$LOG" 2>/dev/null || echo 0)
 # Selecting the background tab orders a different window in — every native
 # tab is a window of its own — so after the jump the test window is found as
@@ -368,6 +394,16 @@ SELECTED=$(osascript -e "tell application \"Ghostty\" to get selected of (first 
 JUMP_LINE=$(tail -n +"$((LOG_LINES + 1))" "$LOG" 2>/dev/null | grep 'jump:' | tail -1 || true)
 echo "window Space: $HOME_SPACE -> $AFTER_SPACE; display shows: $SHOWING; tab selected: $SELECTED; frontmost: $(frontmost_app)"
 echo "log: ${JUMP_LINE:-<no jump line>}"
+# Read before anything else sends a key: a key up that carried Control would
+# have left it held, and every click would arrive as a Control-click.
+MODIFIERS=$(modifier_flags)
+echo "modifier flags after the jump: $MODIFIERS (Control held before the run: $START_CONTROL)"
+[[ "$MODIFIERS" =~ ^[0-9]+$ ]] || fail "could not read the modifier flags"
+if [[ "$START_CONTROL" == no ]]; then
+    (( (MODIFIERS & 0x40000) == 0 )) || fail "Control is left held after the jump"
+else
+    echo "Control was already held when the run began; not checked"
+fi
 OTHER_DISPLAYS_NOW=$(current_spaces | awk -v id="$DISPLAY_ID" '$1!=id')
 OTHER_DISPLAYS_START=$(awk -v id="$DISPLAY_ID" '$1!=id' <<<"$START_SPACES")
 [[ "$OTHER_DISPLAYS_NOW" == "$OTHER_DISPLAYS_START" ]] || fail "another display switched Space: $OTHER_DISPLAYS_START -> $OTHER_DISPLAYS_NOW"

@@ -80,6 +80,9 @@ public struct TabJump: Equatable, Sendable {
     /// Trips per jump, in total. A second one happens only when a fresh
     /// look after the first still finds the window out of view.
     public static let maxHops = 2
+    /// Fresh reads per jump after a survey whose lists did not pair. Past
+    /// this the jump focuses without travelling, as it did before trips.
+    public static let maxRereads = 2
 
     public let requested: String
     public private(set) var focusAttempts = 0
@@ -87,6 +90,7 @@ public struct TabJump: Equatable, Sendable {
     /// The window holding the requested tab, once located.
     public private(set) var window: String?
     public private(set) var hops = 0
+    public private(set) var rereads = 0
     public private(set) var lastHop: HopResult?
     /// Windows the last survey placed out of view, most likely first.
     private var candidates: [OrderedWindow] = []
@@ -122,6 +126,10 @@ public struct TabJump: Equatable, Sendable {
         switch place {
         case .showing, .unknown:
             return .focus
+        case .unsettled:
+            guard rereads < Self.maxRereads else { return .focus }
+            rereads += 1
+            return .locate
         case .hidden(let candidates):
             self.candidates = candidates
             return nextHop() ?? .focus

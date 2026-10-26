@@ -68,6 +68,7 @@ enum Ghostty {
                     set us to string id 31
                     set found to ""
                     set listing to ""
+                    set incomplete to false
                     repeat with w in every window
                         try
                             set wid to (id of w as text)
@@ -76,11 +77,16 @@ enum Ghostty {
                                 repeat with t in every tab of w
                                     try
                                         if (id of t as text) is \(literal) then set found to wid
+                                    on error
+                                        set incomplete to true
                                     end try
                                 end repeat
                             end if
+                        on error
+                            set incomplete to true
                         end try
                     end repeat
+                    if found is "" and incomplete then set found to "?"
                     return found & rs & listing
                 end tell
                 """, label: "locate"

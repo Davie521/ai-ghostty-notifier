@@ -214,7 +214,17 @@ enum WindowServer {
 
     /// One press, as the keyboard would send it. Dropped by macOS without the
     /// Accessibility permission.
+    ///
+    /// The key up carries only the modifiers the user is physically holding.
+    /// The system takes its modifier state from the last key event of this
+    /// source, so a key up that still carried Control would leave Control
+    /// held: every click after the jump would arrive as a Control-click until
+    /// the next key press (seen in another tool: openclaw/Peekaboo#797).
     static func press(_ shortcut: Shortcut) {
+        let modifiers: CGEventFlags = [
+            .maskShift, .maskControl, .maskAlternate, .maskCommand, .maskSecondaryFn,
+        ]
+        let held = CGEventSource.flagsState(.hidSystemState).intersection(modifiers)
         let source = CGEventSource(stateID: .hidSystemState)
         guard
             let down = CGEvent(
@@ -222,8 +232,8 @@ enum WindowServer {
             let up = CGEvent(
                 keyboardEventSource: source, virtualKey: shortcut.keyCode, keyDown: false)
         else { return }
-        down.flags = shortcut.flags
-        up.flags = shortcut.flags
+        down.flags = shortcut.flags.union(held)
+        up.flags = held
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)
     }

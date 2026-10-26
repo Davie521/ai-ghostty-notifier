@@ -45,6 +45,8 @@ enum TabJumpRunner {
                         route = "\(travelled), \(seen)"
                     } else if case .unknown = place {
                         route = "window not placed"
+                    } else if case .unsettled = place {
+                        route = "window lists did not pair, read \(plan.rereads + 1) time(s)"
                     }
                     step = plan.observe(place: place)
                 case .untrusted(let targetHidden):

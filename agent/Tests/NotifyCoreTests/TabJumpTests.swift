@@ -105,6 +105,28 @@ import Testing
         #expect(jump.observe(probe: .notFound) == .stop(.notFound))
     }
 
+    /// Lists that do not pair are read again, twice at most; then the jump
+    /// focuses without travelling.
+    @Test func anUnsettledSurveyIsReadAgainThenGivesWay() {
+        var (jump, step) = located(.unsettled)
+        #expect(step == .locate)
+        #expect(jump.rereads == 1)
+        _ = jump.observe(probe: .found(window: window))
+        #expect(jump.observe(place: .unsettled) == .locate)
+        _ = jump.observe(probe: .found(window: window))
+        #expect(jump.observe(place: .unsettled) == .focus)
+        #expect(jump.rereads == TabJump.maxRereads)
+        #expect(jump.hops == 0)
+    }
+
+    /// A read again that pairs travels as usual.
+    @Test func anUnsettledSurveyThatSettlesTravels() {
+        var (jump, step) = located(.unsettled)
+        #expect(step == .locate)
+        _ = jump.observe(probe: .found(window: window))
+        #expect(jump.observe(place: .hidden(candidates: [hiddenA])) == .hop(hiddenA))
+    }
+
     @Test func noCandidatesMeansNoTravel() {
         let (jump, step) = located(.hidden(candidates: []))
         #expect(step == .focus)
@@ -164,7 +186,7 @@ import Testing
     @Test(
         arguments: [nil, "tab-c53c4c800", "tab-zzz"] as [String?],
         [
-            WindowPlace.showing, .unknown,
+            WindowPlace.showing, .unknown, .unsettled,
             .hidden(candidates: [
                 OrderedWindow(number: 1, spaces: [8]), OrderedWindow(number: 2, spaces: [5]),
                 OrderedWindow(number: 3, spaces: [4]),
@@ -177,8 +199,8 @@ import Testing
             var steps = 0
             while true {
                 steps += 1
-                #expect(steps <= 20, "jump did not stop")
-                if steps > 20 { break }
+                #expect(steps <= 30, "jump did not stop")
+                if steps > 30 { break }
                 switch step {
                 case .locate: step = jump.observe(probe: .found(window: window))
                 case .survey: step = jump.observe(place: place)
@@ -189,7 +211,8 @@ import Testing
                 }
                 if case .stop = step { break }
             }
-            #expect(steps <= 14)
+            #expect(steps <= 20)
+            #expect(jump.rereads <= TabJump.maxRereads)
             #expect(jump.focusAttempts <= TabJump.maxFocusAttempts)
             #expect(jump.hops <= TabJump.maxHops)
         }

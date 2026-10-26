@@ -61,6 +61,7 @@ enum Whereabouts {
             switch place {
             case .showing: described = "showing"
             case .unknown: described = "unknown"
+            case .unsettled: described = "unsettled"
             case .hidden(let candidates):
                 described = "hidden candidates=\(list(candidates.map(\.number)))"
             }
