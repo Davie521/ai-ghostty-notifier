@@ -186,9 +186,9 @@ public struct TabJump: Equatable, Sendable {
         lastHop = hopResult
         switch hopResult {
         case .arrived(let from):
-            if let from, !moved.contains(where: { $0.display == from.display }) {
-                moved.append(from)
-            }
+            // At most one display is ever moved: the one before is put back
+            // before the next trip.
+            if let from { moved.append(from) }
             return .locate
         case .failed:
             // This trip put its own display back; an earlier one that arrived
