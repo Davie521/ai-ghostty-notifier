@@ -330,7 +330,10 @@ What the notification is able to say, and how it finds the tab:
   find, and changes nothing.
   Switching tabs inside Ghostty activates no app, so while Ghostty is in front
   and a notification waits on a known tab, the app also reads the selected tab
-  once a second; that stops as soon as either no longer holds.
+  once a second; that stops as soon as either no longer holds. Neither clears
+  anything while a jump is under way: the window a trip arrives at shows its
+  own selected tab until the jump selects the one asked for, which says
+  nothing about where you went. The app looks again once the jump is over.
   External backends are optional alternatives; their limitations are under
   [Troubleshooting and limits](#troubleshooting-and-limits).
 

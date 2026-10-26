@@ -24,6 +24,10 @@ final class FakeJump: TabJumpDriver {
     var selection: (seconds: Double, tab: String?)
     /// Time left to look with a display moved; nil with no end in sight.
     var left: Double?
+    /// The lease the jump runs under, to see whether it still held it when it
+    /// brought Ghostty forward.
+    var leasePath: String?
+    private(set) var leaseHeldWhenActivating: Bool?
     private(set) var calls: [String] = []
 
     init(_ requested: String) {
@@ -61,6 +65,11 @@ final class FakeJump: TabJumpDriver {
     func focus() async -> String? {
         calls.append("focus")
         return focusSelects
+    }
+
+    func activate() async {
+        calls.append("activate")
+        leaseHeldWhenActivating = TabJumpRun.leaseIsHeld(at: leasePath)
     }
 
     func selected() async -> String? {
@@ -222,7 +231,10 @@ final class FakeJump: TabJumpDriver {
         let started = Date()
         let report = await steps(fake)
         #expect(report.outcome == .unverified(selected: nil, focusAttempts: 2))
-        #expect(fake.calls == ["locate", "survey", "focus", "selected", "focus", "selected"])
+        #expect(
+            fake.calls == [
+                "locate", "survey", "focus", "selected", "focus", "selected", "activate",
+            ])
         #expect(report.route.contains("selection not read in time"))
         #expect(Date().timeIntervalSince(started) < 3)
     }
@@ -330,6 +342,82 @@ final class FakeJump: TabJumpDriver {
         #expect(fake.restored == [[home]])
         #expect(!fake.calls.contains("focus"))
         #expect(Date().timeIntervalSince(started) < 2)
+    }
+
+    /// A jump that could not select its tab brings Ghostty forward, the user
+    /// one keystroke away — while it still holds the lease, since that too
+    /// can switch Spaces under another jump's trip.
+    @Test func aJumpThatFindsNoTabBringsGhosttyForwardInItsTurn() async {
+        let lease = scratchLease()
+        defer { try? FileManager.default.removeItem(atPath: lease + ".flock") }
+        let fake = FakeJump("t1")
+        fake.lookups = [(0, .notFound)]
+        fake.leasePath = lease
+        let report = await TabJumpRun.run(
+            "t1", leasePath: lease, leaseUntil: Date().addingTimeInterval(1), limits: limits,
+            driver: fake)
+        #expect(report.outcome == .notFound)
+        #expect(fake.calls == ["locate", "activate"])
+        #expect(fake.leaseHeldWhenActivating == true)
+        #expect(!TabJumpRun.leaseIsHeld(at: lease))
+    }
+
+    @Test func anUnverifiedJumpBringsGhosttyForward() async {
+        let fake = FakeJump("t1")
+        fake.focusSelects = "other"
+        fake.selection = (0, "other")
+        let report = await steps(fake)
+        #expect(report.outcome == .unverified(selected: "other", focusAttempts: 2))
+        #expect(fake.calls.last == "activate")
+    }
+
+    /// A focused jump, a stopped one and a stranded one bring nothing forward.
+    @Test func onlyAJumpThatCouldNotSelectItsTabBringsGhosttyForward() async {
+        let stranded = FakeJump("t1")
+        stranded.surveys = [hidden]
+        stranded.trips = [.stranded("could not go back")]
+        #expect(await steps(stranded).outcome == .strandedTrip)
+        #expect(!stranded.calls.contains("activate"))
+        let verified = FakeJump("t1")
+        #expect(await steps(verified).outcome == .verified(reads: 0, focusAttempts: 1))
+        #expect(!verified.calls.contains("activate"))
+    }
+
+    /// A click with no tab brings Ghostty forward in turn like a jump: not
+    /// while another holds the lease past the wait, and with the lease held.
+    @Test func bringingGhosttyForwardWithoutATabWaitsItsTurn() async throws {
+        let lease = scratchLease()
+        defer { try? FileManager.default.removeItem(atPath: lease + ".flock") }
+        let other = try #require(FileLease.acquire(lease))
+        var brought = false
+        let busy = await TabJumpRun.activate(
+            leasePath: lease, leaseUntil: Date().addingTimeInterval(0.2)
+        ) { brought = true }
+        #expect(!busy)
+        #expect(!brought)
+        other.release()
+        var heldMeanwhile: Bool?
+        let done = await TabJumpRun.activate(
+            leasePath: lease, leaseUntil: Date().addingTimeInterval(0.2)
+        ) { heldMeanwhile = TabJumpRun.leaseIsHeld(at: lease) }
+        #expect(done)
+        #expect(heldMeanwhile == true)
+        #expect(!TabJumpRun.leaseIsHeld(at: lease))
+    }
+
+    /// Looking whether a jump is under way neither waits nor keeps the lease.
+    @Test func whetherAJumpIsUnderWayIsReadFromTheLease() throws {
+        let lease = scratchLease()
+        defer { try? FileManager.default.removeItem(atPath: lease + ".flock") }
+        #expect(!TabJumpRun.leaseIsHeld(at: lease))
+        #expect(!TabJumpRun.leaseIsHeld(at: nil))
+        let jump = try #require(FileLease.acquire(lease))
+        #expect(TabJumpRun.leaseIsHeld(at: lease))
+        jump.release()
+        #expect(!TabJumpRun.leaseIsHeld(at: lease))
+        // And the look left it free for the next jump.
+        let next = try #require(FileLease.acquire(lease, timeout: 0))
+        next.release()
     }
 
     @Test func theLogLineSaysAJumpLeftAloneWasLeftAlone() {

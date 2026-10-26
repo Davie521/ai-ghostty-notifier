@@ -17,16 +17,43 @@ enum TabJumpRunner {
     /// focus its time before it. `waitUntil` is when the jump stops waiting
     /// for another to finish; `leaseWait` from now unless the caller has
     /// been waiting already.
-    static func run(tabID: String, deadline: Date? = nil, waitUntil: Date? = nil) async
-        -> TabJumpRun.Report
-    {
+    /// `activatesItself`: this process comes forward before it brings Ghostty
+    /// forward, which a process in the background is not allowed to do.
+    static func run(
+        tabID: String, deadline: Date? = nil, waitUntil: Date? = nil,
+        activatesItself: Bool = false
+    ) async -> TabJumpRun.Report {
+        await TabJumpRun.run(
+            tabID, leasePath: leasePath(),
+            leaseUntil: leaseUntil(deadline: deadline, waitUntil: waitUntil),
+            driver: LiveDriver(tabID: tabID, deadline: deadline, activatesItself: activatesItself))
+    }
+
+    /// Ghostty brought forward for a click with no tab, in turn like a jump;
+    /// false when another jump was still under way.
+    static func activateGhostty(
+        deadline: Date? = nil, waitUntil: Date? = nil, activatesItself: Bool
+    ) async -> Bool {
+        await TabJumpRun.activate(
+            leasePath: leasePath(),
+            leaseUntil: leaseUntil(deadline: deadline, waitUntil: waitUntil)
+        ) { bringGhosttyForward(activatesItself: activatesItself) }
+    }
+
+    /// Whether a jump, in this process or another, is under way.
+    static func leaseIsHeld() -> Bool { TabJumpRun.leaseIsHeld(at: leasePath()) }
+
+    private static func leaseUntil(deadline: Date?, waitUntil: Date?) -> Date {
         var wait = waitUntil ?? Date().addingTimeInterval(leaseWait)
         if let deadline {
             wait = min(wait, deadline.addingTimeInterval(-SpaceHopper.focusReserveSeconds))
         }
-        return await TabJumpRun.run(
-            tabID, leasePath: leasePath(), leaseUntil: wait,
-            driver: LiveDriver(tabID: tabID, deadline: deadline))
+        return wait
+    }
+
+    private static func bringGhosttyForward(activatesItself: Bool) {
+        if activatesItself { NSApplication.shared.activate(ignoringOtherApps: true) }
+        Ghostty.activate()
     }
 
     /// Where the lease every jump holds is kept; nil without a home.
@@ -42,6 +69,7 @@ enum TabJumpRunner {
     private struct LiveDriver: TabJumpDriver {
         let tabID: String
         let deadline: Date?
+        let activatesItself: Bool
 
         func locate() async -> (TabJump.Probe, [ScriptedWindow]) {
             await Ghostty.locate(tabID: tabID)
@@ -79,6 +107,8 @@ enum TabJumpRunner {
         func restore(_ spots: [SpaceSpot]) async -> Bool { await SpaceHopper.restore(spots) }
 
         func focus() async -> String? { await Ghostty.focus(tabID: tabID) }
+
+        func activate() async { bringGhosttyForward(activatesItself: activatesItself) }
 
         func selected() async -> String? { await Ghostty.selectedTabID() }
 

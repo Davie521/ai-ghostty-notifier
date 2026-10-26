@@ -19,6 +19,9 @@ public protocol TabJumpDriver: Sendable {
     func restore(_ spots: [SpaceSpot]) async -> Bool
     /// The focus command: the front window's selection afterwards, or nil.
     func focus() async -> String?
+    /// Brings Ghostty forward without choosing a tab: what a jump that could
+    /// not select its tab leaves the user with, one keystroke away.
+    func activate() async
     /// Which tab is selected. As slow as Ghostty is: the run bounds it.
     func selected() async -> String?
     /// How long a lookup may take now and still leave the time to put these
@@ -106,6 +109,38 @@ public enum TabJumpRun {
         }
         defer { lease?.release() }
         return await steps(plan, leased: lease != nil, limits: limits, driver: driver)
+    }
+
+    /// Ghostty brought forward for a click with no tab to go to, in turn like
+    /// a jump: activating an app can switch to a Space that has its windows,
+    /// under a trip that is on its way somewhere else. False when another jump
+    /// was still under way at `leaseUntil`, or this was cancelled: nothing
+    /// was done.
+    public static func activate(
+        leasePath: String?, leaseUntil: Date, _ bringForward: @MainActor () async -> Void
+    ) async -> Bool {
+        let lease: FileLease?
+        switch await waitForLease(at: leasePath, until: leaseUntil) {
+        case .acquired(let held): lease = held
+        case .unavailable: lease = nil
+        case .held: return false
+        }
+        defer { lease?.release() }
+        guard !Task.isCancelled else { return false }
+        await bringForward()
+        return true
+    }
+
+    /// Whether some jump, in this process or another, holds the lease now.
+    public static func leaseIsHeld(at path: String?) -> Bool {
+        guard let path else { return false }
+        switch FileLease.attempt(path) {
+        case .acquired(let lease):
+            lease.release()
+            return false
+        case .held: return true
+        case .unavailable: return false
+        }
     }
 
     /// `held` once another jump has held the lease until `deadline`, or this
@@ -265,6 +300,12 @@ public enum TabJumpRun {
                 }
                 step = plan.observe(selected: selected)
             case .stop(let outcome):
+                switch outcome {
+                case .notFound, .unverified:
+                    // Still inside the lease: this, too, can switch Spaces.
+                    if !Task.isCancelled { await driver.activate() }
+                case .verified, .abandoned, .strandedTrip, .busy: break
+                }
                 return Report(
                     plan: plan, outcome: outcome, route: route,
                     accessibilityMissing: accessibilityMissing)
