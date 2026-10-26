@@ -12,7 +12,7 @@ import NotifyCore
 /// key window on one display and the pointer on the other, the pointer's
 /// display switched — so the pointer is moved there right before every press
 /// and put back after the trip; the press waits until the pointer is seen
-/// there. A press can still land on the other display — once in eight live
+/// there. A press can still land on the other display — once in nine live
 /// runs it did — so a press that switches a display the trip is not for is
 /// undone and tried again, twice at most. Every press is checked
 /// against the topology before the next and the route recomputed, so a
