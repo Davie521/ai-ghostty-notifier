@@ -252,6 +252,15 @@ AWAY_SPACE=$(display_field "$BG" "$DISPLAY_ID" current)
 read -r px py <<<"$POINTER"; warp "$px" "$py"
 PLACE=$(place_of "$BG")
 echo "display now on Space $AWAY_SPACE; the agent places the test window as: $PLACE"
+# The placement pairs Ghostty's window list with the window server's by
+# position, so say where the test window stands in each, and how many other
+# windows share its title (titles alone cannot tell those apart).
+LISTING=$(where "$BG")
+position() { awk -v want="$1" '{ for (i = 1; i <= NF; i++) if ($i == want) { print i; exit } }' <<<"$2"; }
+SCRIPTED_IDS=$(awk '$1=="window" {print $2}' <<<"$LISTING" | tr '\n' ' ')
+ORDERED_NUMBERS=$(awk '$1=="ordered" {print $2}' <<<"$LISTING" | tr '\n' ' ')
+SHARED=$(awk -v w="$WIN" '$1=="window" { t=$0; sub(/^window [^ ]+ title=/, "", t); title[$2]=t } END { n=0; for (k in title) if (k != w && title[k] == title[w]) n++; print n }' <<<"$LISTING")
+echo "test window: #$(position "$WIN" "$SCRIPTED_IDS") of $(awk '{print NF}' <<<"$SCRIPTED_IDS") in Ghostty's list, #$(position "$NUMBER" "$ORDERED_NUMBERS") of $(awk '{print NF}' <<<"$ORDERED_NUMBERS") in the window server's; its title is shared by $SHARED other window(s)"
 [[ "$PLACE" == "hidden candidates=$NUMBER"* ]] || fail "expected the window to be placed as hidden with candidate $NUMBER"
 
 # The jump, as a click would make it.
