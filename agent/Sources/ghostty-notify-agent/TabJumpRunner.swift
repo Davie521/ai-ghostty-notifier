@@ -14,9 +14,13 @@ enum TabJumpRunner {
 
     /// `deadline` is when the caller's process will be ended, if it will be:
     /// a trip keeps clear of it, and the wait for another jump leaves the
-    /// focus its time before it.
-    static func run(tabID: String, deadline: Date? = nil) async -> TabJumpRun.Report {
-        var wait = Date().addingTimeInterval(leaseWait)
+    /// focus its time before it. `waitUntil` is when the jump stops waiting
+    /// for another to finish; `leaseWait` from now unless the caller has
+    /// been waiting already.
+    static func run(tabID: String, deadline: Date? = nil, waitUntil: Date? = nil) async
+        -> TabJumpRun.Report
+    {
+        var wait = waitUntil ?? Date().addingTimeInterval(leaseWait)
         if let deadline {
             wait = min(wait, deadline.addingTimeInterval(-SpaceHopper.focusReserveSeconds))
         }

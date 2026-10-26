@@ -619,14 +619,19 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // only acts on the outcome.
         //
         // One jump at a time: two trips at once would interleave their
-        // presses. A click during a jump waits for it to finish.
+        // presses. A click during a jump waits for it to finish, its jumps in
+        // the order of the clicks — but no longer than a jump waits for one
+        // from another process, counted from the click: a jump that only gets
+        // its turn later would switch Spaces long after the click, with the
+        // user perhaps somewhere else by then, and does nothing.
         let previous = jumpInFlight
         let id = UUID()
+        let giveUpAt = Date().addingTimeInterval(TabJumpRunner.leaseWait)
         let task = Task { @MainActor [weak self] in
             defer { self?.jumps[id] = nil }
             await previous?.value
             guard let self, !self.shuttingDown, !Task.isCancelled else { return }
-            let report = await TabJumpRunner.run(tabID: tabID)
+            let report = await TabJumpRunner.run(tabID: tabID, waitUntil: giveUpAt)
             self.finishJump(report)
         }
         jumps[id] = task

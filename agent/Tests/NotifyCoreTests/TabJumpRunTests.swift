@@ -272,6 +272,19 @@ final class FakeJump: TabJumpDriver {
         #expect(fake.calls.isEmpty)
     }
 
+    /// Queued behind another jump past its time to wait, a jump does not
+    /// start even with the lease free: its click is long gone.
+    @Test func aJumpWhoseWaitRanOutWhileQueuedDoesNotStart() async {
+        let lease = scratchLease()
+        defer { try? FileManager.default.removeItem(atPath: lease + ".flock") }
+        let fake = FakeJump("t1")
+        let report = await TabJumpRun.run(
+            "t1", leasePath: lease, leaseUntil: Date().addingTimeInterval(-1), limits: limits,
+            driver: fake)
+        #expect(report.outcome == .busy)
+        #expect(fake.calls.isEmpty)
+    }
+
     @Test func aJumpCancelledWhileItWaitsForAnotherIsAbandonedAtOnce() async throws {
         let lease = scratchLease()
         defer { try? FileManager.default.removeItem(atPath: lease + ".flock") }

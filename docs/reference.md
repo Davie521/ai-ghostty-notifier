@@ -319,9 +319,10 @@ What the notification is able to say, and how it finds the tab:
   way included. The looks after a trip, that check it arrived at the window,
   keep that time too; a jump with no time left for one walks back and gives
   up. One jump runs at a time, the app's and the
-  `--focus` mode's alike, and a jump that finds another still under way after
-  10 seconds does nothing at all: even a plain focus could pull a window onto
-  a Space the other is only passing through. This needs the Accessibility
+  `--focus` mode's alike, and a jump that finds another still under way 10
+  seconds after its click or command does nothing at all: by then the user may
+  be elsewhere, and even a plain focus could pull a window onto a Space the
+  other jump is only passing through. This needs the Accessibility
   permission and the shortcut
   switched on under **System Settings → Keyboard → Keyboard Shortcuts →
   Mission Control**; without either, the jump focuses as before.

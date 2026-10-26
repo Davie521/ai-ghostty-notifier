@@ -109,15 +109,16 @@ public enum TabJumpRun {
     }
 
     /// `held` once another jump has held the lease until `deadline`, or this
-    /// one was cancelled while waiting for it.
+    /// one was cancelled while waiting for it. A jump whose wait ran out
+    /// before it even began — it was queued behind another — does not try.
     static func waitForLease(at path: String?, until deadline: Date) async -> FileLease.Attempt {
         guard let path else { return .unavailable }
         while true {
+            guard Date() < deadline, !Task.isCancelled else { return .held }
             // One try at a time: `FileLease.acquire` waits by blocking its
             // thread, and this runs on the main actor.
             let attempt = FileLease.attempt(path)
             guard case .held = attempt else { return attempt }
-            guard Date() < deadline, !Task.isCancelled else { return .held }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
     }
