@@ -87,12 +87,16 @@ enum TabJumpRunner {
             }
             switch step {
             case .locate:
-                guard
-                    let (probe, windows) = await locate(
-                        tabID, cutShort: !plan.moved.isEmpty, within: timeToLook)
-                else {
-                    route += "; no answer in time to look again"
-                    step = plan.abandon()
+                guard let (probe, windows) = await locate(tabID, within: timeToLook) else {
+                    if plan.moved.isEmpty {
+                        // Nothing to put back: the focus answers for itself,
+                        // as it does for a lookup that found no answer.
+                        route = "window not located: no answer in time"
+                        step = plan.observe(probe: .unknown)
+                    } else {
+                        route += "; no answer in time to look again"
+                        step = plan.abandon()
+                    }
                     continue
                 }
                 scripted = windows
@@ -190,7 +194,7 @@ enum TabJumpRunner {
     /// The locate script's Apple Event timeout, and a little more.
     static let locateSeconds = 3.5
     /// How long a lookup cancelled with its jump may still take: a healthy one
-    /// has answered by then, and the display it was made for goes back.
+    /// has answered by then, and a jump being given up waits no longer.
     static let cancelledLookupSeconds = 0.25
 
     private static func looksUp(_ step: TabJump.Step) -> Bool {
@@ -200,14 +204,15 @@ enum TabJumpRunner {
         }
     }
 
-    /// The lookup; nil when it was cut short, its late answer dropped. Only a
-    /// lookup made with a display moved is: by `seconds`, at most the locate
-    /// script's own timeout, and by a cancellation of the jump.
-    private static func locate(_ tabID: String, cutShort: Bool, within seconds: Double?) async
+    /// The lookup; nil when it was cut short, its late answer dropped: by
+    /// `seconds`, at most the locate script's own timeout, and by a
+    /// cancellation of the jump. Its Apple Event timeout bounds each command
+    /// the script sends, not the script, and the jump holds the lease that
+    /// every other jump waits for.
+    private static func locate(_ tabID: String, within seconds: Double?) async
         -> (TabJump.Probe, [ScriptedWindow])?
     {
-        guard cutShort else { return await Ghostty.locate(tabID: tabID) }
-        return try? await QueryDeadline.run(
+        try? await QueryDeadline.run(
             seconds: min(locateSeconds, seconds ?? locateSeconds),
             cancelledSeconds: cancelledLookupSeconds
         ) { await Ghostty.locate(tabID: tabID) }

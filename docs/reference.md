@@ -313,9 +313,12 @@ What the notification is able to say, and how it finds the tab:
   walks back, the pointer goes back where it was, and nothing is focused. The
   app waits up to 18 seconds for that as it quits; a trip so long and so slow
   that it cannot walk back by then stops where it got to, the pointer still put
-  back. The looks after a trip, that check it arrived at the window, keep the
-  time to walk back before the process is ended; a jump with no time left for
-  one walks back and gives up. One jump runs at a time, the app's and the
+  back. A process with an end in sight — the `--focus` mode, given 30 seconds,
+  or the app as it quits — starts no press onward unless it could still walk
+  back over every Space passed, two presses on another display undone on the
+  way included. The looks after a trip, that check it arrived at the window,
+  keep that time too; a jump with no time left for one walks back and gives
+  up. One jump runs at a time, the app's and the
   `--focus` mode's alike, and a jump that finds another still under way after
   10 seconds does nothing at all: even a plain focus could pull a window onto
   a Space the other is only passing through. This needs the Accessibility

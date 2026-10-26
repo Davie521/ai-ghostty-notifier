@@ -46,9 +46,10 @@ extension SpaceTopology {
 ///
 /// A trip that gives up part-way walks back to where it started, and no press
 /// onward starts unless there would still be time to walk back over every
-/// Space passed so far before the process is ended. Wherever a trip stops —
-/// given up, out of time, or because the app is quitting — the desktops end up
-/// as they were or where the user asked to go, never somewhere in between.
+/// Space passed so far before the process is ended, presses on the way back
+/// that land on another display included. Wherever a trip stops — given up,
+/// out of time, or because the app is quitting — the desktops end up as they
+/// were or where the user asked to go, never somewhere in between.
 public enum SpaceWalk {
     public enum Outcome: Equatable, Sendable {
         case arrived(presses: Int, strayRetries: Int)
@@ -88,6 +89,9 @@ public enum SpaceWalk {
     /// The longest the driver spends getting the pointer onto a display
     /// before a press.
     public static let parkSeconds = 0.3
+    /// After the last press, before the window is focused: ordered front while
+    /// still sliding in, it is the off-screen window of issue #63 again.
+    public static let settleOnArrival = 0.25
     /// What one press may take from start to settled: the pointer's move, the
     /// wait for the Space to change, and the settle after it. A step of a
     /// walk back, and the undo of a stray press, are one each.
@@ -112,6 +116,7 @@ public enum SpaceWalk {
         }
         switch await walk(to: space, deadline: deadline, leg: .onward, driver: driver) {
         case .arrived(let presses, let strayRetries):
+            await driver.pause(settleOnArrival)
             return .arrived(
                 display: first.display, from: start, direction: first.direction, presses: presses,
                 strayRetries: strayRetries)
@@ -145,21 +150,22 @@ public enum SpaceWalk {
         case .unreachable: return .stopped("Space \(spot.space) is out of reach")
         case .hop(let hop): steps = hop.steps
         }
-        let allowance = walkBackSeconds(steps: steps + 2 * maxStrayRetries)
+        let allowance = walkBackSeconds(steps: steps)
         return await walk(
             to: spot.space, deadline: driver.now().addingTimeInterval(allowance), leg: .back,
             driver: driver)
     }
 
-    /// What walking back over `steps` Spaces is sure to need: a step for each,
-    /// and an undo on top should a press land on another display. Every press
+    /// What a walk back over `steps` Spaces is given: a step for each, two for
+    /// each press it may retry after one that landed on another display — that
+    /// press and its undo bring it no nearer — and an undo on top. Every press
     /// onward keeps this much clear of the process's end, and so does every
     /// lookup made while a trip has a display moved.
     static func walkBackSeconds(steps: Int) -> Double {
-        undoSeconds + Double(steps) * stepSeconds
+        undoSeconds + Double(steps + 2 * maxStrayRetries) * stepSeconds
     }
 
-    /// What putting these displays back is sure to need. A Space that is on no
+    /// What putting these displays back is given. A Space that is on no
     /// display any more cannot be gone back to however long it is given, and
     /// counts for nothing.
     public static func putBackSeconds(_ spots: [SpaceSpot], in topology: SpaceTopology)
@@ -198,12 +204,16 @@ public enum SpaceWalk {
             if leg == .onward, driver.stopRequested() {
                 return .stopped("stopping after \(presses) presses")
             }
-            // Room for this press, and for putting right whatever it may leave
-            // before the process is ended: an undo, should it land on another
-            // display, and on the way onward the walk back over every Space
-            // passed by then.
-            let done = driver.now().addingTimeInterval(parkSeconds + pressTimeout)
-            let toPutRight = walkBackSeconds(steps: leg == .onward ? presses + 1 : 0)
+            // Room for this press and its settle, and for putting right
+            // whatever it may leave before the process is ended: on the way
+            // back an undo, should it land on another display; on the way
+            // onward the pause on arrival, should it be the last, and the walk
+            // back over every Space passed by then — its undo of this press
+            // included, should it land on another display.
+            let done = driver.now().addingTimeInterval(stepSeconds)
+            let toPutRight =
+                leg == .onward
+                ? settleOnArrival + walkBackSeconds(steps: presses + 1) : undoSeconds
             guard done < deadline, done.addingTimeInterval(toPutRight) < driver.hardDeadline()
             else { return .stopped("out of time after \(presses) presses") }
             guard presses < SpaceRoute.maxSteps else {

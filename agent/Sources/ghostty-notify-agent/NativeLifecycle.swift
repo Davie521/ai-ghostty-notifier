@@ -36,7 +36,9 @@ enum NativeLifecycle {
 
     /// Seconds a mode may run. A hook gets a multiple of its slowest honest
     /// run (three bounded terminal queries). A worker's event expires after
-    /// `staleNotifyAge`, and nothing it starts outlives that by much.
+    /// `staleNotifyAge`, and nothing it starts outlives that by much. A jump
+    /// may wait for another to finish, and every press of a trip to another
+    /// Space keeps the time to walk back clear of the end.
     static func budget(mode: String, environment: [String: String]) -> Double {
         switch mode {
         case "--hook":
@@ -44,6 +46,7 @@ enum NativeLifecycle {
             guard let value, value.isFinite else { return 12 }
             return min(120, max(1, value))
         case "--worker": return AgentConstants.staleNotifyAge + 30
+        case "--focus": return 30
         default: return 15
         }
     }

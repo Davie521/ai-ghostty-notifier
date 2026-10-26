@@ -18,6 +18,9 @@ final class FakeSpaces: SpaceWalkDriver {
     private(set) var displays: [SpaceTopology.Display]
     private(set) var presses: [String] = []
     var effects: [Effect] = []
+    /// Taken before `effects` by presses to the left: a trip's walk back
+    /// from the right, wherever the trip happened to stop.
+    var leftEffects: [Effect] = []
     var shortcutOn = true
     var clock = Date(timeIntervalSince1970: 1_000)
     let pressSeconds = 0.3
@@ -43,7 +46,13 @@ final class FakeSpaces: SpaceWalkDriver {
         guard shortcutOn else { return false }
         presses.append("\(direction == .left ? "left" : "right") \(display)")
         clock += pressSeconds
-        switch effects.isEmpty ? .aimed : effects.removeFirst() {
+        let effect: Effect
+        if direction == .left, !leftEffects.isEmpty {
+            effect = leftEffects.removeFirst()
+        } else {
+            effect = effects.isEmpty ? .aimed : effects.removeFirst()
+        }
+        switch effect {
         case .aimed: move(display, direction)
         case .stray(let other): move(other, direction)
         case .nothing: break
@@ -103,6 +112,18 @@ final class FakeSpaces: SpaceWalkDriver {
         #expect(fake.presses == ["right A", "right A", "right A"])
         #expect(fake.current("A") == 4)
         #expect(fake.current("B") == 10)
+    }
+
+    /// The window is focused once the Space has stopped sliding in, not while
+    /// it still is.
+    @Test func aTripWaitsForTheSlideOnArrival() async {
+        let fake = spaces()
+        let start = fake.clock
+        _ = await SpaceWalk.travel(to: 2, deadline: plenty(fake), driver: fake)
+        let press = fake.pressSeconds + SpaceWalk.settleAfterPress
+        // A `Date` this far from 2001 keeps time to a fraction of a microsecond.
+        let elapsed = fake.clock.timeIntervalSince(start)
+        #expect(abs(elapsed - (press + SpaceWalk.settleOnArrival)) < 1e-6, "\(elapsed)")
     }
 
     @Test func aSpaceInViewNeedsNoPress() async {
@@ -219,7 +240,7 @@ final class FakeSpaces: SpaceWalkDriver {
     @Test func aTripNearTheEndGoesOnlyAsFarAsItCanComeBackFrom() async {
         let fake = spaces()
         let start = fake.clock
-        fake.end = start.addingTimeInterval(8)
+        fake.end = start.addingTimeInterval(20)
         let outcome = await SpaceWalk.travel(to: 6, deadline: plenty(fake), driver: fake)
         guard case .failed(let why) = outcome else {
             Issue.record("expected a failure, got \(outcome)")
@@ -328,24 +349,26 @@ final class FakeSpaces: SpaceWalkDriver {
     }
 
     /// A press that takes its time — the pointer's move and nearly all of the
-    /// wait — must still leave the time to walk back over it: 5.4 s before the
-    /// end is too close to start.
+    /// wait — must still leave the time to walk back over it: the press and
+    /// its settle, the pause on arrival, and a walk back over one Space with
+    /// two presses on the other display undone on the way need 13.9 s, so
+    /// 13.85 s before the end is too close to start.
     @Test func aSlowPressNearTheEndIsNotStartedWithoutTimeToComeBack() async {
         let fake = spaces()
         fake.switchSeconds = 1.49
-        fake.end = fake.clock.addingTimeInterval(5.4)
+        fake.end = fake.clock.addingTimeInterval(13.85)
         fake.afterPress = { fake, count in if count == 1 { fake.stopping = true } }
         let outcome = await SpaceWalk.travel(to: 6, deadline: plenty(fake), driver: fake)
-        if case .stranded = outcome { Issue.record("stranded: \(outcome)") }
+        #expect(outcome == .failed("out of time after 0 presses"))
+        #expect(fake.presses.isEmpty)
         #expect(fake.current("A") == 1)
-        #expect(fake.clock <= fake.end)
     }
 
     /// With room to spare the same slow press is made, and walked back over.
     @Test func aSlowPressWithRoomToSpareIsWalkedBack() async {
         let fake = spaces()
         fake.switchSeconds = 1.49
-        fake.end = fake.clock.addingTimeInterval(5.75)
+        fake.end = fake.clock.addingTimeInterval(13.95)
         fake.afterPress = { fake, count in if count == 1 { fake.stopping = true } }
         let outcome = await SpaceWalk.travel(to: 6, deadline: plenty(fake), driver: fake)
         #expect(outcome == .failed("stopping after 1 presses; went back"))
@@ -397,25 +420,65 @@ final class FakeSpaces: SpaceWalkDriver {
         #expect(fake.current("B") == 11)
     }
 
+    /// Every press as slow as it may be and still count, and a trip that stops
+    /// because the end is near: its walk back must still have time for a
+    /// press that lands on the other display, the undo, and the press again.
+    @Test func aTripStoppedNearTheEndGetsBackDespiteAPressOnTheOtherDisplay() async {
+        // B shows its second Space, so a press back — leftward — that lands
+        // on B does move it.
+        let fake = FakeSpaces([
+            SpaceTopology.Display(identifier: "A", spaces: [1, 2, 3, 4, 5, 6], current: 1),
+            SpaceTopology.Display(identifier: "B", spaces: [10, 11], current: 11),
+        ])
+        fake.switchSeconds = 1.45
+        fake.end = fake.clock.addingTimeInterval(18)
+        fake.leftEffects = [.stray("B")]
+        let outcome = await SpaceWalk.travel(to: 6, deadline: plenty(fake), driver: fake)
+        #expect(outcome == .failed("out of time after 2 presses; went back"))
+        #expect(fake.current("A") == 1)
+        #expect(fake.current("B") == 11)
+        #expect(fake.clock <= fake.end)
+    }
+
+    /// The settle after a press and the pause on arrival count against the end
+    /// like the press itself: a slow last press that would leave the way back
+    /// short by them is not made.
+    @Test func aSlowLastPressIsNotMadeWithoutTimeForItsSettleAndTheArrival() async {
+        let fake = spaces()
+        let start = fake.clock
+        fake.switchSeconds = 1.45
+        // The second press starts 1.9 s in.
+        fake.end =
+            start + 1.9 + SpaceWalk.stepSeconds + SpaceWalk.settleOnArrival
+            + SpaceWalk.walkBackSeconds(steps: 2) - 0.05
+        let outcome = await SpaceWalk.travel(to: 3, deadline: plenty(fake), driver: fake)
+        #expect(outcome == .failed("out of time after 1 presses; went back"))
+        #expect(fake.current("A") == 1)
+    }
+
     func near(_ value: Double?, _ expected: Double) -> Bool {
         guard let value else { return false }
         return abs(value - expected) < 1e-9
     }
 
-    /// What a lookup made while a trip has a display moved must leave: a step
-    /// for every Space back and an undo, for each display moved.
-    @Test func puttingBackCountsAStepForEverySpaceBetweenAndAnUndo() {
+    /// What a lookup made while a trip has a display moved must leave, for
+    /// each display moved: a step for every Space back, two for each press
+    /// that may land on the other display on the way, and an undo.
+    @Test func puttingBackIsGivenAStepPerSpaceTwoPerRetryAndAnUndo() {
         let topology = SpaceTopology(displays: [
             SpaceTopology.Display(identifier: "A", spaces: [1, 2, 3, 4], current: 4),
             SpaceTopology.Display(identifier: "B", spaces: [10, 11], current: 11),
         ])
         let step = SpaceWalk.stepSeconds
         let undo = SpaceWalk.undoSeconds
+        let retries = Double(2 * SpaceWalk.maxStrayRetries)
         let a = SpaceSpot(display: "A", space: 1)
         let b = SpaceSpot(display: "B", space: 10)
-        #expect(near(SpaceWalk.putBackSeconds([a], in: topology), undo + 3 * step))
+        #expect(near(SpaceWalk.putBackSeconds([a], in: topology), undo + (3 + retries) * step))
         #expect(
-            near(SpaceWalk.putBackSeconds([a, b], in: topology), undo + 3 * step + undo + step))
+            near(
+                SpaceWalk.putBackSeconds([a, b], in: topology),
+                undo + (3 + retries) * step + undo + (1 + retries) * step))
         // Already back, and gone: neither needs any time.
         #expect(SpaceWalk.putBackSeconds([SpaceSpot(display: "B", space: 11)], in: topology) == 0)
         #expect(SpaceWalk.putBackSeconds([SpaceSpot(display: "A", space: 99)], in: topology) == 0)
@@ -460,7 +523,7 @@ final class FakeSpaces: SpaceWalkDriver {
         let start = fake.clock
         // The third press is the last that fits: it starts 0.9 s in.
         fake.end =
-            start + 0.9 + SpaceWalk.parkSeconds + SpaceWalk.pressTimeout
+            start + 0.9 + SpaceWalk.stepSeconds + SpaceWalk.settleOnArrival
             + SpaceWalk.walkBackSeconds(steps: 3) + 0.05
         let outcome = await SpaceWalk.travel(to: 4, deadline: plenty(fake), driver: fake)
         #expect(

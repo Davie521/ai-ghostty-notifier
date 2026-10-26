@@ -36,9 +36,6 @@ enum SpaceHopper {
         case stranded(String)
     }
 
-    /// Before the window is focused: ordered front while still sliding in,
-    /// it is the off-screen window of issue #63 again.
-    static let settleOnArrival = 0.25
     /// The longest one trip may take: sixteen presses, the most a route
     /// allows, at the few hundred milliseconds each takes.
     static let maxTripSeconds = 8.0
@@ -94,7 +91,6 @@ enum SpaceHopper {
         let outcome = await SpaceWalk.travel(to: space, deadline: deadline, driver: LiveDriver())
         switch outcome {
         case .arrived(let display, let from, let direction, let presses, let strayRetries):
-            await LiveDriver().pause(settleOnArrival)
             return .arrived(
                 Trip(
                     display: display, from: from, direction: direction, presses: presses,
