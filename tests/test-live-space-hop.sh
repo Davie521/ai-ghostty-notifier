@@ -40,10 +40,22 @@ place_of() { where "$1" | sed -nE 's/^tab .* place=//p'; }
 pointer() {
     osascript -l JavaScript -e 'ObjC.import("CoreGraphics"); const p = $.CGEventGetLocation($.CGEventCreate(null)); p.x + " " + p.y'
 }
+# The pointer and the key go the way the agent sends them: a posted mouse move,
+# then the key with exactly the registered modifiers — Control plus the
+# keypad flag arrow keys carry. System Events' `key code … using control down`
+# switched Spaces only some of the time.
 warp() {
-    osascript -l JavaScript -e "ObjC.import('CoreGraphics'); \$.CGWarpMouseCursorPosition({x: $1, y: $2}); ''" >/dev/null
+    osascript -l JavaScript -e "ObjC.import('CoreGraphics'); \$.CGEventPost(0, \$.CGEventCreateMouseEvent(null, 5, {x: $1, y: $2}, 0)); ''" >/dev/null
 }
-press() { osascript -e "tell application \"System Events\" to key code $1 using control down"; }
+press() {
+    osascript -l JavaScript -e "ObjC.import('CoreGraphics');
+for (const down of [true, false]) {
+    const e = \$.CGEventCreateKeyboardEvent(null, $1, down);
+    \$.CGEventSetFlags(e, 0x840000);
+    \$.CGEventPost(0, e);
+}
+''" >/dev/null
+}
 frontmost_app() { osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true'; }
 
 # `<display> <space>` for every display.
