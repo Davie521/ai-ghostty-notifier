@@ -14,7 +14,11 @@
 # whenever Ghostty does, which is what lets this run without the resident app
 # being granted it. The resident needs its own grant; that part a click tests.
 #
-# Usage: bash tests/test-live-space-hop.sh [--interrupt] [path/to/ghostty-notify-agent]
+# Usage: bash tests/test-live-space-hop.sh [--interrupt] [--minimized] [path/to/ghostty-notify-agent]
+#
+# --minimized adds a third window of its own, minimized, under a title no other
+# window has. Ghostty lists minimized windows and the window server does not
+# order them in, so the jump must set it aside to pair the two lists.
 #
 # --interrupt checks quitting mid-trip instead: the window is parked two
 # Spaces away, and one Space into the trip the jump is sent SIGTERM, as launchd
@@ -28,7 +32,15 @@
 set -euo pipefail
 
 INTERRUPT=no
-if [[ "${1:-}" == --interrupt ]]; then INTERRUPT=yes; shift; fi
+MINIMIZED=no
+while [[ "${1:-}" == --* ]]; do
+    case $1 in
+        --interrupt) INTERRUPT=yes ;;
+        --minimized) MINIMIZED=yes ;;
+        *) echo "unknown option: $1" >&2; exit 2 ;;
+    esac
+    shift
+done
 APP="${GHOSTTY_NOTIFY_NATIVE_APP:-$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app}"
 BIN="${1:-$APP/Contents/MacOS/ghostty-notify-agent}"
 [[ -x "$BIN" ]] || { echo "agent binary missing: $BIN" >&2; exit 2; }
@@ -37,7 +49,7 @@ SESSION_DIR="${GHOSTTY_NOTIFY_SESSION_DIR:-$HOME/.claude/notifications/ghostty-s
 SESSION=$(uuidgen | tr 'A-Z' 'a-z')
 BINDING="$SESSION_DIR/$SESSION.json"
 
-START_CONTROL=""; WIN=""; FIRST=""; BG=""; SEL=""; HELPER=""; HELPER_TAB=""; DISPLAY_ID=""; HOME_SPACE=""; AWAY_KEY=""; POINTER=""; START_SPACES=""
+START_CONTROL=""; WIN=""; FIRST=""; BG=""; SEL=""; HELPER=""; HELPER_TAB=""; MIN_WIN=""; MIN_TAB=""; DISPLAY_ID=""; HOME_SPACE=""; AWAY_KEY=""; POINTER=""; START_SPACES=""
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 where() { "$BIN" --where "$1" 2>/dev/null || true; }
@@ -176,6 +188,16 @@ cleanup() {
                 && echo "closed the helper window $HELPER" || echo "could not close the helper window $HELPER" >&2
         else
             echo "not closing $HELPER: its tabs are now '$helper_tabs', not the one this run made" >&2
+        fi
+    fi
+    if [[ -n "$MIN_WIN" ]]; then
+        local min_tabs
+        min_tabs=$(osascript -e "tell application \"Ghostty\" to get id of every tab of (first window whose id is \"$MIN_WIN\")" 2>/dev/null || true)
+        if [[ -n "$MIN_TAB" && "$min_tabs" == "$MIN_TAB" ]]; then
+            osascript -e "tell application \"Ghostty\" to close window (first window whose id is \"$MIN_WIN\")" >/dev/null 2>&1 \
+                && echo "closed the minimized window $MIN_WIN" || echo "could not close the minimized window $MIN_WIN" >&2
+        else
+            echo "not closing $MIN_WIN: its tabs are now '$min_tabs', not the one this run made" >&2
         fi
     fi
     [[ -n "$START_SPACES" ]] && restore_spaces
@@ -361,6 +383,66 @@ tell application "System Events"
 end tell
 AS
 }
+
+# A minimized window of this run's, titled like no other: the shell in it
+# moves to /private/tmp, and Ghostty titles the window after that.
+if [[ "$MINIMIZED" == yes ]]; then
+    BEFORE_MIN=$(where "$BG" | awk '$1=="ordered" {print $2}' | tr '\n' ' ')
+    MADE_MIN=$(osascript <<'AS'
+tell application "Ghostty"
+    set seen to {}
+    repeat with w in windows
+        set end of seen to (id of w)
+    end repeat
+    set newWin to new window
+    if newWin is missing value then error "no new window"
+    if seen contains (id of newWin) then error "new window returned an existing window"
+    return (id of newWin) & " " & (id of first tab of newWin)
+end tell
+AS
+) || fail "could not open the window to minimize: $MADE_MIN"
+    read -r MIN_WIN MIN_TAB <<<"$MADE_MIN"
+    [[ "$MIN_WIN" == tab-group-* && "$MIN_TAB" == tab-* ]] || { MIN_WIN=""; fail "unexpected ids: $MADE_MIN"; }
+    osascript - "$MIN_WIN" <<'AS' >/dev/null || fail "could not move the new window's shell"
+on run argv
+    tell application "Ghostty"
+        set t to focused terminal of first tab of (first window whose id is (item 1 of argv))
+        input text "cd /private/tmp" to t
+        send key "enter" to t
+    end tell
+end run
+AS
+    sleep 1
+    read -r -a FRESH <<<"$(new_numbers "$BEFORE_MIN")"
+    [[ ${#FRESH[@]} == 1 ]] || fail "expected one new window to minimize, found: ${FRESH[*]:-none}"
+    MIN_NUMBER=${FRESH[0]}
+    MIN_TITLE=$(osascript -e "tell application \"Ghostty\" to get name of (first window whose id is \"$MIN_WIN\")")
+    TITLE_COUNT=$(where "$BG" | awk -v t="$MIN_TITLE" '$1=="window" { x=$0; sub(/^window [^ ]+ title=/, "", x); if (x == t) n++ } END { print n+0 }')
+    [[ "$TITLE_COUNT" == 1 ]] || fail "the window to minimize shares its title with another window ($TITLE_COUNT)"
+    IFS=, read -r mx my mw mh <<<"$(where "$BG" | awk -v n="$MIN_NUMBER" '$1=="ordered" && $2==n { sub("bounds=","",$4); print $4 }')"
+    MINIMIZED_IT=$(osascript - "$MIN_TITLE" "$mx" "$my" "$mw" "$mh" <<'AS'
+on run argv
+    set {wanted, x, y, w, h} to {item 1 of argv, (item 2 of argv) as integer, (item 3 of argv) as integer, (item 4 of argv) as integer, (item 5 of argv) as integer}
+    tell application "System Events" to tell process "Ghostty"
+        set matches to {}
+        repeat with win in windows
+            if (name of win) is wanted and (position of win) is {x, y} and (size of win) is {w, h} then set end of matches to win
+        end repeat
+        if (count of matches) is not 1 then return "matched " & (count of matches)
+        set value of attribute "AXMinimized" of item 1 of matches to true
+        return "minimized"
+    end tell
+end run
+AS
+)
+    [[ "$MINIMIZED_IT" == minimized ]] || fail "could not single out the window to minimize ($MINIMIZED_IT)"
+    sleep 1.5
+    LISTED=$(where "$BG")
+    awk -v w="$MIN_WIN" '$1=="window" && $2==w { found=1 } END { exit !found }' <<<"$LISTED" || fail "Ghostty does not list the minimized window"
+    awk -v n="$MIN_NUMBER" '$1=="ordered" && $2==n { found=1 } END { exit found }' <<<"$LISTED" || fail "the window server still orders the minimized window in"
+    awk -v n="$MIN_NUMBER" '$1=="seen" && $2==n && $3=="minimized" { found=1 } END { exit !found }' <<<"$LISTED" || fail "Accessibility does not show the window as minimized"
+    echo "minimized window $MIN_WIN (number $MIN_NUMBER): listed by Ghostty, not ordered in, seen minimized"
+fi
 
 # Switch that display away, so the window is out of view: one Space over, or
 # two for --interrupt, which needs a trip of two steps to stop half-way. With

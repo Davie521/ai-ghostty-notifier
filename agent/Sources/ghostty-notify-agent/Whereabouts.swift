@@ -40,7 +40,11 @@ enum Whereabouts {
             print(
                 "ordered \(window.number) spaces=\(list(window.spaces)) bounds=\(bounds ?? "?")")
         }
-        for window in seen { print("seen \(window.number) title=\(window.title)") }
+        for window in seen {
+            print(
+                "seen \(window.number)\(window.minimized ? " minimized" : "") title=\(window.title)"
+            )
+        }
         switch probe {
         case .notFound:
             print("tab \(tabID) not found")

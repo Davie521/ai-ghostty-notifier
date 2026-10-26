@@ -263,4 +263,51 @@ import Testing
                 "tab-group-b", scripted: scripted, ordered: ordered, seen: nil,
                 visibleSpaces: visible) == .unsettled)
     }
+
+    /// A minimized window elsewhere: Ghostty lists it, the window server does
+    /// not order it in, Accessibility shows it minimized. Set aside by its
+    /// title, it no longer keeps the lists from pairing.
+    @Test(arguments: [0, 1, 2])
+    func aMinimizedWindowIsSetAsideWhereverGhosttyListsIt(at position: Int) {
+        var scripted = self.scripted
+        scripted.insert(ScriptedWindow(id: "tab-group-m", title: "notes"), at: position)
+        let seen = self.seen + [SeenWindow(number: 999, title: "notes", minimized: true)]
+        #expect(
+            WindowPlace.of(
+                "tab-group-b", scripted: scripted, ordered: ordered, seen: seen,
+                visibleSpaces: visible) == .hidden(candidates: [ordered[1]]))
+        #expect(
+            WindowPlace.of(
+                "tab-group-a", scripted: scripted, ordered: ordered, seen: seen,
+                visibleSpaces: visible) == .showing)
+    }
+
+    /// The tab's own window minimized: it is on no Space, so no trip.
+    @Test func aMinimizedTargetHasNoSpaceToTravelTo() {
+        var scripted = self.scripted
+        scripted.append(ScriptedWindow(id: "tab-group-m", title: "notes"))
+        let seen = self.seen + [SeenWindow(number: 999, title: "notes", minimized: true)]
+        #expect(
+            WindowPlace.of(
+                "tab-group-m", scripted: scripted, ordered: ordered, seen: seen,
+                visibleSpaces: visible) == .unknown)
+    }
+
+    /// A minimized window titled like another listed one: which is which
+    /// cannot be told.
+    @Test func aMinimizedWindowTitledLikeAnotherLeavesTheListsUnsettled() {
+        let scripted = [
+            ScriptedWindow(id: "tab-group-a", title: "zsh"),
+            ScriptedWindow(id: "tab-group-m", title: "zsh"),
+            ScriptedWindow(id: "tab-group-b", title: "yifan@mac:~"),
+        ]
+        let seen = [
+            SeenWindow(number: 224_461, title: "zsh"),
+            SeenWindow(number: 999, title: "zsh", minimized: true),
+        ]
+        #expect(
+            WindowPlace.of(
+                "tab-group-b", scripted: scripted, ordered: ordered, seen: seen,
+                visibleSpaces: visible) == .unsettled)
+    }
 }

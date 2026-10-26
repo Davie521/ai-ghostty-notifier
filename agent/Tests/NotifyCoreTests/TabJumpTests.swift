@@ -137,6 +137,16 @@ import Testing
         #expect(TabJump(requested: tab).abandon() == .stop(.abandoned))
     }
 
+    /// A trip that stopped part-way and could not get back: no focus, which
+    /// would bring the window to wherever the desktops were left.
+    @Test func aTripThatCouldNotGetBackEndsTheJumpWithoutAFocus() {
+        var (jump, step) = located(.hidden(candidates: [hiddenA]))
+        #expect(step == .hop(hiddenA))
+        #expect(
+            jump.observe(hopResult: .stranded(reason: "could not go back")) == .stop(.strandedTrip))
+        #expect(jump.focusAttempts == 0)
+    }
+
     @Test func noCandidatesMeansNoTravel() {
         let (jump, step) = located(.hidden(candidates: []))
         #expect(step == .focus)
@@ -203,7 +213,7 @@ import Testing
             ]),
         ])
     func everyPathIsBounded(answer: String?, place: WindowPlace) {
-        for hopResult in [TabJump.HopResult.arrived, .failed(reason: "x")] {
+        for hopResult in [TabJump.HopResult.arrived, .failed(reason: "x"), .stranded(reason: "y")] {
             var jump = TabJump(requested: tab)
             var step = jump.start
             var steps = 0

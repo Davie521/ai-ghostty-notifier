@@ -72,10 +72,13 @@ struct MacTerminalAutomation: TerminalAutomationProviding {
                 AgentLog.append(TabJumpRunner.describe(report), to: paths.log)
             }
             switch report.outcome {
-            case .verified, .abandoned: return
+            case .verified, .abandoned, .strandedTrip: return
             case .notFound, .unverified: break
             }
         }
+        // Stopping: bringing Ghostty forward now could pull a window across
+        // Spaces with nobody waiting for it.
+        guard !Task.isCancelled else { return }
         await MainActor.run {
             NSApplication.shared.activate(ignoringOtherApps: true)
             Ghostty.activate()

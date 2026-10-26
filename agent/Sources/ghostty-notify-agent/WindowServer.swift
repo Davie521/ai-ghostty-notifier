@@ -165,7 +165,12 @@ enum WindowServer {
             let read = AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &title)
             // A Ghostty that stopped answering will not answer the next one either.
             if read == .cannotComplete { break }
-            seen.append(SeenWindow(number: number, title: title as? String ?? ""))
+            var minimized: CFTypeRef?
+            AXUIElementCopyAttributeValue(element, kAXMinimizedAttribute as CFString, &minimized)
+            seen.append(
+                SeenWindow(
+                    number: number, title: title as? String ?? "",
+                    minimized: (minimized as? Bool) ?? false))
         }
         return seen
     }
@@ -234,7 +239,10 @@ enum WindowServer {
             let up = CGEvent(
                 keyboardEventSource: source, virtualKey: shortcut.keyCode, keyDown: false)
         else { return }
-        down.flags = shortcut.flags.union(held)
+        // Down, exactly the registered chord: a modifier the user happens to
+        // hold would make it another shortcut. Up, what is physically held,
+        // which puts the system's modifier state back as the user has it.
+        down.flags = shortcut.flags
         up.flags = held
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)

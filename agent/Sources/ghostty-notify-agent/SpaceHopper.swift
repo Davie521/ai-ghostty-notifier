@@ -28,7 +28,10 @@ enum SpaceHopper {
     enum Outcome: Equatable, Sendable {
         case arrived(Trip)
         case alreadyShowing
+        /// Did not get there; the desktops are as they were.
         case failed(String)
+        /// Did not get there, and could not put the desktops back.
+        case stranded(String)
     }
 
     /// Before the window is focused: ordered front while still sliding in,
@@ -98,6 +101,8 @@ enum SpaceHopper {
             return .alreadyShowing
         case .failed(let why):
             return .failed(why)
+        case .stranded(let why):
+            return .stranded(why)
         }
     }
 

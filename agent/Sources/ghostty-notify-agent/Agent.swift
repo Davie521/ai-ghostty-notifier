@@ -633,11 +633,13 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         switch report.outcome {
         case .notFound, .unverified:
             // Front the app at least: the user is one keystroke away instead
-            // of nowhere, as with a tab that was never resolved.
-            Ghostty.activate()
-        case .verified, .abandoned:
-            // Abandoned means quitting: bringing Ghostty forward now could
-            // pull the very window the trip was cancelled on the way to.
+            // of nowhere, as with a tab that was never resolved. Not while
+            // quitting, though.
+            if !shuttingDown { Ghostty.activate() }
+        case .verified, .abandoned, .strandedTrip:
+            // Abandoned means quitting, and a stranded trip left a display on
+            // a Space the user never chose: bringing Ghostty forward now
+            // could pull the very window the trip was on its way to.
             break
         }
         log(TabJumpRunner.describe(report))

@@ -63,7 +63,11 @@ public enum SpaceWalk {
         case arrived(
             display: String, direction: SpaceHop.Direction, presses: Int, strayRetries: Int)
         case alreadyShowing
+        /// The trip did not get there, and the desktops are as they were.
         case failed(String)
+        /// The trip did not get there, and could not put the desktops back:
+        /// a display is left on a Space the user never chose.
+        case stranded(String)
     }
 
     /// Which way a walk goes: onward to the window's Space, or back to where
@@ -108,7 +112,7 @@ public enum SpaceWalk {
                 display: first.display, direction: first.direction, presses: presses,
                 strayRetries: strayRetries)
         case .stranded(let why):
-            return .failed(why)
+            return .stranded(why)
         case .stopped(let why):
             guard let start, driver.topology()?.current(on: first.display) != start else {
                 return .failed(why)
@@ -117,7 +121,7 @@ public enum SpaceWalk {
             switch await walk(to: start, deadline: back, leg: .back, driver: driver) {
             case .arrived: return .failed("\(why); went back")
             case .stopped(let backWhy), .stranded(let backWhy):
-                return .failed("\(why); could not go back: \(backWhy)")
+                return .stranded("\(why); could not go back: \(backWhy)")
             }
         }
     }

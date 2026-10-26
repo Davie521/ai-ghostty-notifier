@@ -34,8 +34,13 @@ enum TabJumpRunner {
             // Cancelled with its task — the resident quitting, the `--focus`
             // mode sent SIGTERM — the jump stops where it stands. A trip under
             // way has already walked back by the time it returns here.
+            // An end other than these becomes abandoned too: for a not-found
+            // or unverified jump the callers would bring Ghostty forward.
             if Task.isCancelled {
-                if case .stop = step {} else { step = plan.abandon() }
+                switch step {
+                case .stop(.verified), .stop(.abandoned), .stop(.strandedTrip): break
+                default: step = plan.abandon()
+                }
             }
             switch step {
             case .locate:
@@ -88,6 +93,10 @@ enum TabJumpRunner {
                     travelled = nil
                     route = "no travel: \(why)"
                     step = plan.observe(hopResult: .failed(reason: why))
+                case .stranded(let why):
+                    travelled = nil
+                    route = "trip left unfinished: \(why)"
+                    step = plan.observe(hopResult: .stranded(reason: why))
                 }
             case .focus:
                 let selected = await Ghostty.focus(tabID: tabID)
@@ -139,6 +148,8 @@ enum TabJumpRunner {
         switch report.outcome {
         case .abandoned:
             return "jump: gave up on \(tabID) (\(report.route)), stopping"
+        case .strandedTrip:
+            return "jump: \(tabID) not focused (\(report.route))"
         case .notFound:
             return "jump: \(tabID) not found, activated Ghostty only"
         case .verified(reads: 0, focusAttempts: 1):

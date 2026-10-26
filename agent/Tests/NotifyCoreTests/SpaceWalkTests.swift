@@ -130,8 +130,8 @@ final class FakeSpaces: SpaceWalkDriver {
         let fake = spaces()
         fake.effects = [.stray("B"), .nothing]
         let outcome = await SpaceWalk.travel(to: 3, deadline: plenty(fake), driver: fake)
-        guard case .failed(let why) = outcome else {
-            Issue.record("expected a failure, got \(outcome)")
+        guard case .stranded(let why) = outcome else {
+            Issue.record("expected a stranded trip, got \(outcome)")
             return
         }
         #expect(why.contains("could not be put back"))
@@ -244,8 +244,8 @@ final class FakeSpaces: SpaceWalkDriver {
             if count == 2 { fake.end = fake.clock.addingTimeInterval(1.5 + 1.6) }
         }
         let outcome = await SpaceWalk.travel(to: 6, deadline: plenty(fake), driver: fake)
-        guard case .failed = outcome else {
-            Issue.record("expected a failure, got \(outcome)")
+        guard case .stranded = outcome else {
+            Issue.record("expected a stranded trip, got \(outcome)")
             return
         }
         #expect(fake.clock <= fake.end)
@@ -257,8 +257,8 @@ final class FakeSpaces: SpaceWalkDriver {
         let fake = spaces()
         fake.effects = [.aimed, .stray("B"), .nothing]
         let outcome = await SpaceWalk.travel(to: 6, deadline: plenty(fake), driver: fake)
-        guard case .failed(let why) = outcome else {
-            Issue.record("expected a failure, got \(outcome)")
+        guard case .stranded(let why) = outcome else {
+            Issue.record("expected a stranded trip, got \(outcome)")
             return
         }
         #expect(why.contains("could not be put back"))

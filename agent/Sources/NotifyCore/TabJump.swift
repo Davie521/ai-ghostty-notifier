@@ -39,8 +39,11 @@ public struct TabJump: Equatable, Sendable {
     public enum HopResult: Equatable, Sendable {
         /// The Space came into view.
         case arrived
-        /// Nothing moved; `reason` is for the log.
+        /// It did not get there, and the desktops are as they were; `reason`
+        /// is for the log.
         case failed(reason: String)
+        /// It did not get there, and could not put the desktops back.
+        case stranded(reason: String)
     }
 
     public enum Outcome: Equatable, Sendable {
@@ -55,6 +58,10 @@ public struct TabJump: Equatable, Sendable {
         /// cancelled. Nothing after that was done, the focus included: a focus
         /// without the trip before it is what pulled windows across Spaces.
         case abandoned
+        /// A trip stopped part-way and could not get back. Nothing was
+        /// focused: a focus now would bring the window to wherever the
+        /// desktops were left, a Space the user never chose.
+        case strandedTrip
     }
 
     public enum Step: Equatable, Sendable {
@@ -150,6 +157,7 @@ public struct TabJump: Equatable, Sendable {
         switch hopResult {
         case .arrived: return .locate
         case .failed: return .focus
+        case .stranded: return .stop(.strandedTrip)
         }
     }
 

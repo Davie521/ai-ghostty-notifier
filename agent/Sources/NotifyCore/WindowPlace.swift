@@ -50,14 +50,19 @@ public struct OrderedWindow: Equatable, Sendable {
 }
 
 /// One of Ghostty's windows as Accessibility shows it. Accessibility lists
-/// only windows on Spaces in view, which is what makes it useful here.
+/// only windows on Spaces in view, and minimized ones, which is what makes it
+/// useful here.
 public struct SeenWindow: Equatable, Sendable {
     public let number: UInt32
     public let title: String
+    /// In the Dock: on no Space, and not ordered in, so the window server's
+    /// list leaves it out while Ghostty's has it.
+    public let minimized: Bool
 
-    public init(number: UInt32, title: String) {
+    public init(number: UInt32, title: String, minimized: Bool = false) {
         self.number = number
         self.title = title
+        self.minimized = minimized
     }
 }
 
@@ -92,6 +97,13 @@ public enum WindowPlace: Equatable, Sendable {
     /// exactly like one that is out of view, and travelling on that guess
     /// would switch a display for nothing.
     ///
+    /// A minimized window is the other way round: Ghostty lists it, the window
+    /// server does not order it in. Accessibility shows it, minimized, under
+    /// its title, and the listed window of that title is set aside — when no
+    /// other listed window shares the title; then which one it is cannot be
+    /// told, and the lists are unsettled. The tab's own window minimized has
+    /// no Space to travel to.
+    ///
     /// The window server also lists Ghostty's windows that are not terminals —
     /// an About box, an open menu — which Ghostty's list leaves out. One in
     /// view that Accessibility does not show as a window titled like one of
@@ -105,6 +117,14 @@ public enum WindowPlace: Equatable, Sendable {
         _ windowID: String, scripted: [ScriptedWindow], ordered: [OrderedWindow],
         seen: [SeenWindow]?, visibleSpaces: Set<UInt64>
     ) -> WindowPlace {
+        guard scripted.contains(where: { $0.id == windowID }) else { return .unknown }
+        var scripted = scripted
+        for minimized in seen ?? [] where minimized.minimized {
+            let matching = scripted.indices.filter { scripted[$0].title == minimized.title }
+            guard matching.count == 1 else { return .unsettled }
+            if scripted[matching[0]].id == windowID { return .unknown }
+            scripted.remove(at: matching[0])
+        }
         guard let targetIndex = scripted.firstIndex(where: { $0.id == windowID }) else {
             return .unknown
         }
