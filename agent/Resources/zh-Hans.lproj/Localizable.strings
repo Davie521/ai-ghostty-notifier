@@ -28,6 +28,7 @@
 "Notification permission unavailable — relaunch" = "通知权限不可用 — 请重新启动";
 "Alert style: Temporary — Fix…" = "提醒样式：临时 — 去修复…";
 "Alerts turned off — Fix…" = "提醒已关闭 — 去修复…";
+"Jumps can't switch Spaces — allow Accessibility…" = "跳转无法切换桌面 — 去允许辅助功能…";
 "Checking alert style…" = "正在检查提醒样式…";
 "Alert style: %@" = "提醒样式：%@";
 "OK" = "正常";

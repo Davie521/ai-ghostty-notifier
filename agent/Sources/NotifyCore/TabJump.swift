@@ -1,6 +1,17 @@
 import Foundation
 
-/// The steps of one click-to-jump, decided from what Ghostty reports back.
+/// The steps of one click-to-jump, decided from what Ghostty and the window
+/// server report back.
+///
+/// Ghostty's `focus` orders the tab's window front and activates Ghostty.
+/// When that window is on a Space out of view, macOS switches to its Space
+/// only if Ghostty has no window on any Space in view; otherwise the window
+/// is brought onto the current Space, which is issue #63. So a jump first
+/// locates the tab's window and, when the window is out of view, travels to
+/// its Space with the user's own shortcut before focusing. Travel needs the
+/// Accessibility permission and can fail; every such failure falls through to
+/// the plain focus, which is what the jump did before and still better than
+/// nothing.
 ///
 /// Focusing a tab and reading which tab is selected are two Apple Events, and
 /// the read can land before Ghostty has finished the focus: the reply then
@@ -11,9 +22,28 @@ import Foundation
 /// does the jump give up. Every count is bounded, so a Ghostty that never
 /// answers the way we hope cannot keep this going.
 ///
-/// Pure bookkeeping, no Apple Events: the resident drives it and NotifyCore
-/// tests can walk every path.
+/// Pure bookkeeping, no Apple Events and no window server: the resident
+/// drives it and NotifyCore tests can walk every path.
 public struct TabJump: Equatable, Sendable {
+    /// What the read-only lookup of the requested tab found.
+    public enum Probe: Equatable, Sendable {
+        /// The id of the window (tab group) holding the requested tab.
+        case found(window: String)
+        /// No window has a tab with that id.
+        case notFound
+        /// The lookup got no answer. Not a verdict either way.
+        case unknown
+    }
+
+    /// How a trip to a hidden window's Space ended.
+    public enum HopResult: Equatable, Sendable {
+        /// The Space came into view. `confirmed` is whether the window the
+        /// jump wants is now among the windows showing.
+        case arrived(confirmed: Bool)
+        /// Nothing moved; `reason` is for the log.
+        case failed(reason: String)
+    }
+
     public enum Outcome: Equatable, Sendable {
         /// The requested tab is selected. `reads` is how many settle re-reads
         /// it took; `focusAttempts` how many focus commands.
@@ -25,6 +55,12 @@ public struct TabJump: Equatable, Sendable {
     }
 
     public enum Step: Equatable, Sendable {
+        /// Ask Ghostty, changing nothing, which window holds the tab.
+        case locate
+        /// Ask the window server and Accessibility where that window is.
+        case survey(window: String)
+        /// Travel to the Space of this window.
+        case hop(OrderedWindow)
         /// Send the focus command.
         case focus
         /// Read the selected tab again after this many seconds.
@@ -38,10 +74,19 @@ public struct TabJump: Equatable, Sendable {
     public static let settleSeconds = 0.2
     /// Focus commands per jump, in total.
     public static let maxFocusAttempts = 2
+    /// Trips per jump, in total. A second one happens only when the first
+    /// arrived at a Space that turned out to hold another Ghostty window.
+    public static let maxHops = 2
 
     public let requested: String
     public private(set) var focusAttempts = 0
     public private(set) var reads = 0
+    /// The window holding the requested tab, once located.
+    public private(set) var window: String?
+    public private(set) var hops = 0
+    public private(set) var lastHop: HopResult?
+    /// Windows still worth travelling to if the current trip is not confirmed.
+    private var candidates: [OrderedWindow] = []
     /// Re-reads since the last focus command; one is allowed per focus.
     private var readsSinceFocus = 0
 
@@ -50,7 +95,49 @@ public struct TabJump: Equatable, Sendable {
     }
 
     /// The first step of every jump.
-    public var start: Step { .focus }
+    public var start: Step { .locate }
+
+    /// What the lookup found.
+    public mutating func observe(probe: Probe) -> Step {
+        switch probe {
+        case .found(let window):
+            self.window = window
+            return .survey(window: window)
+        case .notFound:
+            return .stop(.notFound)
+        case .unknown:
+            // The focus command answers for itself, as it did before lookups.
+            return .focus
+        }
+    }
+
+    /// Where the survey placed the window.
+    public mutating func observe(place: WindowPlace) -> Step {
+        switch place {
+        case .showing, .unknown:
+            return .focus
+        case .hidden(let candidates):
+            self.candidates = candidates
+            return nextHop() ?? .focus
+        }
+    }
+
+    /// How the trip ended.
+    public mutating func observe(hopResult: HopResult) -> Step {
+        lastHop = hopResult
+        switch hopResult {
+        case .arrived(confirmed: true), .failed:
+            return .focus
+        case .arrived(confirmed: false):
+            return nextHop() ?? .focus
+        }
+    }
+
+    private mutating func nextHop() -> Step? {
+        guard hops < Self.maxHops, !candidates.isEmpty else { return nil }
+        hops += 1
+        return .hop(candidates.removeFirst())
+    }
 
     /// What the focus command reported as the selection of the front window,
     /// or nil when the tab was not found or the command failed.

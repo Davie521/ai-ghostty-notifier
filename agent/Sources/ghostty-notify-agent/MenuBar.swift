@@ -11,6 +11,9 @@ struct AgentStatus {
     /// Sessions with a notification still on screen, newest first.
     var waiting: [WaitingSession]
     var trackedSessions: Int
+    /// A jump found Ghostty's window on another Space and could not go there
+    /// for want of the Accessibility permission, which is still missing.
+    var accessibilityMissing = false
 
     var menuBarState: MenuBarState {
         MenuBarState.resolve(
@@ -43,6 +46,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let onJump: (String) -> Void
     private let onShowGuidance: () -> Void
     private let onOpenSettings: () -> Void
+    private let onOpenAccessibilitySettings: () -> Void
     private let onOpenLog: () -> Void
     private let onOpen: () -> Void
 
@@ -69,6 +73,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         onJump: @escaping (String) -> Void,
         onShowGuidance: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void,
+        onOpenAccessibilitySettings: @escaping () -> Void = {},
         onOpenLog: @escaping () -> Void,
         onOpen: @escaping () -> Void = {}
     ) {
@@ -78,6 +83,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         self.onJump = onJump
         self.onShowGuidance = onShowGuidance
         self.onOpenSettings = onOpenSettings
+        self.onOpenAccessibilitySettings = onOpenAccessibilitySettings
         self.onOpenLog = onOpenLog
         self.onOpen = onOpen
         // Sized from the bar AppKit actually gave us rather than a constant:
@@ -163,11 +169,15 @@ final class MenuBar: NSObject, NSMenuDelegate {
     /// all, to the same grey as "everything is in order".
     private func addStatusBlock(to menu: NSMenu, status: AgentStatus) {
         let block = MenuStatusLine.block(
-            permission: status.permission, alertStyle: status.alertStyle)
+            permission: status.permission, alertStyle: status.alertStyle,
+            accessibilityMissing: status.accessibilityMissing)
         for line in block {
-            let entry =
-                line.opensSettings
-                ? action(line.text, #selector(openSettings)) : disabled(line.text)
+            let entry: NSMenuItem
+            switch line.opens {
+            case .notifications: entry = action(line.text, #selector(openSettings))
+            case .accessibility: entry = action(line.text, #selector(openAccessibilitySettings))
+            case nil: entry = disabled(line.text)
+            }
             entry.image = Self.statusSymbol(line.tone)
             menu.addItem(entry)
         }
@@ -315,6 +325,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
 
     @objc private func showGuidance() { onShowGuidance() }
     @objc private func openSettings() { onOpenSettings() }
+    @objc private func openAccessibilitySettings() { onOpenAccessibilitySettings() }
     @objc private func openLog() { onOpenLog() }
     @objc private func quit() { Agent.requestTermination() }
 }

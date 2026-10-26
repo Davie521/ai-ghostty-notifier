@@ -12,6 +12,7 @@ import NotifyCore
 //   ghostty-notify-agent --worker                    captured context on stdin
 //   ghostty-notify-agent --resident-pid              read-only installer preflight
 //   ghostty-notify-agent --test                      one notification via the resident
+//   ghostty-notify-agent --where <tab-id>            where a jump to that tab would go
 
 let environment = ProcessInfo.processInfo.environment
 let arguments = CommandLine.arguments
@@ -85,6 +86,15 @@ if arguments.count == 2, arguments[1] == "--test" {
         _exit(1)
     }
     Task { @MainActor in exit(await SelfTest.run(paths: paths)) }
+    CFRunLoopRun()
+}
+if arguments.count == 3, arguments[1] == "--where" {
+    // Read-only: where a jump to this tab would go. Bounded like --test.
+    DispatchQueue.global().asyncAfter(deadline: .now() + 20) {
+        FileHandle.standardError.write(Data("ghostty-notify: --where timed out\n".utf8))
+        _exit(1)
+    }
+    Task { @MainActor in exit(await Whereabouts.run(tabID: arguments[2])) }
     CFRunLoopRun()
 }
 if arguments.dropFirst().contains(where: { $0.hasPrefix("--") }) {

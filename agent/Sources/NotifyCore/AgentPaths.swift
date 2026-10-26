@@ -73,6 +73,9 @@ public struct AgentPaths: Equatable, Sendable {
     /// that restarts at every login does not put a dialog in the user's face
     /// again and again.
     public var styleHintShownFile: String { root + "/style-hint-shown" }
+    /// Written once macOS has been asked for the Accessibility permission,
+    /// so the ask is made once per install, not once per launch.
+    public var accessibilityAskedFile: String { root + "/accessibility-asked" }
     public var log: String { root + "/agent.log" }
     /// The default locations of everything this program keeps, for both CLIs.
     /// Only the defaults: a directory chosen through a setting is the user's.

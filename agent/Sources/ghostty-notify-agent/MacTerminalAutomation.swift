@@ -62,10 +62,14 @@ struct MacTerminalAutomation: TerminalAutomationProviding {
     }
     func focus(tabID: String?) async {
         if let tabID {
-            let selected = await withCheckedContinuation { continuation in
-                Ghostty.focus(tabID: tabID) { continuation.resume(returning: $0) }
+            // The same jump as a notification click, trip to the window's
+            // Space included, so a jump sent from a shell checks what a
+            // click does.
+            let report = await TabJumpRunner.run(tabID: tabID)
+            if let paths = try? AgentPaths(env: ProcessInfo.processInfo.environment) {
+                AgentLog.append(TabJumpRunner.describe(report), to: paths.log)
             }
-            if selected == tabID { return }
+            if case .verified = report.outcome { return }
         }
         await MainActor.run {
             NSApplication.shared.activate(ignoringOtherApps: true)

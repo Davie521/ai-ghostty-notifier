@@ -292,6 +292,9 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     private static let watchedGraceSeconds: Double = 3
     private static let systemSettingsBundleID = "com.apple.systempreferences"
+    /// Set by a jump that needed to travel to another Space and was not
+    /// allowed to. Cleared when the menu finds the permission granted.
+    private var accessibilityMissing = false
     /// How long after posting a notification is left out of reconciliation.
     private static let deliverySettleSeconds: Double = 5
 
@@ -573,59 +576,42 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Do not issue a second app-wide activation after success: it can put
         // the previously active window back in front of the verified target.
         //
-        // The selection the focus command reports can be read before Ghostty
-        // has finished moving it (issue #40), so a mismatch gets a settle
-        // re-read and, if the selection really has not moved, one more focus.
-        // TabJump bounds all of it; this only carries out its steps.
-        let finish: @MainActor (TabJump.Outcome) -> Void = { [weak self] outcome in
-            self?.finishJump(tabID: tabID, outcome: outcome)
+        // What the jump does, and in what order, is TabJump's: the lookup and
+        // the trip to the window's Space that keep a window where it is
+        // (issue #63), and the settle re-read and second focus for a read that
+        // raced the focus (issue #40). The runner only asks and sends; this
+        // only acts on the outcome.
+        Task { @MainActor [weak self] in
+            let report = await TabJumpRunner.run(tabID: tabID)
+            self?.finishJump(report)
         }
-        func carryOut(_ plan: TabJump, _ step: TabJump.Step) {
-            switch step {
-            case .focus:
-                Ghostty.focus(tabID: tabID) { selected in
-                    var next = plan
-                    let step = next.observe(focusResult: selected)
-                    carryOut(next, step)
-                }
-            case .verify(let delay):
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                    Ghostty.selectedTabID { selected in
-                        var next = plan
-                        let step = next.observe(selected: selected)
-                        carryOut(next, step)
-                    }
-                }
-            case .stop(let outcome):
-                finish(outcome)
-            }
-        }
-        let plan = TabJump(requested: tabID)
-        carryOut(plan, plan.start)
     }
 
-    private func finishJump(tabID: String, outcome: TabJump.Outcome) {
-        switch outcome {
-        case .notFound:
+    private func finishJump(_ report: TabJumpRunner.Report) {
+        switch report.outcome {
+        case .notFound, .unverified:
+            // Front the app at least: the user is one keystroke away instead
+            // of nowhere, as with a tab that was never resolved.
             Ghostty.activate()
-            log("jump: \(tabID) not found, activated Ghostty only")
-        case .verified(reads: 0, focusAttempts: 1):
-            log("jump: focused \(tabID), verified selected")
-        case .verified(let reads, let attempts):
-            // The first read raced the focus. Logged apart from the plain
-            // case so the log keeps counting how often that happens.
-            log(
-                "jump: focused \(tabID), verified selected after \(reads) re-read(s), "
-                    + "\(attempts) focus attempt(s)")
-        case .unverified(let selected, let attempts):
-            Ghostty.activate()
-            // Focusing reported success but the selection never followed.
-            // Worth its own line: it is the difference between "we asked"
-            // and "it happened", and the two look identical from outside.
-            log(
-                "jump: asked for \(tabID) but \(selected ?? "<none>") is selected "
-                    + "after \(attempts) focus attempt(s)")
+        case .verified:
+            break
         }
+        log(TabJumpRunner.describe(report))
+        if report.accessibilityMissing { noteAccessibilityMissing() }
+    }
+
+    /// A jump just found Ghostty's window on another Space and could not go
+    /// there. The menu says so until the permission is granted, and macOS is
+    /// asked once — its own dialog leads to the setting — so that the first
+    /// such click explains itself and later ones do not nag.
+    private func noteAccessibilityMissing() {
+        accessibilityMissing = true
+        menuBar?.refresh()
+        let marker = paths.accessibilityAskedFile
+        guard !FileManager.default.fileExists(atPath: marker) else { return }
+        try? "asked\n".write(toFile: marker, atomically: true, encoding: .utf8)
+        log("asking for the Accessibility permission (jumps to another Space need it)")
+        WindowServer.askForTrust()
     }
 
     /// Reads the tab id ghostty-tab-save.sh wrote for a session.
@@ -798,11 +784,16 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                     return AgentStatus(
                         permission: .unknown, alertStyle: "", waiting: [], trackedSessions: 0)
                 }
+                if self.accessibilityMissing, WindowServer.isTrusted {
+                    self.accessibilityMissing = false
+                    self.log("the Accessibility permission is now granted")
+                }
                 return AgentStatus(
                     permission: self.permission,
                     alertStyle: self.alertStyle,
                     waiting: self.state.waitingSessions(),
-                    trackedSessions: self.state.sessions.count
+                    trackedSessions: self.state.sessions.count,
+                    accessibilityMissing: self.accessibilityMissing
                 )
             },
             onJump: { [weak self] sessionID in
@@ -824,6 +815,11 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                 guard let url = URL(string: Agent.notificationSettingsURL) else { return }
                 NSWorkspace.shared.open(url)
                 self?.log("menu: opened notification settings")
+            },
+            onOpenAccessibilitySettings: { [weak self] in
+                guard let url = URL(string: WindowServer.accessibilitySettingsURL) else { return }
+                NSWorkspace.shared.open(url)
+                self?.log("menu: opened accessibility settings")
             },
             onOpenLog: { [weak self] in
                 guard let self else { return }

@@ -43,6 +43,81 @@ enum Ghostty {
         }
     }
 
+    /// Ghostty's process, if it is running.
+    static var processID: pid_t? {
+        NSRunningApplication.runningApplications(
+            withBundleIdentifier: AgentConstants.ghosttyBundleID
+        )
+        .first?.processIdentifier
+    }
+
+    /// Which window holds `tabID`, and every window with its title, front to
+    /// back — one read-only Apple Event. The listing is what lets the window
+    /// be found again among the window server's windows: Ghostty lists its
+    /// windows in AppKit's front-to-back order, and titles its windows after
+    /// the tab they show.
+    static func locate(tabID: String) async -> (TabJump.Probe, [ScriptedWindow]) {
+        guard isPlausibleTabID(tabID) else { return (.unknown, []) }
+        let literal = appleScriptLiteral(tabID)
+        // Record and unit separators between the fields: no title has those.
+        let answer: String? = await withCheckedContinuation { continuation in
+            run(
+                """
+                tell application "Ghostty"
+                    set rs to string id 30
+                    set us to string id 31
+                    set found to ""
+                    set listing to ""
+                    repeat with w in every window
+                        try
+                            set wid to (id of w as text)
+                            set listing to listing & wid & us & (name of w as text) & rs
+                            if found is "" then
+                                repeat with t in every tab of w
+                                    try
+                                        if (id of t as text) is \(literal) then set found to wid
+                                    end try
+                                end repeat
+                            end if
+                        end try
+                    end repeat
+                    return found & rs & listing
+                end tell
+                """, label: "locate"
+            ) { continuation.resume(returning: $0) }
+        }
+        return locateAnswer(answer)
+    }
+
+    /// The locate script's reply. Nil is a failed script, which is "don't
+    /// know", never "not there": the script says so with an empty first field.
+    static func locateAnswer(_ answer: String?) -> (TabJump.Probe, [ScriptedWindow]) {
+        guard let answer else { return (.unknown, []) }
+        var records = answer.split(separator: "\u{1E}", omittingEmptySubsequences: false)
+        guard !records.isEmpty else { return (.unknown, []) }
+        let found = String(records.removeFirst())
+        let windows = records.compactMap { record -> ScriptedWindow? in
+            let fields = record.split(
+                separator: "\u{1F}", maxSplits: 1, omittingEmptySubsequences: false)
+            guard let id = fields.first, !id.isEmpty else { return nil }
+            return ScriptedWindow(id: String(id), title: fields.count > 1 ? String(fields[1]) : "")
+        }
+        guard !found.isEmpty else { return (.notFound, windows) }
+        return (.found(window: found), windows)
+    }
+
+    static func focus(tabID: String) async -> String? {
+        await withCheckedContinuation { continuation in
+            focus(tabID: tabID) { continuation.resume(returning: $0) }
+        }
+    }
+
+    static func selectedTabID() async -> String? {
+        await withCheckedContinuation { continuation in
+            selectedTabID { continuation.resume(returning: $0) }
+        }
+    }
+
     /// Raise the window owning `tabID` and select it.
     ///
     /// Focus the tab's terminal to raise its window too. `activate window`
