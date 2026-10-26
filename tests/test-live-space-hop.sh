@@ -301,12 +301,19 @@ AS
     [[ -n "$HELPER_NUMBER" ]] || fail "could not tell the helper window apart in the window server"
     IFS=, read -r ox oy _ _ <<<"$(display_field "$BG" "$OTHER_DISPLAY" bounds)"
     move_own_window "$HELPER" "$HELPER_NUMBER" "$((ox + 80))" "$((oy + 120))"
-    osascript -e "tell application \"Ghostty\" to focus (focused terminal of (first tab of (first window whose id is \"$HELPER\")))" >/dev/null
-    sleep 0.5
-    KEY_AT=$(osascript -e 'tell application "System Events" to tell (first process whose frontmost is true) to get (name as text) & " " & (item 1 of (position of window 1) as text) & "," & (item 2 of (position of window 1) as text)' 2>/dev/null || true)
-    [[ "$KEY_AT" == "Ghostty $((ox + 80)),$((oy + 120))" ]] && KEY_ELSEWHERE=yes
-    echo "helper window $HELPER on display $OTHER_DISPLAY; key window: ${KEY_AT:-unknown} (elsewhere: $KEY_ELSEWHERE)"
+    echo "helper window $HELPER on display $OTHER_DISPLAY"
 fi
+
+# The frontmost app and the position of its front window, read only.
+key_window() {
+    osascript <<'AS' 2>/dev/null || true
+tell application "System Events"
+    set p to first application process whose frontmost is true
+    set pos to position of window 1 of p
+    return (name of p) & " " & ((item 1 of pos) as text) & "," & ((item 2 of pos) as text)
+end tell
+AS
+}
 
 # Switch that display one Space over, so the window is out of view. With the
 # key window on the other display, this press is itself a check of which
@@ -330,6 +337,20 @@ ORDERED_NUMBERS=$(awk '$1=="ordered" {print $2}' <<<"$LISTING" | tr '\n' ' ')
 SHARED=$(awk -v w="$WIN" '$1=="window" { t=$0; sub(/^window [^ ]+ title=/, "", t); title[$2]=t } END { n=0; for (k in title) if (k != w && title[k] == title[w]) n++; print n }' <<<"$LISTING")
 echo "test window: #$(position "$WIN" "$SCRIPTED_IDS") of $(awk '{print NF}' <<<"$SCRIPTED_IDS") in Ghostty's list, #$(position "$NUMBER" "$ORDERED_NUMBERS") of $(awk '{print NF}' <<<"$ORDERED_NUMBERS") in the window server's; its title is shared by $SHARED other window(s)"
 [[ "$PLACE" == "hidden candidates=$NUMBER"* ]] || fail "expected the window to be placed as hidden with candidate $NUMBER"
+
+# Hand the keyboard focus to the helper, after the Space switch so that the
+# switch cannot hand it to whatever the new Space shows: focus its terminal,
+# then activate Ghostty, whose key window it now is. Both its windows still in
+# view are on the other display, so activating moves no Space.
+if [[ -n "$HELPER" ]]; then
+    osascript -e "tell application \"Ghostty\" to focus (focused terminal of (first tab of (first window whose id is \"$HELPER\")))" >/dev/null
+    open -a Ghostty
+    sleep 0.6
+    KEY_AT=$(key_window)
+    [[ "$KEY_AT" == "Ghostty $((ox + 80)),$((oy + 120))" ]] && KEY_ELSEWHERE=yes
+    echo "key window: ${KEY_AT:-unknown} (on the other display: $KEY_ELSEWHERE)"
+    [[ "$(place_of "$BG")" == hidden* ]] || fail "handing the focus to the helper brought the test window into view"
+fi
 
 # The jump, as a click would make it.
 mkdir -p "$SESSION_DIR"

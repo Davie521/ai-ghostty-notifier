@@ -55,9 +55,13 @@ enum TabJumpRunner {
                 switch await SpaceHopper.travel(to: window) {
                 case .arrived(let trip):
                     let confirmed = confirm(window: plan.window, scripted: scripted)
+                    let retried =
+                        trip.strayRetries > 0
+                        ? " after undoing \(trip.strayRetries) press(es) on another display" : ""
                     route =
                         "travelled \(trip.presses) \(trip.direction == .left ? "left" : "right") on "
-                        + "display \(trip.display.prefix(8)), window \(confirmed ? "in view" : "still out of view")"
+                        + "display \(trip.display.prefix(8))\(retried), window "
+                        + "\(confirmed ? "in view" : "still out of view")"
                     step = plan.observe(hopResult: .arrived(confirmed: confirmed))
                 case .alreadyShowing:
                     route = "window in view"

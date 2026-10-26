@@ -11,8 +11,10 @@ import NotifyCore
 /// The shortcut acts on the display under the pointer — measured: with the
 /// key window on one display and the pointer on the other, the pointer's
 /// display switched — so the pointer is moved there right before every press
-/// and put back after the trip. A user moving the mouse during the trip can
-/// still win that race; a press that switches the wrong display is undone. Every press is checked
+/// and put back after the trip; the press waits until the pointer is seen
+/// there. A press can still land on the other display — once in eight live
+/// runs it did — so a press that switches a display the trip is not for is
+/// undone and tried again, twice at most. Every press is checked
 /// against the topology before the next and the route recomputed, so a
 /// Mission Control that rearranges Spaces by recent use cannot send the trip
 /// the wrong way, and a press that changes nothing ends it.
@@ -22,6 +24,8 @@ enum SpaceHopper {
         let display: String
         let direction: SpaceHop.Direction
         let presses: Int
+        /// Presses that switched the wrong display and were undone.
+        let strayRetries: Int
     }
 
     enum Outcome: Equatable, Sendable {
@@ -44,6 +48,8 @@ enum SpaceHopper {
     /// mode would be stopped by its own deadline mid-trip, with the pointer
     /// still parked on the other display.
     static let maxTripSeconds = 5.0
+    /// Presses that switched the wrong display, undone and tried again.
+    static let maxStrayRetries = 2
 
     static func travel(to window: OrderedWindow) async -> Outcome {
         let deadline = Date().addingTimeInterval(maxTripSeconds)
@@ -63,6 +69,7 @@ enum SpaceHopper {
         defer { if let pointerBefore { WindowServer.movePointer(to: pointerBefore) } }
 
         var presses = 0
+        var strayRetries = 0
         while case .hop(let hop) = route {
             guard Date() < deadline else {
                 return .failed(
@@ -78,9 +85,7 @@ enum SpaceHopper {
                 return .failed("display \(hop.display) is not active")
             }
             let before = topology
-            // Back to back, so the move is the last thing the window server
-            // sees before the key.
-            WindowServer.movePointer(to: CGPoint(x: bounds.midX, y: bounds.midY))
+            await parkPointer(on: bounds)
             WindowServer.press(shortcut)
             presses += 1
             guard let after = await anySpaceChange(from: before) else {
@@ -89,12 +94,18 @@ enum SpaceHopper {
             let strays = after.changedDisplays(since: before).filter { $0 != hop.display }
             if !strays.isEmpty {
                 // The press switched a display the trip was not for. Put it
-                // back before giving up, so a failed trip leaves the user's
-                // desktops as they were.
+                // back, then try again; a trip that gives up leaves the
+                // user's desktops as they were.
                 for stray in strays { await undo(stray, pressed: hop.direction) }
-                return .failed(
-                    "the shortcut switched display \(strays[0].prefix(8)), not \(hop.display.prefix(8))"
-                )
+                guard strayRetries < maxStrayRetries else {
+                    return .failed(
+                        "the shortcut switched display \(strays[0].prefix(8)), not "
+                            + "\(hop.display.prefix(8)), \(strayRetries + 1) times")
+                }
+                strayRetries += 1
+                topology = WindowServer.topology() ?? before
+                route = SpaceRoute.to(space, in: topology)
+                continue
             }
             await sleep(settleAfterPress)
             topology = WindowServer.topology() ?? after
@@ -102,7 +113,10 @@ enum SpaceHopper {
         }
         guard route == .showing else { return .failed("Space \(space) left its display") }
         await sleep(settleOnArrival)
-        return .arrived(Trip(display: first.display, direction: first.direction, presses: presses))
+        return .arrived(
+            Trip(
+                display: first.display, direction: first.direction, presses: presses,
+                strayRetries: strayRetries))
     }
 
     /// The topology once some display shows another Space than in `before`,
@@ -117,14 +131,28 @@ enum SpaceHopper {
         return nil
     }
 
+    /// Moves the pointer to the middle of `bounds` and waits, briefly, until
+    /// it is seen there — the shortcut goes to the display the window server
+    /// thinks the pointer is on, and a key sent on the heels of the move has
+    /// gone to the other display.
+    private static func parkPointer(on bounds: CGRect) async {
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        for _ in 0..<2 {
+            WindowServer.movePointer(to: center)
+            let until = Date().addingTimeInterval(0.15)
+            while Date() < until {
+                if let pointer = WindowServer.pointer, bounds.contains(pointer) { return }
+                await sleep(0.01)
+            }
+        }
+    }
+
     /// One press the other way, with the pointer on `display`.
     private static func undo(_ display: String, pressed direction: SpaceHop.Direction) async {
         let back: SpaceHop.Direction = direction == .left ? .right : .left
         guard let shortcut = WindowServer.shortcut(back), let before = WindowServer.topology()
         else { return }
-        if let bounds = WindowServer.displayBounds(display) {
-            WindowServer.movePointer(to: CGPoint(x: bounds.midX, y: bounds.midY))
-        }
+        if let bounds = WindowServer.displayBounds(display) { await parkPointer(on: bounds) }
         WindowServer.press(shortcut)
         _ = await anySpaceChange(from: before)
         await sleep(settleAfterPress)

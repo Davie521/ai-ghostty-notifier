@@ -241,9 +241,10 @@ enum WindowServer {
 
     static var pointer: CGPoint? { CGEvent(source: nil)?.location }
 
-    /// Moves the pointer the way a mouse would, so macOS also takes the
-    /// display under it as the active one.
+    /// Moves the pointer: a warp, which takes effect at once, then the event
+    /// a mouse would send, so everything that follows the pointer sees it.
     static func movePointer(to point: CGPoint) {
+        CGWarpMouseCursorPosition(point)
         CGEvent(
             mouseEventSource: CGEventSource(stateID: .hidSystemState), mouseType: .mouseMoved,
             mouseCursorPosition: point, mouseButton: .left

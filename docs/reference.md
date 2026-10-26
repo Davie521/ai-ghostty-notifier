@@ -304,7 +304,7 @@ What the notification is able to say, and how it finds the tab:
   and presses your "Move left/right a space" shortcut on that display, with the
   pointer moved there for the moment, until that Space shows; only then does it
   focus the tab. Every press is checked, and a press that switched another
-  display is undone. This needs the Accessibility permission and the shortcut
+  display is undone and tried again, twice at most. This needs the Accessibility permission and the shortcut
   switched on under **System Settings → Keyboard → Keyboard Shortcuts →
   Mission Control**; without either, the jump focuses as before.
   `ghostty-notify-agent --where <tab-id>` prints what a jump to that tab would
@@ -382,9 +382,10 @@ without removing any of the macOS-specific integration.
   Automation failures, not an unconditional guarantee.
 - **A click brings the window to your Space instead of taking you there:**
   allow Accessibility for the app (the menu bar item links to it) and keep
-  "Move left/right a space" switched on. Moving the mouse while the Space
-  switches can send a press to the other display; that press is undone and the
-  jump falls back to focusing. The log's `jump:` line says which way it went.
+  "Move left/right a space" switched on. A press can land on the other display,
+  for instance when the mouse moves at that moment; it is undone and tried
+  again, and after the third such press the jump falls back to focusing. The
+  log's `jump:` line says which way it went.
 - **Old notifications after an upgrade:** dismiss stale pre-upgrade notices and
   test a freshly posted one; macOS may no longer route the old sender identity.
 - macOS/Ghostty only. Terminal CLI ownership is required for Codex notifications,
