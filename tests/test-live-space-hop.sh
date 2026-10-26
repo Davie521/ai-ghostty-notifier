@@ -14,12 +14,21 @@
 # whenever Ghostty does, which is what lets this run without the resident app
 # being granted it. The resident needs its own grant; that part a click tests.
 #
-# Usage: bash tests/test-live-space-hop.sh [path/to/ghostty-notify-agent]
+# Usage: bash tests/test-live-space-hop.sh [--interrupt] [path/to/ghostty-notify-agent]
+#
+# --interrupt checks quitting mid-trip instead: the window is parked two
+# Spaces away, and one Space into the trip the jump is sent SIGTERM, as launchd
+# stops a process. It must walk back to where the trip began, put the pointer
+# back, focus nothing and exit within its grace. Exit 3 means the trip arrived
+# before the signal, so there was nothing to walk back: run it again.
+#
 # The default binary is the installed app's. Needs Ghostty with
 # `macos-applescript` on, Automation consent for this shell, and the default
 # Control-Left/Right shortcuts for moving between Spaces.
 set -euo pipefail
 
+INTERRUPT=no
+if [[ "${1:-}" == --interrupt ]]; then INTERRUPT=yes; shift; fi
 APP="${GHOSTTY_NOTIFY_NATIVE_APP:-$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app}"
 BIN="${1:-$APP/Contents/MacOS/ghostty-notify-agent}"
 [[ -x "$BIN" ]] || { echo "agent binary missing: $BIN" >&2; exit 2; }
@@ -82,6 +91,20 @@ const e = \$.CGEventCreateKeyboardEvent(null, 59, false);
 ''" >/dev/null
 }
 modifier_flags() { osascript -l JavaScript -e 'ObjC.import("Cocoa"); $.NSEvent.modifierFlags'; }
+# Read before anything else sends a key: a key up that carried Control would
+# have left it held, and every click would arrive as a Control-click.
+check_modifiers() {
+    local flags
+    flags=$(modifier_flags)
+    echo "modifier flags after the jump: $flags (Control held before the run: $START_CONTROL)"
+    [[ "$flags" =~ ^[0-9]+$ ]] || fail "could not read the modifier flags"
+    if [[ "$START_CONTROL" == no ]]; then
+        (( (flags & 0x40000) == 0 )) || fail "Control is left held after the jump"
+    else
+        echo "Control was already held when the run began; not checked"
+    fi
+}
+clock_now() { perl -MTime::HiRes=time -e 'printf "%.3f\n", time'; }
 frontmost_app() { osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true'; }
 
 # `<display> <space>` for every display.
@@ -339,15 +362,30 @@ end tell
 AS
 }
 
-# Switch that display one Space over, so the window is out of view. With the
-# key window on the other display, this press is itself a check of which
-# display the shortcut acts on.
-if [[ "$HOME_SPACES" == *",$HOME_SPACE" ]]; then AWAY_KEY=123; else AWAY_KEY=124; fi
-warp "$((bx + bw / 2))" "$((by + bh / 2))"; sleep 0.3
-press "$AWAY_KEY"
-for _ in $(seq 1 20); do sleep 0.2; [[ "$(place_of "$BG")" == hidden* ]] && break; done
+# Switch that display away, so the window is out of view: one Space over, or
+# two for --interrupt, which needs a trip of two steps to stop half-way. With
+# the key window on the other display, these presses are themselves a check of
+# which display the shortcut acts on.
+IFS=, read -r -a SPACE_ROW <<<"$HOME_SPACES"
+HOME_INDEX=-1
+for i in "${!SPACE_ROW[@]}"; do [[ "${SPACE_ROW[$i]}" == "$HOME_SPACE" ]] && HOME_INDEX=$i; done
+AWAY_STEPS=1
+[[ "$INTERRUPT" == yes ]] && AWAY_STEPS=2
+if (( HOME_INDEX >= 0 && HOME_INDEX + AWAY_STEPS < ${#SPACE_ROW[@]} )); then AWAY_KEY=124
+elif (( HOME_INDEX - AWAY_STEPS >= 0 )); then AWAY_KEY=123
+else fail "display $DISPLAY_ID needs $((AWAY_STEPS + 1)) Spaces in a row for this check"
+fi
+for _ in $(seq 1 "$AWAY_STEPS"); do
+    was=$(display_field "$BG" "$DISPLAY_ID" current)
+    warp "$((bx + bw / 2))" "$((by + bh / 2))"; sleep 0.2
+    press "$AWAY_KEY"
+    now=$was
+    for _ in $(seq 1 20); do sleep 0.2; now=$(display_field "$BG" "$DISPLAY_ID" current); [[ "$now" != "$was" ]] && break; done
+    [[ "$now" != "$was" ]] || fail "Control-arrow did not switch display $DISPLAY_ID's Space (is the shortcut the default?)"
+done
+for _ in $(seq 1 10); do [[ "$(place_of "$BG")" == hidden* ]] && break; sleep 0.2; done
 AWAY_SPACE=$(display_field "$BG" "$DISPLAY_ID" current)
-[[ "$AWAY_SPACE" != "$HOME_SPACE" ]] || fail "Control-arrow did not switch display $DISPLAY_ID's Space (is the shortcut the default?)"
+[[ "$AWAY_SPACE" != "$HOME_SPACE" ]] || fail "display $DISPLAY_ID is back on Space $HOME_SPACE"
 read -r px py <<<"$POINTER"; warp "$px" "$py"
 PLACE=$(place_of "$BG")
 echo "display now on Space $AWAY_SPACE; the agent places the test window as: $PLACE"
@@ -396,6 +434,65 @@ LOG_LINES=$(wc -l <"$LOG" 2>/dev/null || echo 0)
 OTHER_NUMBERS=$(where "$BG" | awk -v n="$NUMBER" '$1=="ordered" && $2!=n {print $2}' | tr '\n' ' ')
 echo "frontmost before the jump: $(frontmost_app); Spaces: $(current_spaces | tr '\n' ' ')"
 echo "jumping to ${BG}…"
+if [[ "$INTERRUPT" == yes ]]; then
+    "$BIN" --focus "$SESSION" &
+    JUMP_PID=$!
+    # Watch the display without the agent's help, fast enough to see the first
+    # of the trip's two steps: the window server's own list, read in a loop.
+    FIRST_STEP=$(osascript -l JavaScript <<JXA
+ObjC.import("CoreGraphics");
+ObjC.bindFunction("CGSMainConnectionID", ["int", []]);
+ObjC.bindFunction("CGSCopyManagedDisplaySpaces", ["id", ["int"]]);
+function current() {
+    const displays = ObjC.deepUnwrap(\$.CGSCopyManagedDisplaySpaces(\$.CGSMainConnectionID())) || [];
+    for (const d of displays) if (d["Display Identifier"] === "$DISPLAY_ID") return String(d["Current Space"].id64);
+    return "";
+}
+const started = Date.now();
+let seen = "";
+while (Date.now() - started < 8000) {
+    const now = current();
+    if (now !== "" && now !== "$AWAY_SPACE") { seen = now; break; }
+    delay(0.02);
+}
+seen
+JXA
+)
+    SIGNALLED=$(clock_now)
+    kill -TERM "$JUMP_PID" 2>/dev/null || true
+    JUMP_STATUS=0
+    wait "$JUMP_PID" || JUMP_STATUS=$?
+    ENDED=$(clock_now)
+    ELAPSED=$(awk -v a="$SIGNALLED" -v b="$ENDED" 'BEGIN { printf "%.2f", b - a }')
+    [[ -n "$FIRST_STEP" ]] || fail "the trip did not begin within 8 s"
+    echo "first step reached Space $FIRST_STEP; SIGTERM sent; the agent exited $JUMP_STATUS after ${ELAPSED}s"
+    sleep 0.3
+    SHOWING=$(display_field "$BG" "$DISPLAY_ID" current)
+    WINDOW_SPACE=$(space_of_window "$BG" "$NUMBER")
+    SELECTED=$(osascript -e "tell application \"Ghostty\" to get selected of (first tab of (first window whose id is \"$WIN\") whose id is \"$BG\")")
+    POINTER_NOW=$(pointer)
+    JUMP_LINE=$(tail -n +"$((LOG_LINES + 1))" "$LOG" 2>/dev/null | grep 'jump:' | tail -1 || true)
+    echo "display shows: $SHOWING (trip began on $AWAY_SPACE, window on $HOME_SPACE); window Space: $WINDOW_SPACE; tab selected: $SELECTED; pointer: $POINTER_NOW (was $POINTER)"
+    echo "log: ${JUMP_LINE:-<no jump line>}"
+    check_modifiers
+    OTHER_DISPLAYS_NOW=$(current_spaces | awk -v id="$DISPLAY_ID" '$1!=id')
+    OTHER_DISPLAYS_START=$(awk -v id="$DISPLAY_ID" '$1!=id' <<<"$START_SPACES")
+    [[ "$OTHER_DISPLAYS_NOW" == "$OTHER_DISPLAYS_START" ]] || fail "another display switched Space: $OTHER_DISPLAYS_START -> $OTHER_DISPLAYS_NOW"
+    [[ "$JUMP_STATUS" == 0 ]] || fail "the agent exited $JUMP_STATUS"
+    awk -v e="$ELAPSED" 'BEGIN { exit !(e < 8.5) }' || fail "the agent took ${ELAPSED}s to end after SIGTERM"
+    if [[ "$SHOWING" == "$HOME_SPACE" ]]; then
+        echo "INCONCLUSIVE: the trip arrived before the signal, so there was nothing to walk back; run it again"
+        exit 3
+    fi
+    [[ "$SHOWING" == "$AWAY_SPACE" ]] || fail "display $DISPLAY_ID was left on Space $SHOWING, between where the trip began ($AWAY_SPACE) and the window's Space ($HOME_SPACE)"
+    [[ "$WINDOW_SPACE" == "$HOME_SPACE" ]] || fail "the window was pulled to Space $WINDOW_SPACE"
+    [[ "$SELECTED" == false ]] || fail "the background tab was selected: the jump went on to focus"
+    awk -v a="$POINTER" -v b="$POINTER_NOW" 'BEGIN { split(a, p, " "); split(b, q, " "); dx = p[1] - q[1]; dy = p[2] - q[2]; exit !(dx * dx + dy * dy <= 9) }' \
+        || fail "the pointer was left at $POINTER_NOW, not put back at $POINTER"
+    [[ "$JUMP_LINE" == *"gave up on"*"stopping after"*"went back"* ]] || fail "the log does not say the jump gave up and walked back"
+    echo "PASS: SIGTERM one Space into the trip: walked back to Space $AWAY_SPACE, pointer back, window left where it was, nothing focused (key window elsewhere: $KEY_ELSEWHERE)"
+    exit 0
+fi
 "$BIN" --focus "$SESSION"
 sleep 0.3
 
@@ -412,16 +509,7 @@ SELECTED=$(osascript -e "tell application \"Ghostty\" to get selected of (first 
 JUMP_LINE=$(tail -n +"$((LOG_LINES + 1))" "$LOG" 2>/dev/null | grep 'jump:' | tail -1 || true)
 echo "window Space: $HOME_SPACE -> $AFTER_SPACE; display shows: $SHOWING; tab selected: $SELECTED; frontmost: $(frontmost_app)"
 echo "log: ${JUMP_LINE:-<no jump line>}"
-# Read before anything else sends a key: a key up that carried Control would
-# have left it held, and every click would arrive as a Control-click.
-MODIFIERS=$(modifier_flags)
-echo "modifier flags after the jump: $MODIFIERS (Control held before the run: $START_CONTROL)"
-[[ "$MODIFIERS" =~ ^[0-9]+$ ]] || fail "could not read the modifier flags"
-if [[ "$START_CONTROL" == no ]]; then
-    (( (MODIFIERS & 0x40000) == 0 )) || fail "Control is left held after the jump"
-else
-    echo "Control was already held when the run began; not checked"
-fi
+check_modifiers
 OTHER_DISPLAYS_NOW=$(current_spaces | awk -v id="$DISPLAY_ID" '$1!=id')
 OTHER_DISPLAYS_START=$(awk -v id="$DISPLAY_ID" '$1!=id' <<<"$START_SPACES")
 [[ "$OTHER_DISPLAYS_NOW" == "$OTHER_DISPLAYS_START" ]] || fail "another display switched Space: $OTHER_DISPLAYS_START -> $OTHER_DISPLAYS_NOW"

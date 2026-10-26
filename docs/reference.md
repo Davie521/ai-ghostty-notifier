@@ -304,7 +304,10 @@ What the notification is able to say, and how it finds the tab:
   and presses your "Move left/right a space" shortcut on that display, with the
   pointer moved there for the moment, until that Space shows; only then does it
   focus the tab. Every press is checked, and a press that switched another
-  display is undone and tried again, twice at most. This needs the Accessibility permission and the shortcut
+  display is undone and tried again, twice at most. A trip that cannot finish
+  walks back to the Space it started from. Quitting the app during a jump, or
+  stopping the `--focus` mode with SIGTERM, stops it the same way: the trip
+  walks back, the pointer goes back where it was, and nothing is focused. This needs the Accessibility permission and the shortcut
   switched on under **System Settings → Keyboard → Keyboard Shortcuts →
   Mission Control**; without either, the jump focuses as before.
   `ghostty-notify-agent --where <tab-id>` prints what a jump to that tab would
@@ -474,7 +477,12 @@ on the window's Space, no other display moved, and the background tab is
 selected; then it closes its window and puts every display back. Keep your
 hands off the mouse while it runs, because the shortcut acts on the display
 under the pointer. It tests the installed app unless given a build's
-executable, which needs the `--where` mode this check reads.
+executable, which needs the `--where` mode this check reads. With
+`--interrupt` it checks quitting mid-trip instead: the window is parked two
+Spaces away, and one Space into the trip the jump is sent SIGTERM. It passes
+when the display is back where the trip began, the pointer is back, the
+window has not moved, nothing was focused, and the process ended within its
+grace. Exit 3 means the trip arrived before the signal; run it again.
 
 The tab is the fixture. Each check writes markers into its title, expects every
 lookup to find them, and leaves the tab with Ghostty's default title, whatever
