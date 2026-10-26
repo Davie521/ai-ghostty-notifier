@@ -299,7 +299,7 @@ AS
         case " $BEFORE_HELPER " in *" $n "*) ;; *) HELPER_NUMBER=$n ;; esac
     done
     [[ -n "$HELPER_NUMBER" ]] || fail "could not tell the helper window apart in the window server"
-    IFS=, read -r ox oy _ _ <<<"$(display_field "$BG" "$OTHER_DISPLAY" bounds)"
+    IFS=, read -r ox oy ow oh <<<"$(display_field "$BG" "$OTHER_DISPLAY" bounds)"
     move_own_window "$HELPER" "$HELPER_NUMBER" "$((ox + 80))" "$((oy + 120))"
     echo "helper window $HELPER on display $OTHER_DISPLAY"
 fi
@@ -347,7 +347,15 @@ if [[ -n "$HELPER" ]]; then
     open -a Ghostty
     sleep 0.6
     KEY_AT=$(key_window)
-    [[ "$KEY_AT" == "Ghostty $((ox + 80)),$((oy + 120))" ]] && KEY_ELSEWHERE=yes
+    # Ghostty in front, its front window anywhere on the other display: the
+    # name comes back in lower case, and the window need not sit exactly
+    # where it was put.
+    read -r key_app key_position <<<"$KEY_AT"
+    IFS=, read -r kx ky <<<"$key_position"
+    if [[ "$(tr '[:upper:]' '[:lower:]' <<<"$key_app")" == ghostty && "$kx" =~ ^-?[0-9]+$ && "$ky" =~ ^-?[0-9]+$ ]] \
+        && (( kx >= ox && kx < ox + ow && ky >= oy && ky < oy + oh )); then
+        KEY_ELSEWHERE=yes
+    fi
     echo "key window: ${KEY_AT:-unknown} (on the other display: $KEY_ELSEWHERE)"
     [[ "$(place_of "$BG")" == hidden* ]] || fail "handing the focus to the helper brought the test window into view"
 fi
