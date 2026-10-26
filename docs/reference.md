@@ -464,8 +464,11 @@ A fourth, `bash tests/test-live-space-hop.sh [executable]`, is the regression
 for #63. It needs a display with at least two Spaces whose current Space has
 none of your Ghostty windows, Accessibility for Ghostty (the script's shell
 inherits it), and the default Control-arrow shortcuts. It opens a two-tab
-window of its own, parks it on that display, switches the display one Space
-away, and runs the jump through `--focus`. It passes when the display is back
+window of its own and parks it on that display. With a second display it also
+opens a one-tab window there and gives it the keyboard focus, so the check
+tells the display under the pointer from the display with the key window.
+Then it switches the first display one Space away and runs the jump through
+`--focus`. It passes when the display is back
 on the window's Space, no other display moved, and the background tab is
 selected; then it closes its window and puts every display back. Keep your
 hands off the mouse while it runs, because the shortcut acts on the display
