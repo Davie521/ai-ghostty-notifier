@@ -323,9 +323,9 @@ What the notification is able to say, and how it finds the tab:
   seconds after its click or command does nothing at all: by then the user may
   be elsewhere, and even a plain focus could pull a window onto a Space the
   other jump is only passing through. This needs the Accessibility
-  permission and the shortcut
-  switched on under **System Settings → Keyboard → Keyboard Shortcuts →
-  Mission Control**; without either, the jump focuses as before.
+  permission and both shortcuts switched on under **System Settings → Keyboard
+  → Keyboard Shortcuts → Mission Control**, one to go and the other to come
+  back; without them, the jump focuses as before.
   `ghostty-notify-agent --where <tab-id>` prints what a jump to that tab would
   find, and changes nothing.
   Switching tabs inside Ghostty activates no app, so while Ghostty is in front

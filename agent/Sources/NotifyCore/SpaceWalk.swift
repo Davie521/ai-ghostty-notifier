@@ -6,6 +6,8 @@ import Foundation
 public protocol SpaceWalkDriver {
     /// Each display's Spaces and the one it shows; nil when unanswered.
     func topology() -> SpaceTopology?
+    /// Whether the "move a space" shortcut towards `direction` is switched on.
+    func hasShortcut(_ direction: SpaceHop.Direction) -> Bool
     /// Presses the "move a space" shortcut towards `direction` with the
     /// pointer on `display`. False when there is nothing to press: the
     /// shortcut is switched off, or the display is gone.
@@ -113,6 +115,11 @@ public enum SpaceWalk {
         }
         guard let start = topology.current(on: first.display) else {
             return .failed("display \(first.display.prefix(8)) shows no Space")
+        }
+        // A trip needs both: one shortcut to go, the other to come back, or to
+        // undo a press that landed on another display.
+        guard driver.hasShortcut(.left), driver.hasShortcut(.right) else {
+            return .failed("a move-a-space shortcut is switched off")
         }
         switch await walk(to: space, deadline: deadline, leg: .onward, driver: driver) {
         case .arrived(let presses, let strayRetries):

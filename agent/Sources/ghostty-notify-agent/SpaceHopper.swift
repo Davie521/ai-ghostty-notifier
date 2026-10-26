@@ -117,6 +117,10 @@ enum SpaceHopper {
 
         func topology() -> SpaceTopology? { WindowServer.topology() }
 
+        func hasShortcut(_ direction: SpaceHop.Direction) -> Bool {
+            WindowServer.shortcut(direction) != nil
+        }
+
         func press(_ direction: SpaceHop.Direction, on display: String) async -> Bool {
             guard let shortcut = WindowServer.shortcut(direction),
                 let bounds = WindowServer.displayBounds(display)

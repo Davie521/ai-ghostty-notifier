@@ -22,6 +22,8 @@ final class FakeSpaces: SpaceWalkDriver {
     /// from the right, wherever the trip happened to stop.
     var leftEffects: [Effect] = []
     var shortcutOn = true
+    /// Shortcuts switched off one direction at a time.
+    var switchedOff: Set<SpaceHop.Direction> = []
     var clock = Date(timeIntervalSince1970: 1_000)
     let pressSeconds = 0.3
     /// The app quitting, or the work cancelled.
@@ -42,8 +44,12 @@ final class FakeSpaces: SpaceWalkDriver {
 
     func topology() -> SpaceTopology? { SpaceTopology(displays: displays) }
 
+    func hasShortcut(_ direction: SpaceHop.Direction) -> Bool {
+        shortcutOn && !switchedOff.contains(direction)
+    }
+
     func press(_ direction: SpaceHop.Direction, on display: String) async -> Bool {
-        guard shortcutOn else { return false }
+        guard hasShortcut(direction) else { return false }
         presses.append("\(direction == .left ? "left" : "right") \(display)")
         clock += pressSeconds
         let effect: Effect
@@ -256,9 +262,33 @@ final class FakeSpaces: SpaceWalkDriver {
         let fake = spaces()
         fake.shortcutOn = false
         let outcome = await SpaceWalk.travel(to: 3, deadline: plenty(fake), driver: fake)
-        #expect(
-            outcome == .failed("the move-a-space shortcut is switched off, or the display is gone"))
+        #expect(outcome == .failed("a move-a-space shortcut is switched off"))
+        #expect(fake.presses.isEmpty)
         #expect(fake.current("A") == 1)
+    }
+
+    /// The shortcut there is on, the one back is not: a trip that had to turn
+    /// back, or undo a press on the other display, could not, so none starts.
+    @Test func aTripNeedsTheShortcutBackAsWellAsTheOneThere() async {
+        for off in [SpaceHop.Direction.left, .right] {
+            let fake = spaces()
+            fake.switchedOff = [off]
+            let outcome = await SpaceWalk.travel(to: 3, deadline: plenty(fake), driver: fake)
+            #expect(outcome == .failed("a move-a-space shortcut is switched off"))
+            #expect(fake.presses.isEmpty)
+        }
+    }
+
+    /// A press with nothing to press — the display went away — ends the trip.
+    @Test func aPressWithNothingToPressStopsTheTrip() async {
+        let fake = spaces()
+        fake.afterPress = { fake, count in if count == 1 { fake.shortcutOn = false } }
+        let outcome = await SpaceWalk.travel(to: 6, deadline: plenty(fake), driver: fake)
+        guard case .stranded(let why) = outcome else {
+            Issue.record("expected a stranded trip, got \(outcome)")
+            return
+        }
+        #expect(why.hasPrefix("the move-a-space shortcut is switched off, or the display is gone"))
     }
 
     /// On the way back, close to the end — a signal brought it forward — a
