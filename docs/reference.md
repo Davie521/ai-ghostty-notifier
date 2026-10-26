@@ -125,7 +125,8 @@ their own notification authorization.
 
 If you keep Ghostty windows on more than one Space, also allow
 **Accessibility** when macOS asks. It asks the first time a click finds the
-session's window on a Space you are not looking at: going there takes a press
+session's window on a Space you are not looking at, or cannot rule that out
+without the permission: going there takes a press
 of your own "Move left/right a space" shortcut, and macOS lets an app send that
 only with this permission. Without it the click still selects the tab but
 brings its window to the Space you are on, and the menu bar item says what is

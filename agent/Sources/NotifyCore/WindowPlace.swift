@@ -81,6 +81,18 @@ public enum WindowPlace: Equatable, Sendable {
     /// The listing has no such window.
     case unknown
 
+    /// Whether the window may be out of view: placed there, or lists that do
+    /// not pair, which only happens while one of Ghostty's windows is out of
+    /// view. Without Accessibility that is all a jump learns — a minimized
+    /// window alone keeps the lists from pairing — and it is enough to ask
+    /// for the permission that would tell, and travel.
+    public var mayBeOutOfView: Bool {
+        switch self {
+        case .hidden, .unsettled: return true
+        case .showing, .unknown: return false
+        }
+    }
+
     /// Ghostty names its windows by their own stable ids, which nothing
     /// outside Ghostty can see; the window server knows window numbers and
     /// Spaces but, without the Screen Recording permission, no titles. The

@@ -62,12 +62,12 @@ enum TabJumpRunner {
                         route = "window lists did not pair, read \(plan.rereads + 1) time(s)"
                     }
                     step = plan.observe(place: place)
-                case .untrusted(let targetHidden):
+                case .untrusted(let mayBeOutOfView):
                     // Without the permission no trip can happen; the focus
                     // is the one the jump always made.
-                    accessibilityMissing = targetHidden
+                    accessibilityMissing = mayBeOutOfView
                     route =
-                        targetHidden
+                        mayBeOutOfView
                         ? "no travel: Accessibility not granted" : "window in view or not placed"
                     step = plan.observe(place: .unknown)
                 case .unanswered(let why):
@@ -115,10 +115,10 @@ enum TabJumpRunner {
 
     private enum Survey {
         case placed(WindowPlace)
-        /// No Accessibility permission. `targetHidden` is whether the order
-        /// alone placed the window on a hidden Space, so only a jump that
+        /// No Accessibility permission. `mayBeOutOfView` is whether the
+        /// window may be on a hidden Space, so only a jump that may have
         /// needed to travel asks for the permission.
-        case untrusted(targetHidden: Bool)
+        case untrusted(mayBeOutOfView: Bool)
         case unanswered(String)
     }
 
@@ -132,8 +132,7 @@ enum TabJumpRunner {
             let place = WindowPlace.of(
                 window, scripted: scripted, ordered: ordered, seen: nil,
                 visibleSpaces: topology.visibleSpaces)
-            if case .hidden = place { return .untrusted(targetHidden: true) }
-            return .untrusted(targetHidden: false)
+            return .untrusted(mayBeOutOfView: place.mayBeOutOfView)
         }
         return .placed(
             WindowPlace.of(

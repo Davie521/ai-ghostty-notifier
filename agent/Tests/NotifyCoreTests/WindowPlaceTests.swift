@@ -310,4 +310,24 @@ import Testing
                 "tab-group-b", scripted: scripted, ordered: ordered, seen: seen,
                 visibleSpaces: visible) == .unsettled)
     }
+
+    /// Without Accessibility, a minimized window elsewhere keeps the lists
+    /// from pairing. The jump cannot tell where the window is, but it may be
+    /// out of view, so the permission is still asked for.
+    @Test func withoutAccessibilityAMinimizedWindowStillLeadsToTheAsk() {
+        var scripted = self.scripted
+        scripted.append(ScriptedWindow(id: "tab-group-m", title: "notes"))
+        let place = WindowPlace.of(
+            "tab-group-b", scripted: scripted, ordered: ordered, seen: nil,
+            visibleSpaces: visible)
+        #expect(place == .unsettled)
+        #expect(place.mayBeOutOfView)
+    }
+
+    @Test func onlyAWindowThatMayBeOutOfViewLeadsToTheAsk() {
+        #expect(WindowPlace.hidden(candidates: [ordered[1]]).mayBeOutOfView)
+        #expect(WindowPlace.unsettled.mayBeOutOfView)
+        #expect(!WindowPlace.showing.mayBeOutOfView)
+        #expect(!WindowPlace.unknown.mayBeOutOfView)
+    }
 }
