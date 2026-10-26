@@ -14,7 +14,11 @@
 # whenever Ghostty does, which is what lets this run without the resident app
 # being granted it. The resident needs its own grant; that part a click tests.
 #
-# Usage: bash tests/test-live-space-hop.sh [--interrupt] [--minimized] [path/to/ghostty-notify-agent]
+# Usage: bash tests/test-live-space-hop.sh [--interrupt] [--minimized] [--concurrent] [path/to/ghostty-notify-agent]
+#
+# --concurrent starts two jumps to the tab at once, as two clicks would. One
+# must wait for the other: the first travels, the second finds the window in
+# view, and both verify the tab.
 #
 # --minimized adds a third window of its own, minimized, under a title no other
 # window has. Ghostty lists minimized windows and the window server does not
@@ -33,10 +37,12 @@ set -euo pipefail
 
 INTERRUPT=no
 MINIMIZED=no
+CONCURRENT=no
 while [[ "${1:-}" == --* ]]; do
     case $1 in
         --interrupt) INTERRUPT=yes ;;
         --minimized) MINIMIZED=yes ;;
+        --concurrent) CONCURRENT=yes ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
     shift
@@ -608,7 +614,15 @@ JXA
     echo "PASS: SIGTERM one Space into the trip: walked back to Space $AWAY_SPACE, pointer back, window left where it was, nothing focused (key window elsewhere: $KEY_ELSEWHERE)"
     exit 0
 fi
-"$BIN" --focus "$SESSION"
+if [[ "$CONCURRENT" == yes ]]; then
+    "$BIN" --focus "$SESSION" &
+    JUMP_PID=$!
+    "$BIN" --focus "$SESSION" || fail "the second jump exited $?"
+    wait "$JUMP_PID" || fail "the first jump exited $?"
+    JUMP_PID=""
+else
+    "$BIN" --focus "$SESSION"
+fi
 sleep 0.3
 
 # What happened.
@@ -631,5 +645,12 @@ OTHER_DISPLAYS_START=$(awk -v id="$DISPLAY_ID" '$1!=id' <<<"$START_SPACES")
 [[ "$AFTER_SPACE" == "$HOME_SPACE" ]] || fail "the window was pulled to Space $AFTER_SPACE (issue #63)"
 [[ "$SHOWING" == "$HOME_SPACE" ]] || fail "display $DISPLAY_ID still shows Space $SHOWING, not the window's $HOME_SPACE"
 [[ "$SELECTED" == true ]] || fail "the background tab is not selected"
-[[ "$JUMP_LINE" == *"travelled"*"verified selected"* ]] || fail "the log does not say the jump travelled and verified"
+if [[ "$CONCURRENT" == yes ]]; then
+    JUMP_LINES=$(tail -n +"$((LOG_LINES + 1))" "$LOG" 2>/dev/null | grep 'jump:' || true)
+    echo "log, both jumps:"; printf '%s\n' "$JUMP_LINES"
+    [[ $(grep -c 'verified selected' <<<"$JUMP_LINES") == 2 ]] || fail "not both jumps verified the tab"
+    [[ $(grep -c 'travelled' <<<"$JUMP_LINES") == 1 ]] || fail "not exactly one jump travelled"
+else
+    [[ "$JUMP_LINE" == *"travelled"*"verified selected"* ]] || fail "the log does not say the jump travelled and verified"
+fi
 echo "PASS: the jump went to the window's Space and selected the tab (key window elsewhere: $KEY_ELSEWHERE)"
