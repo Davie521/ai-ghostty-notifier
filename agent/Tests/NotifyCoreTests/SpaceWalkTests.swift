@@ -244,9 +244,10 @@ final class FakeSpaces: SpaceWalkDriver {
         // One step out, then a dead press: the trip gives up 2.25 s in.
         fake.effects = [.aimed, .nothing, .stray("B"), .nothing]
         fake.afterPress = { fake, count in
-            // During the dead press's wait, the end comes forward to 1.6 s
-            // past the moment the walk back begins.
-            if count == 2 { fake.end = fake.clock.addingTimeInterval(1.5 + 1.6) }
+            // During the dead press's wait, the end comes forward to 2 s past
+            // the moment the walk back begins: room for a press, not for the
+            // undo a stray press would need on top.
+            if count == 2 { fake.end = fake.clock.addingTimeInterval(1.5 + 2) }
         }
         let outcome = await SpaceWalk.travel(to: 6, deadline: plenty(fake), driver: fake)
         guard case .stranded = outcome else {
