@@ -171,14 +171,24 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Retain the PID until cleanup ends so a second resident cannot enter.
         readiness.close()
         spool?.stop()
+        // No jump starts from here on. The one under way stops going onward,
+        // walks back to where its trip began and puts the pointer back, all
+        // before this deadline, which every press keeps clear of; one that
+        // was still finding its window gives up without a trip or a focus.
+        SpaceHopper.shutdownDeadline = Date().addingTimeInterval(Agent.jumpShutdownGrace - 0.5)
+        for task in jumps.values { task.cancel() }
         Task {
-            // A trip to another Space puts the pointer back only at its end.
-            // Let one under way finish, for a bounded while.
-            let until = Date().addingTimeInterval(Agent.travelShutdownGrace)
-            while SpaceHopper.isTravelling, Date() < until {
+            async let hooks: Void = hookProcessor.shutdown()
+            let until = Date().addingTimeInterval(Agent.jumpShutdownGrace)
+            while !jumps.isEmpty, Date() < until {
                 try? await Task.sleep(nanoseconds: 50_000_000)
             }
-            await hookProcessor.shutdown()
+            // The last resort, for a window server that stopped answering
+            // mid-trip: the pointer at least goes back where it was.
+            if SpaceHopper.restorePointerIfTravelling() {
+                log("shutdown: a trip was still under way; put the pointer back")
+            }
+            await hooks
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
@@ -301,10 +311,18 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     /// Set by a jump that needed to travel to another Space and was not
     /// allowed to. Cleared when the menu finds the permission granted.
     private var accessibilityMissing = false
-    /// The jump running now, if any; the next one waits for it.
+    /// The jump started last, if any; the next one waits for it.
     private var jumpInFlight: Task<Void, Never>?
-    /// How long shutdown waits for a trip under way: one trip, and a little.
-    static let travelShutdownGrace = SpaceHopper.maxTripSeconds + 2
+    /// Every jump started and not yet finished, the waiting ones included:
+    /// shutdown cancels them all and waits for them.
+    private var jumps: [UUID: Task<Void, Never>] = [:]
+    /// How long shutdown waits for jumps to wind down. A cancelled trip
+    /// finishes the press under way, undoes it should it have gone to the
+    /// other display, and walks back: 1.5 + 2.15 + 8 seconds at the very most,
+    /// and well under a second for a trip of a Space or two. Well inside the
+    /// twenty seconds launchd and the installer give a stopping agent, and the
+    /// hook cleanup runs alongside, not after.
+    static let jumpShutdownGrace = 12.0
     /// How long after posting a notification is left out of reconciliation.
     private static let deliverySettleSeconds: Double = 5
 
@@ -599,12 +617,16 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // One jump at a time: two trips at once would interleave their
         // presses. A click during a jump waits for it to finish.
         let previous = jumpInFlight
-        jumpInFlight = Task { @MainActor [weak self] in
+        let id = UUID()
+        let task = Task { @MainActor [weak self] in
+            defer { self?.jumps[id] = nil }
             await previous?.value
-            guard self?.shuttingDown == false else { return }
+            guard let self, !self.shuttingDown, !Task.isCancelled else { return }
             let report = await TabJumpRunner.run(tabID: tabID)
-            self?.finishJump(report)
+            self.finishJump(report)
         }
+        jumps[id] = task
+        jumpInFlight = task
     }
 
     private func finishJump(_ report: TabJumpRunner.Report) {
@@ -613,7 +635,9 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             // Front the app at least: the user is one keystroke away instead
             // of nowhere, as with a tab that was never resolved.
             Ghostty.activate()
-        case .verified:
+        case .verified, .abandoned:
+            // Abandoned means quitting: bringing Ghostty forward now could
+            // pull the very window the trip was cancelled on the way to.
             break
         }
         log(TabJumpRunner.describe(report))

@@ -31,6 +31,12 @@ enum TabJumpRunner {
         /// The last trip, once it has arrived, for the log.
         var travelled: String?
         while true {
+            // Cancelled with its task — the resident quitting, the `--focus`
+            // mode sent SIGTERM — the jump stops where it stands. A trip under
+            // way has already walked back by the time it returns here.
+            if Task.isCancelled {
+                if case .stop = step {} else { step = plan.abandon() }
+            }
             switch step {
             case .locate:
                 let (probe, windows) = await Ghostty.locate(tabID: tabID)
@@ -131,6 +137,8 @@ enum TabJumpRunner {
     nonisolated static func describe(_ report: Report) -> String {
         let tabID = report.plan.requested
         switch report.outcome {
+        case .abandoned:
+            return "jump: gave up on \(tabID) (\(report.route)), stopping"
         case .notFound:
             return "jump: \(tabID) not found, activated Ghostty only"
         case .verified(reads: 0, focusAttempts: 1):

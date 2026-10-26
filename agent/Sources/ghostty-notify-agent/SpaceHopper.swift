@@ -40,17 +40,34 @@ enum SpaceHopper {
     /// Left for the focus after a trip when the caller has a deadline: the
     /// focus command's own Apple Event timeout, and a little more.
     static let focusReserveSeconds = 3.5
-    /// Kept clear of the caller's deadline even by a walk back.
+    /// Kept clear of the process's end by every press, a walk back's included.
     static let hardReserveSeconds = 1.0
+
+    /// When the resident, quitting, stops waiting for a trip: set as it starts
+    /// to shut down, and kept clear of by every press from then on.
+    static var shutdownDeadline: Date?
+    /// Where the pointer was when the trip began, while one is under way.
+    private static var pointerToRestore: CGPoint?
+    /// Whether a trip is under way.
+    private(set) static var isTravelling = false
+
+    /// Puts the pointer back if a trip is still under way: the last resort of
+    /// a shutdown that could not wait any longer for the trip to end.
+    @discardableResult
+    static func restorePointerIfTravelling() -> Bool {
+        guard isTravelling, let pointerToRestore else { return false }
+        WindowServer.movePointer(to: pointerToRestore)
+        return true
+    }
 
     /// `before` is when the caller's process will be ended, if it will be:
     /// the hook runtime's `--focus` mode has one, and ends with `_exit`, which
-    /// leaves no chance to put the pointer back. The trip ends early enough to
-    /// leave the focus its time.
-    /// Whether a trip is under way; shutdown waits for it, because the
-    /// pointer is put back only at its end.
-    private(set) static var isTravelling = false
-
+    /// leaves no chance to put the pointer back. The trip onward ends early
+    /// enough to leave the focus its time.
+    ///
+    /// A trip cancelled with the task it runs in — the resident quitting, the
+    /// `--focus` mode sent SIGTERM — stops going onward, walks back, and puts
+    /// the pointer back.
     static func travel(to window: OrderedWindow, before callerDeadline: Date? = nil) async
         -> Outcome
     {
@@ -59,22 +76,20 @@ enum SpaceHopper {
             return .failed("window \(window.number) is on no Space")
         }
         var deadline = Date().addingTimeInterval(maxTripSeconds)
-        var hardDeadline = Date.distantFuture
         if let callerDeadline {
             deadline = min(deadline, callerDeadline.addingTimeInterval(-focusReserveSeconds))
-            hardDeadline = callerDeadline.addingTimeInterval(-hardReserveSeconds)
         }
-        let pointerBefore = WindowServer.pointer
+        pointerToRestore = WindowServer.pointer
         isTravelling = true
         defer {
-            if let pointerBefore { WindowServer.movePointer(to: pointerBefore) }
+            if let pointerToRestore { WindowServer.movePointer(to: pointerToRestore) }
+            pointerToRestore = nil
             isTravelling = false
         }
-        let outcome = await SpaceWalk.travel(
-            to: space, deadline: deadline, hardDeadline: hardDeadline, driver: LiveDriver())
+        let outcome = await SpaceWalk.travel(to: space, deadline: deadline, driver: LiveDriver())
         switch outcome {
         case .arrived(let display, let direction, let presses, let strayRetries):
-            try? await Task.sleep(nanoseconds: UInt64(settleOnArrival * 1_000_000_000))
+            await LiveDriver().pause(settleOnArrival)
             return .arrived(
                 Trip(
                     display: display, direction: direction, presses: presses,
@@ -114,8 +129,23 @@ enum SpaceHopper {
 
         func now() -> Date { Date() }
 
+        /// Not `Task.sleep`, which returns at once in a cancelled task: the
+        /// undo and the walk back that follow a cancellation still need their
+        /// waits, or their presses would run into each other.
         func pause(_ seconds: Double) async {
-            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            await withCheckedContinuation { continuation in
+                DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
+                    continuation.resume()
+                }
+            }
+        }
+
+        func stopRequested() -> Bool { Task.isCancelled }
+
+        func hardDeadline() -> Date {
+            let ends = [NativeLifecycle.deadline, SpaceHopper.shutdownDeadline].compactMap { $0 }
+            guard let end = ends.min() else { return .distantFuture }
+            return end.addingTimeInterval(-SpaceHopper.hardReserveSeconds)
         }
 
         /// Moves the pointer to the middle of `bounds` and waits, briefly,

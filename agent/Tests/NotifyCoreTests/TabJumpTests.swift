@@ -127,6 +127,16 @@ import Testing
         #expect(jump.observe(place: .hidden(candidates: [hiddenA])) == .hop(hiddenA))
     }
 
+    /// Quitting: the jump stops where it stands, whatever was next — after a
+    /// trip that gave up, that would have been the focus that pulls windows.
+    @Test func anAbandonedJumpTakesNoFurtherStep() {
+        var (jump, step) = located(.hidden(candidates: [hiddenA]))
+        #expect(step == .hop(hiddenA))
+        #expect(jump.observe(hopResult: .failed(reason: "stopping after 0 presses")) == .focus)
+        #expect(jump.abandon() == .stop(.abandoned))
+        #expect(TabJump(requested: tab).abandon() == .stop(.abandoned))
+    }
+
     @Test func noCandidatesMeansNoTravel() {
         let (jump, step) = located(.hidden(candidates: []))
         #expect(step == .focus)

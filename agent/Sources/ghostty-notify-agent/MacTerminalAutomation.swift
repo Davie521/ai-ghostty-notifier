@@ -71,7 +71,10 @@ struct MacTerminalAutomation: TerminalAutomationProviding {
             if let paths = try? AgentPaths(env: ProcessInfo.processInfo.environment) {
                 AgentLog.append(TabJumpRunner.describe(report), to: paths.log)
             }
-            if case .verified = report.outcome { return }
+            switch report.outcome {
+            case .verified, .abandoned: return
+            case .notFound, .unverified: break
+            }
         }
         await MainActor.run {
             NSApplication.shared.activate(ignoringOtherApps: true)

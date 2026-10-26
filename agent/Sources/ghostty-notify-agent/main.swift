@@ -29,6 +29,10 @@ if isNativeHookMode {
     if mode == "--hook" || mode == "--worker" {
         // A worker reaps a notification backend through several bounded steps.
         NativeLifecycle.installTermination(grace: mode == "--worker" ? 10 : 4, logPath: logPath)
+    } else if mode == "--focus" {
+        // A jump stopped part-way across Spaces walks back and puts the pointer
+        // back before the process ends; the walk keeps clear of this grace.
+        NativeLifecycle.installTermination(grace: 8, logPath: logPath)
     }
 }
 

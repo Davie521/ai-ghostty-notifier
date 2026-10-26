@@ -51,6 +51,10 @@ public struct TabJump: Equatable, Sendable {
         case notFound
         /// After every allowed attempt, some other tab is still selected.
         case unverified(selected: String?, focusAttempts: Int)
+        /// Given up where it stood because the app is quitting or the work was
+        /// cancelled. Nothing after that was done, the focus included: a focus
+        /// without the trip before it is what pulled windows across Spaces.
+        case abandoned
     }
 
     public enum Step: Equatable, Sendable {
@@ -106,6 +110,10 @@ public struct TabJump: Equatable, Sendable {
 
     /// The first step of every jump.
     public var start: Step { .locate }
+
+    /// The jump is to stop where it stands: the app is quitting. Whatever step
+    /// was next is not taken.
+    public func abandon() -> Step { .stop(.abandoned) }
 
     /// What the lookup found.
     public mutating func observe(probe: Probe) -> Step {

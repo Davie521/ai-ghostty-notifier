@@ -15,6 +15,14 @@ public protocol SpaceWalkDriver {
     func poll(within timeout: Double, until done: (SpaceTopology) -> Bool) async -> SpaceTopology?
     func now() -> Date
     func pause(_ seconds: Double) async
+    /// True once the jump is being given up: the app is quitting, or the work
+    /// was cancelled. A walk then starts no press onward; it still undoes a
+    /// press that landed on the wrong display, and still walks back, because
+    /// both put the desktops back as they were.
+    func stopRequested() -> Bool
+    /// When the process will be ended, or `distantFuture`. Read before every
+    /// press, because a signal can bring it forward in the middle of a walk.
+    func hardDeadline() -> Date
 }
 
 extension SpaceTopology {
@@ -35,6 +43,12 @@ extension SpaceTopology {
 /// press that switches a display the walk is not for is undone, the undo
 /// checked, and the press tried again, twice at most. A walk that cannot put
 /// such a display back stops pressing at once.
+///
+/// A trip that gives up part-way walks back to where it started, and no press
+/// onward starts unless there would still be time to walk back over every
+/// Space passed so far before the process is ended. Wherever a trip stops —
+/// given up, out of time, or because the app is quitting — the desktops end up
+/// as they were or where the user asked to go, never somewhere in between.
 public enum SpaceWalk {
     public enum Outcome: Equatable, Sendable {
         case arrived(presses: Int, strayRetries: Int)
@@ -52,6 +66,14 @@ public enum SpaceWalk {
         case failed(String)
     }
 
+    /// Which way a walk goes: onward to the window's Space, or back to where
+    /// the trip started. Only a walk onward is cut short when the jump is
+    /// given up.
+    enum Leg {
+        case onward
+        case back
+    }
+
     /// How long one press is given to change a display's Space.
     public static let pressTimeout = 1.5
     /// The topology reports the new Space while the slide is still running.
@@ -63,16 +85,16 @@ public enum SpaceWalk {
     /// What undoing a stray press may take: its press, its wait, and the
     /// pointer's move before it.
     static let undoSeconds = pressTimeout + settleAfterPress + 0.5
+    /// What one step of a walk back may take.
+    static let stepSeconds = pressTimeout + settleAfterPress
 
     /// Goes to `space` and, should the trip give up part-way, back to where
     /// the display was: the focus that follows a failed trip brings the window
     /// to the Space in view, and that should be the one the user was on, not
-    /// one they passed on the way. `deadline` bounds the trip; `hardDeadline`
-    /// bounds the walk back as well, for a caller that will be ended then.
+    /// one they passed on the way. `deadline` bounds the trip onward.
     @MainActor
     public static func travel(
-        to space: UInt64, deadline: Date, hardDeadline: Date = .distantFuture,
-        driver: some SpaceWalkDriver
+        to space: UInt64, deadline: Date, driver: some SpaceWalkDriver
     ) async -> TripOutcome {
         guard let topology = driver.topology() else { return .failed("no Space topology") }
         let route = SpaceRoute.to(space, in: topology)
@@ -80,7 +102,7 @@ public enum SpaceWalk {
             return route == .showing ? .alreadyShowing : .failed("Space \(space) is on no display")
         }
         let start = topology.current(on: first.display)
-        switch await walk(to: space, deadline: deadline, driver: driver) {
+        switch await walk(to: space, deadline: deadline, leg: .onward, driver: driver) {
         case .arrived(let presses, let strayRetries):
             return .arrived(
                 display: first.display, direction: first.direction, presses: presses,
@@ -91,12 +113,8 @@ public enum SpaceWalk {
             guard let start, driver.topology()?.current(on: first.display) != start else {
                 return .failed(why)
             }
-            // A press on the way back may land on the other display too, and
-            // its undo waits as long as the press did; both must fit.
-            let back = min(
-                driver.now().addingTimeInterval(maxWalkBackSeconds),
-                hardDeadline.addingTimeInterval(-undoSeconds))
-            switch await walk(to: start, deadline: back, driver: driver) {
+            let back = driver.now().addingTimeInterval(maxWalkBackSeconds)
+            switch await walk(to: start, deadline: back, leg: .back, driver: driver) {
             case .arrived: return .failed("\(why); went back")
             case .stopped(let backWhy), .stranded(let backWhy):
                 return .failed("\(why); could not go back: \(backWhy)")
@@ -104,20 +122,28 @@ public enum SpaceWalk {
         }
     }
 
-    /// One walk to `space`. No press starts unless its wait fits before
-    /// `deadline`.
+    /// One walk to `space`.
     @MainActor
-    public static func walk(
-        to space: UInt64, deadline: Date, driver: some SpaceWalkDriver
+    static func walk(
+        to space: UInt64, deadline: Date, leg: Leg, driver: some SpaceWalkDriver
     ) async -> Outcome {
         guard var topology = driver.topology() else { return .stopped("no Space topology") }
         var route = SpaceRoute.to(space, in: topology)
         var presses = 0
         var strayRetries = 0
         while case .hop(let hop) = route {
-            guard driver.now().addingTimeInterval(pressTimeout) < deadline else {
-                return .stopped("out of time after \(presses) presses")
+            if leg == .onward, driver.stopRequested() {
+                return .stopped("stopping after \(presses) presses")
             }
+            // Room for this press, and for putting right whatever it may leave
+            // before the process is ended: an undo, should it land on another
+            // display, and on the way onward the walk back over every Space
+            // passed by then.
+            let done = driver.now().addingTimeInterval(pressTimeout)
+            let toPutRight =
+                undoSeconds + (leg == .onward ? Double(presses + 1) * stepSeconds : 0)
+            guard done < deadline, done.addingTimeInterval(toPutRight) < driver.hardDeadline()
+            else { return .stopped("out of time after \(presses) presses") }
             guard presses < SpaceRoute.maxSteps else {
                 return .stopped("\(presses) presses did not reach Space \(space)")
             }

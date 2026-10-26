@@ -21,6 +21,13 @@ final class FakeSpaces: SpaceWalkDriver {
     var shortcutOn = true
     var clock = Date(timeIntervalSince1970: 1_000)
     let pressSeconds = 0.3
+    /// The app quitting, or the work cancelled.
+    var stopping = false
+    /// When the process will be ended.
+    var end = Date.distantFuture
+    /// Called after each press with the number of presses so far: where a
+    /// test makes the app quit or a signal bring the end forward.
+    var afterPress: ((FakeSpaces, Int) -> Void)?
 
     init(_ displays: [SpaceTopology.Display]) { self.displays = displays }
 
@@ -39,6 +46,7 @@ final class FakeSpaces: SpaceWalkDriver {
         case .stray(let other): move(other, direction)
         case .nothing: break
         }
+        afterPress?(self, presses.count)
         return true
     }
 
@@ -53,6 +61,8 @@ final class FakeSpaces: SpaceWalkDriver {
 
     func now() -> Date { clock }
     func pause(_ seconds: Double) async { clock += seconds }
+    func stopRequested() -> Bool { stopping }
+    func hardDeadline() -> Date { end }
 
     private func move(_ display: String, _ direction: SpaceHop.Direction) {
         guard let index = displays.firstIndex(where: { $0.identifier == display }),
@@ -185,19 +195,31 @@ final class FakeSpaces: SpaceWalkDriver {
         #expect(fake.presses.isEmpty)
     }
 
-    /// The caller's own end bounds the walk back too.
-    @Test func theWalkBackKeepsClearOfTheHardDeadline() async {
+    /// No press onward starts unless there would be time, before the process
+    /// is ended, to undo it and to walk back over it.
+    @Test func noPressStartsWithoutTimeToPutItRight() async {
         let fake = spaces()
-        fake.effects = [.aimed, .nothing]
-        let outcome = await SpaceWalk.travel(
-            to: 6, deadline: plenty(fake), hardDeadline: fake.clock.addingTimeInterval(2),
-            driver: fake)
+        fake.end = fake.clock.addingTimeInterval(4)
+        let outcome = await SpaceWalk.travel(to: 6, deadline: plenty(fake), driver: fake)
+        #expect(outcome == .failed("out of time after 0 presses"))
+        #expect(fake.presses.isEmpty)
+    }
+
+    /// Close to the end, a trip goes as far as it can still come back from,
+    /// and comes back in time.
+    @Test func aTripNearTheEndGoesOnlyAsFarAsItCanComeBackFrom() async {
+        let fake = spaces()
+        let start = fake.clock
+        fake.end = start.addingTimeInterval(8)
+        let outcome = await SpaceWalk.travel(to: 6, deadline: plenty(fake), driver: fake)
         guard case .failed(let why) = outcome else {
             Issue.record("expected a failure, got \(outcome)")
             return
         }
-        #expect(why.contains("could not go back: out of time"))
-        #expect(fake.current("A") == 2)
+        #expect(why.hasPrefix("out of time after"))
+        #expect(why.hasSuffix("went back"))
+        #expect(fake.current("A") == 1)
+        #expect(fake.clock <= fake.end)
     }
 
     @Test func aShortcutSwitchedOffPressesNothing() async {
@@ -209,21 +231,24 @@ final class FakeSpaces: SpaceWalkDriver {
         #expect(fake.current("A") == 1)
     }
 
-    /// On the way back, close to the end: a press that lands on the other
-    /// display and an undo that waits in vain must both fit before it.
-    @Test func aStrayPressOnTheWayBackStillEndsBeforeTheHardDeadline() async {
+    /// On the way back, close to the end — a signal brought it forward — a
+    /// press that lands on the other display and an undo that waits in vain
+    /// must both fit before it.
+    @Test func aStrayPressOnTheWayBackStillEndsBeforeTheEnd() async {
         let fake = spaces()
-        let start = fake.clock
         // One step out, then a dead press: the trip gives up 2.25 s in.
         fake.effects = [.aimed, .nothing, .stray("B"), .nothing]
-        let hard = start.addingTimeInterval(2.25 + 1.6)
-        let outcome = await SpaceWalk.travel(
-            to: 6, deadline: plenty(fake), hardDeadline: hard, driver: fake)
+        fake.afterPress = { fake, count in
+            // During the dead press's wait, the end comes forward to 1.6 s
+            // past the moment the walk back begins.
+            if count == 2 { fake.end = fake.clock.addingTimeInterval(1.5 + 1.6) }
+        }
+        let outcome = await SpaceWalk.travel(to: 6, deadline: plenty(fake), driver: fake)
         guard case .failed = outcome else {
             Issue.record("expected a failure, got \(outcome)")
             return
         }
-        #expect(fake.clock <= hard)
+        #expect(fake.clock <= fake.end)
     }
 
     /// A step out, then a press on the other display whose undo does not
@@ -238,5 +263,50 @@ final class FakeSpaces: SpaceWalkDriver {
         }
         #expect(why.contains("could not be put back"))
         #expect(fake.presses == ["right A", "right A", "left B"])
+    }
+
+    /// Quitting before the trip has begun: not a single press.
+    @Test func aJumpGivenUpBeforeItsTripPressesNothing() async {
+        let fake = spaces()
+        fake.stopping = true
+        let outcome = await SpaceWalk.travel(to: 6, deadline: plenty(fake), driver: fake)
+        #expect(outcome == .failed("stopping after 0 presses"))
+        #expect(fake.presses.isEmpty)
+    }
+
+    /// Quitting two Spaces into a trip of five: no press onward after that,
+    /// and the display walks back to where it was.
+    @Test func aJumpGivenUpPartWayWalksBack() async {
+        let fake = spaces()
+        fake.afterPress = { fake, count in if count == 2 { fake.stopping = true } }
+        let outcome = await SpaceWalk.travel(to: 6, deadline: plenty(fake), driver: fake)
+        #expect(outcome == .failed("stopping after 2 presses; went back"))
+        #expect(fake.presses == ["right A", "right A", "left A", "left A"])
+        #expect(fake.current("A") == 1)
+    }
+
+    /// Quitting while the trip already walks back: the walk back is the
+    /// putting right, and is not cut short.
+    @Test func aJumpGivenUpOnItsWayBackStillGetsBack() async {
+        let fake = spaces()
+        fake.effects = [.aimed, .aimed, .nothing]
+        fake.afterPress = { fake, count in if count == 4 { fake.stopping = true } }
+        let outcome = await SpaceWalk.travel(to: 6, deadline: plenty(fake), driver: fake)
+        #expect(outcome == .failed("press 3 did not switch the Space; went back"))
+        #expect(fake.presses == ["right A", "right A", "right A", "left A", "left A"])
+        #expect(fake.current("A") == 1)
+    }
+
+    /// Quitting right after a press that landed on the other display: that
+    /// display is still put back, and nothing more is pressed onward.
+    @Test func aJumpGivenUpAfterAStrayPressStillPutsTheDisplayBack() async {
+        let fake = spaces()
+        fake.effects = [.aimed, .stray("B")]
+        fake.afterPress = { fake, count in if count == 2 { fake.stopping = true } }
+        let outcome = await SpaceWalk.travel(to: 6, deadline: plenty(fake), driver: fake)
+        #expect(outcome == .failed("stopping after 1 presses; went back"))
+        #expect(fake.presses == ["right A", "right A", "left B", "left A"])
+        #expect(fake.current("B") == 10)
+        #expect(fake.current("A") == 1)
     }
 }
