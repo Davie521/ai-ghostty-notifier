@@ -49,4 +49,20 @@ import Testing
         #expect(SpaceRoute.to(UInt64(SpaceRoute.maxSteps + 1), in: long) != .unreachable)
         #expect(SpaceRoute.to(UInt64(SpaceRoute.maxSteps + 2), in: long) == .unreachable)
     }
+
+    /// After a press: which display moved. The hop undoes a press that moved
+    /// a display it was not for.
+    @Test func changedDisplaysNamesOnlyTheDisplaysThatMoved() {
+        let after = SpaceTopology(displays: [
+            SpaceTopology.Display(identifier: "37D8", spaces: builtIn.spaces, current: 6),
+            SpaceTopology.Display(identifier: "A756", spaces: external.spaces, current: 127),
+        ])
+        #expect(after.changedDisplays(since: topology) == ["A756"])
+        #expect(topology.changedDisplays(since: topology).isEmpty)
+        // A display that was not there before was plugged in, not switched.
+        let plugged = SpaceTopology(displays: [
+            builtIn, external, SpaceTopology.Display(identifier: "NEW", spaces: [99], current: 99),
+        ])
+        #expect(plugged.changedDisplays(since: topology).isEmpty)
+    }
 }

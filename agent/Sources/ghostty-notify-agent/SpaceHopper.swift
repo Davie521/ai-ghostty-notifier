@@ -39,7 +39,14 @@ enum SpaceHopper {
     /// it is the off-screen window of issue #63 again.
     static let settleOnArrival = 0.25
 
+    /// The longest one trip may take. Presses take a few hundred milliseconds
+    /// each; past this something is wrong, and the hook runtime's `--focus`
+    /// mode would be stopped by its own deadline mid-trip, with the pointer
+    /// still parked on the other display.
+    static let maxTripSeconds = 5.0
+
     static func travel(to window: OrderedWindow) async -> Outcome {
+        let deadline = Date().addingTimeInterval(maxTripSeconds)
         guard WindowServer.isTrusted else { return .failed("Accessibility not granted") }
         guard var topology = WindowServer.topology() else { return .failed("no Space topology") }
         guard let space = window.spaces.first else {
@@ -57,6 +64,10 @@ enum SpaceHopper {
 
         var presses = 0
         while case .hop(let hop) = route {
+            guard Date() < deadline else {
+                return .failed(
+                    "no arrival within \(Int(maxTripSeconds)) s, after \(presses) presses")
+            }
             guard presses < SpaceRoute.maxSteps else {
                 return .failed("\(presses) presses did not reach Space \(space)")
             }
@@ -75,7 +86,7 @@ enum SpaceHopper {
             guard let after = await anySpaceChange(from: before) else {
                 return .failed("press \(presses) did not switch the Space")
             }
-            let strays = changedDisplays(from: before, to: after).filter { $0 != hop.display }
+            let strays = after.changedDisplays(since: before).filter { $0 != hop.display }
             if !strays.isEmpty {
                 // The press switched a display the trip was not for. Put it
                 // back before giving up, so a failed trip leaves the user's
@@ -101,18 +112,9 @@ enum SpaceHopper {
         while Date() < deadline {
             await sleep(pollInterval)
             guard let topology = WindowServer.topology() else { continue }
-            if !changedDisplays(from: before, to: topology).isEmpty { return topology }
+            if !topology.changedDisplays(since: before).isEmpty { return topology }
         }
         return nil
-    }
-
-    private static func changedDisplays(from before: SpaceTopology, to after: SpaceTopology)
-        -> [String]
-    {
-        after.displays.compactMap { display in
-            let earlier = before.displays.first { $0.identifier == display.identifier }
-            return earlier?.current != display.current ? display.identifier : nil
-        }
     }
 
     /// One press the other way, with the pointer on `display`.

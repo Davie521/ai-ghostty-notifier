@@ -49,7 +49,8 @@ enum Whereabouts {
                 return 1
             }
             let place = WindowPlace.of(
-                window, scripted: windows, ordered: ordered, seen: seen,
+                window, scripted: windows, ordered: ordered,
+                seen: WindowServer.isTrusted ? seen : nil,
                 visibleSpaces: topology.visibleSpaces)
             let described: String
             switch place {
@@ -64,6 +65,6 @@ enum Whereabouts {
     }
 
     private static func list<T: BinaryInteger>(_ values: [T]) -> String {
-        values.map(String.init).joined(separator: ",")
+        values.map { "\($0)" }.joined(separator: ",")
     }
 }

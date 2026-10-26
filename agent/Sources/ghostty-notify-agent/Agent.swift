@@ -295,6 +295,8 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     /// Set by a jump that needed to travel to another Space and was not
     /// allowed to. Cleared when the menu finds the permission granted.
     private var accessibilityMissing = false
+    /// The jump running now, if any; the next one waits for it.
+    private var jumpInFlight: Task<Void, Never>?
     /// How long after posting a notification is left out of reconciliation.
     private static let deliverySettleSeconds: Double = 5
 
@@ -581,7 +583,12 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // (issue #63), and the settle re-read and second focus for a read that
         // raced the focus (issue #40). The runner only asks and sends; this
         // only acts on the outcome.
-        Task { @MainActor [weak self] in
+        //
+        // One jump at a time: two trips at once would interleave their
+        // presses. A click during a jump waits for it to finish.
+        let previous = jumpInFlight
+        jumpInFlight = Task { @MainActor [weak self] in
+            await previous?.value
             let report = await TabJumpRunner.run(tabID: tabID)
             self?.finishJump(report)
         }

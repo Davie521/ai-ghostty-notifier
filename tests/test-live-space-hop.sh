@@ -28,7 +28,7 @@ SESSION_DIR="${GHOSTTY_NOTIFY_SESSION_DIR:-$HOME/.claude/notifications/ghostty-s
 SESSION=$(uuidgen | tr 'A-Z' 'a-z')
 BINDING="$SESSION_DIR/$SESSION.json"
 
-WIN=""; FIRST=""; BG=""; SEL=""; DISPLAY_ID=""; HOME_SPACE=""; AWAY_KEY=""; POINTER=""; START_SPACES=""
+WIN=""; FIRST=""; BG=""; SEL=""; HELPER=""; HELPER_TAB=""; DISPLAY_ID=""; HOME_SPACE=""; AWAY_KEY=""; POINTER=""; START_SPACES=""
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 where() { "$BIN" --where "$1" 2>/dev/null || true; }
@@ -117,6 +117,16 @@ cleanup() {
                 && echo "closed the test window $WIN" || echo "could not close the test window $WIN" >&2
         else
             echo "not closing $WIN: its tabs are now '$tabs', not only the ones this run made" >&2
+        fi
+    fi
+    if [[ -n "$HELPER" ]]; then
+        local helper_tabs
+        helper_tabs=$(osascript -e "tell application \"Ghostty\" to get id of every tab of (first window whose id is \"$HELPER\")" 2>/dev/null || true)
+        if [[ -n "$HELPER_TAB" && "$helper_tabs" == "$HELPER_TAB" ]]; then
+            osascript -e "tell application \"Ghostty\" to close window (first window whose id is \"$HELPER\")" >/dev/null 2>&1 \
+                && echo "closed the helper window $HELPER" || echo "could not close the helper window $HELPER" >&2
+        else
+            echo "not closing $HELPER: its tabs are now '$helper_tabs', not the one this run made" >&2
         fi
     fi
     [[ -n "$START_SPACES" ]] && restore_spaces
@@ -214,14 +224,17 @@ BOUNDS=$(display_field "$BG" "$DISPLAY_ID" bounds)
 IFS=, read -r bx by bw bh <<<"$BOUNDS"
 echo "using display $DISPLAY_ID (Spaces $HOME_SPACES, showing $HOME_SPACE)"
 
-# Park the test window there. Never by "front window" or an index: that once
-# moved the user's own window. The test window is matched by its title and
-# the frame the window server reports for its number, and the match must be
-# unique; afterwards every other window must still be where it was.
-TITLE=$(osascript -e "tell application \"Ghostty\" to get name of (first window whose id is \"$WIN\")")
-IFS=, read -r wx wy ww wh <<<"$(where "$BG" | awk -v n="$NUMBER" '$1=="ordered" && $2==n { sub("bounds=","",$4); print $4 }')"
-OTHERS_BEFORE=$(where "$BG" | awk -v n="$NUMBER" '$1=="ordered" && $2!=n' | sort)
-MOVED=$(osascript - "$TITLE" "$wx" "$wy" "$ww" "$wh" "$((bx + 60))" "$((by + 80))" <<'AS'
+# Moves one of this run's windows, given its id, window number and a target
+# point. Never by "front window" or an index: that once moved the user's own
+# window. The window is matched by its title and the frame the window server
+# reports for its number, the match must be unique, and afterwards every other
+# Ghostty window must still be where it was.
+move_own_window() {
+    local id=$1 number=$2 nx=$3 ny=$4 title wx wy ww wh others_before others_after moved
+    title=$(osascript -e "tell application \"Ghostty\" to get name of (first window whose id is \"$id\")")
+    IFS=, read -r wx wy ww wh <<<"$(where "$BG" | awk -v n="$number" '$1=="ordered" && $2==n { sub("bounds=","",$4); print $4 }')"
+    others_before=$(where "$BG" | awk -v n="$number" '$1=="ordered" && $2!=n' | sort)
+    moved=$(osascript - "$title" "$wx" "$wy" "$ww" "$wh" "$nx" "$ny" <<'AS'
 on run argv
     set {wanted, x, y, w, h, nx, ny} to {item 1 of argv, (item 2 of argv) as integer, (item 3 of argv) as integer, (item 4 of argv) as integer, (item 5 of argv) as integer, (item 6 of argv) as integer, (item 7 of argv) as integer}
     tell application "System Events" to tell process "Ghostty"
@@ -236,13 +249,68 @@ on run argv
 end run
 AS
 )
-[[ "$MOVED" == moved ]] || fail "could not single out the test window in System Events ($MOVED)"
-sleep 0.6
-OTHERS_AFTER=$(where "$BG" | awk -v n="$NUMBER" '$1=="ordered" && $2!=n' | sort)
-[[ "$OTHERS_BEFORE" == "$OTHERS_AFTER" ]] || fail "another Ghostty window moved; before: $OTHERS_BEFORE after: $OTHERS_AFTER"
+    [[ "$moved" == moved ]] || fail "could not single out window $id in System Events ($moved)"
+    sleep 0.6
+    others_after=$(where "$BG" | awk -v n="$number" '$1=="ordered" && $2!=n' | sort)
+    [[ "$others_before" == "$others_after" ]] || fail "another Ghostty window moved; before: $others_before after: $others_after"
+}
+
+# Park the test window there.
+move_own_window "$WIN" "$NUMBER" "$((bx + 60))" "$((by + 80))"
 [[ "$(space_of_window "$BG" "$NUMBER")" == "$HOME_SPACE" ]] || fail "the test window did not land on Space $HOME_SPACE of display $DISPLAY_ID"
 
-# Switch that display one Space over, so the window is out of view.
+# Put the keyboard focus on another display, in a one-tab window of this run's:
+# the jump has to switch the test window's display while the key window is
+# elsewhere — you working in a window on one screen, the session's window
+# hidden on the other. Skipped with a single display.
+OTHER_DISPLAY=$(where "$BG" | awk -v id="$DISPLAY_ID" '$1=="display" && $2!=id {print $2; exit}')
+KEY_ELSEWHERE=no
+if [[ -n "$OTHER_DISPLAY" ]]; then
+    BEFORE_HELPER=$(where "$BG" | awk '$1=="ordered" {print $2}' | tr '\n' ' ')
+    MADE_HELPER=$(osascript <<'AS'
+tell application "Ghostty"
+    set seen to {}
+    repeat with w in windows
+        set end of seen to (id of w)
+    end repeat
+    new window
+    set newWin to missing value
+    repeat 50 times
+        delay 0.1
+        set fresh to 0
+        repeat with w in windows
+            if seen does not contain (id of w) then
+                set newWin to w
+                set fresh to fresh + 1
+            end if
+        end repeat
+        if fresh is 1 then exit repeat
+    end repeat
+    if newWin is missing value then error "no new window appeared"
+    return (id of newWin) & " " & (id of first tab of newWin)
+end tell
+AS
+) || fail "could not open the helper window: $MADE_HELPER"
+    read -r HELPER HELPER_TAB <<<"$MADE_HELPER"
+    [[ "$HELPER" == tab-group-* && "$HELPER_TAB" == tab-* ]] || { HELPER=""; fail "unexpected helper ids: $MADE_HELPER"; }
+    sleep 0.5
+    HELPER_NUMBER=""
+    for n in $(where "$BG" | awk '$1=="ordered" {print $2}'); do
+        case " $BEFORE_HELPER " in *" $n "*) ;; *) HELPER_NUMBER=$n ;; esac
+    done
+    [[ -n "$HELPER_NUMBER" ]] || fail "could not tell the helper window apart in the window server"
+    IFS=, read -r ox oy _ _ <<<"$(display_field "$BG" "$OTHER_DISPLAY" bounds)"
+    move_own_window "$HELPER" "$HELPER_NUMBER" "$((ox + 80))" "$((oy + 120))"
+    osascript -e "tell application \"Ghostty\" to focus (focused terminal of (first tab of (first window whose id is \"$HELPER\")))" >/dev/null
+    sleep 0.5
+    KEY_AT=$(osascript -e 'tell application "System Events" to tell (first process whose frontmost is true) to get (name as text) & " " & (item 1 of (position of window 1) as text) & "," & (item 2 of (position of window 1) as text)' 2>/dev/null || true)
+    [[ "$KEY_AT" == "Ghostty $((ox + 80)),$((oy + 120))" ]] && KEY_ELSEWHERE=yes
+    echo "helper window $HELPER on display $OTHER_DISPLAY; key window: ${KEY_AT:-unknown} (elsewhere: $KEY_ELSEWHERE)"
+fi
+
+# Switch that display one Space over, so the window is out of view. With the
+# key window on the other display, this press is itself a check of which
+# display the shortcut acts on.
 if [[ "$HOME_SPACES" == *",$HOME_SPACE" ]]; then AWAY_KEY=123; else AWAY_KEY=124; fi
 warp "$((bx + bw / 2))" "$((by + bh / 2))"; sleep 0.3
 press "$AWAY_KEY"
@@ -296,4 +364,4 @@ OTHER_DISPLAYS_START=$(awk -v id="$DISPLAY_ID" '$1!=id' <<<"$START_SPACES")
 [[ "$SHOWING" == "$HOME_SPACE" ]] || fail "display $DISPLAY_ID still shows Space $SHOWING, not the window's $HOME_SPACE"
 [[ "$SELECTED" == true ]] || fail "the background tab is not selected"
 [[ "$JUMP_LINE" == *"travelled"*"verified selected"* ]] || fail "the log does not say the jump travelled and verified"
-echo "PASS: the jump went to the window's Space and selected the tab"
+echo "PASS: the jump went to the window's Space and selected the tab (key window elsewhere: $KEY_ELSEWHERE)"

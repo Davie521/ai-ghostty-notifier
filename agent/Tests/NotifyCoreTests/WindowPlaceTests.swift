@@ -194,4 +194,29 @@ import Testing
         let (_, windows) = ScriptedWindow.locateReply("x\u{1E}tab-group-a\u{1F}\u{1E}")
         #expect(windows == [ScriptedWindow(id: "tab-group-a", title: "")])
     }
+
+    /// Without Accessibility the order still places the window: that is how
+    /// a jump knows it needed the permission.
+    @Test func withoutAccessibilityTheOrderStillPlaces() {
+        #expect(
+            WindowPlace.of(
+                "tab-group-b", scripted: scripted, ordered: ordered, seen: nil,
+                visibleSpaces: visible) == .hidden(candidates: [ordered[1]]))
+        #expect(
+            WindowPlace.of(
+                "tab-group-a", scripted: scripted, ordered: ordered, seen: nil,
+                visibleSpaces: visible) == .showing)
+    }
+
+    /// Without Accessibility there are no titles to fall back on.
+    @Test func withoutAccessibilityTitlesCannotDecide() {
+        let ordered = [
+            OrderedWindow(number: 1, spaces: [10]), OrderedWindow(number: 2, spaces: [8]),
+            OrderedWindow(number: 3, spaces: [5]),
+        ]
+        #expect(
+            WindowPlace.of(
+                "tab-group-b", scripted: scripted, ordered: ordered, seen: nil,
+                visibleSpaces: visible) == .unknown)
+    }
 }

@@ -15,7 +15,7 @@ enum TabJumpRunner {
         let outcome: TabJump.Outcome
         /// Where the jump went before the focus, for the log.
         let route: String
-        /// Ghostty had a window on a hidden Space and this process is not
+        /// The tab's window was on a hidden Space and this process is not
         /// allowed to travel there: the Accessibility permission is missing.
         let accessibilityMissing: Bool
     }
@@ -39,11 +39,13 @@ enum TabJumpRunner {
                 case .placed(let place):
                     if case .unknown = place { route = "window not placed" }
                     step = plan.observe(place: place)
-                case .untrusted(let hiddenWindows):
-                    accessibilityMissing = hiddenWindows
+                case .untrusted(let targetHidden):
+                    // Without the permission no trip can happen; the focus
+                    // is the one the jump always made.
+                    accessibilityMissing = targetHidden
                     route =
-                        hiddenWindows
-                        ? "no travel: Accessibility not granted" : "no travel possible or needed"
+                        targetHidden
+                        ? "no travel: Accessibility not granted" : "window in view or not placed"
                     step = plan.observe(place: .unknown)
                 case .unanswered(let why):
                     route = "window not placed: \(why)"
@@ -81,11 +83,10 @@ enum TabJumpRunner {
 
     private enum Survey {
         case placed(WindowPlace)
-        /// No Accessibility permission. `hiddenWindows` is whether Ghostty
-        /// has a window on a hidden Space at all — the window server tells
-        /// that much without the permission — so a jump that could not have
-        /// needed to travel does not complain.
-        case untrusted(hiddenWindows: Bool)
+        /// No Accessibility permission. `targetHidden` is whether the order
+        /// alone placed the window on a hidden Space, so only a jump that
+        /// needed to travel asks for the permission.
+        case untrusted(targetHidden: Bool)
         case unanswered(String)
     }
 
@@ -96,10 +97,11 @@ enum TabJumpRunner {
         }
         let ordered = WindowServer.orderedWindows(ownedBy: pid)
         guard WindowServer.isTrusted else {
-            return .untrusted(
-                hiddenWindows: ordered.contains {
-                    !$0.spaces.isEmpty && !topology.shows(anyOf: $0.spaces)
-                })
+            let place = WindowPlace.of(
+                window, scripted: scripted, ordered: ordered, seen: nil,
+                visibleSpaces: topology.visibleSpaces)
+            if case .hidden = place { return .untrusted(targetHidden: true) }
+            return .untrusted(targetHidden: false)
         }
         return .placed(
             WindowPlace.of(

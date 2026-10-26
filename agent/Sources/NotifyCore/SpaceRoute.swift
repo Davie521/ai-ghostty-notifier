@@ -32,6 +32,17 @@ public struct SpaceTopology: Equatable, Sendable {
     public func shows(anyOf spaces: [UInt64]) -> Bool {
         spaces.contains { visibleSpaces.contains($0) }
     }
+
+    /// The displays that show another Space than they did in `earlier`. A
+    /// display `earlier` did not have is not a change: it was just plugged in.
+    public func changedDisplays(since earlier: SpaceTopology) -> [String] {
+        displays.compactMap { display in
+            guard
+                let before = earlier.displays.first(where: { $0.identifier == display.identifier })
+            else { return nil }
+            return before.current != display.current ? display.identifier : nil
+        }
+    }
 }
 
 /// One stretch of travel to a Space: the shortcut pressed `steps` times

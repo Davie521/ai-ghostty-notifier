@@ -86,9 +86,13 @@ public enum WindowPlace: Equatable, Sendable {
     /// hidden window. A title in view less often than it is listed could be
     /// either, and then nothing is concluded: travelling on a guess could take
     /// the user away from the very window they wanted.
+    ///
+    /// `seen` is nil without the Accessibility permission. The order still
+    /// places the window then — which is how a jump knows it needed the
+    /// permission — but titles cannot, so the fallback concludes nothing.
     public static func of(
         _ windowID: String, scripted: [ScriptedWindow], ordered: [OrderedWindow],
-        seen: [SeenWindow], visibleSpaces: Set<UInt64>
+        seen: [SeenWindow]?, visibleSpaces: Set<UInt64>
     ) -> WindowPlace {
         guard let targetIndex = scripted.firstIndex(where: { $0.id == windowID }) else {
             return .unknown
@@ -99,12 +103,13 @@ public enum WindowPlace: Equatable, Sendable {
         // Nothing of Ghostty's is out of view.
         if hidden.isEmpty { return .showing }
 
-        if placed.count == scripted.count, titlesAgree(scripted, placed, seen) {
+        if placed.count == scripted.count, titlesAgree(scripted, placed, seen ?? []) {
             let window = placed[targetIndex]
             if inView(window) { return .showing }
             return .hidden(candidates: [window] + hidden.filter { $0 != window })
         }
 
+        guard let seen else { return .unknown }
         let title = scripted[targetIndex].title
         let inViewCount = seen.filter { !title.isEmpty && $0.title == title }.count
         if inViewCount == 0 { return .hidden(candidates: hidden) }
