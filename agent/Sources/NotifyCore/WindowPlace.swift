@@ -66,21 +66,26 @@ public enum WindowPlace: Equatable, Sendable {
     /// Out of view. The ordered windows on hidden Spaces that may be it, the
     /// most likely first.
     case hidden(candidates: [OrderedWindow])
-    /// The AppleScript listing has no such window.
+    /// The listing has no such window, or nothing tells which one it is.
     case unknown
 
     /// Ghostty names its windows by their own stable ids, which nothing
     /// outside Ghostty can see; the window server knows window numbers and
     /// Spaces but, without the Screen Recording permission, no titles. The
-    /// two sides meet on what both can tell: the order, front to back, which
-    /// Ghostty's AppleScript takes from AppKit's ordered windows; and, for
-    /// windows in view, the title, which Accessibility reads. So a window
-    /// whose title Accessibility sees is showing. Otherwise the windows the
-    /// listing has and Accessibility lacks are paired, in order, with the
-    /// ordered windows on hidden Spaces — exact when the two counts agree,
-    /// else every hidden window stays a candidate and a jump confirms after
-    /// it travels. Titles are counted, not merely matched, so two windows
-    /// titled alike with one of them hidden do not pass for both showing.
+    /// two sides meet on the order: Ghostty's AppleScript lists its windows
+    /// front to back in AppKit's order, which is the window server's, and the
+    /// window server lists one ordered window per tab group in that order too.
+    /// So when the two lists are as long as each other they pair one to one,
+    /// and the pairing is checked against the titles Accessibility reads for
+    /// the windows in view; titles cannot pair windows themselves, because
+    /// shells in different windows are often titled exactly alike.
+    ///
+    /// When the lengths differ or a title contradicts the pairing, titles are
+    /// all there is. A window whose title is in view only as often as it is
+    /// listed is showing; one whose title is not in view at all may be any
+    /// hidden window. A title in view less often than it is listed could be
+    /// either, and then nothing is concluded: travelling on a guess could take
+    /// the user away from the very window they wanted.
     public static func of(
         _ windowID: String, scripted: [ScriptedWindow], ordered: [OrderedWindow],
         seen: [SeenWindow], visibleSpaces: Set<UInt64>
@@ -88,32 +93,35 @@ public enum WindowPlace: Equatable, Sendable {
         guard let targetIndex = scripted.firstIndex(where: { $0.id == windowID }) else {
             return .unknown
         }
-        var unclaimed: [String: Int] = [:]
-        for window in seen where !window.title.isEmpty {
-            unclaimed[window.title, default: 0] += 1
-        }
-        var showing = [Bool](repeating: false, count: scripted.count)
-        for (index, window) in scripted.enumerated() where !window.title.isEmpty {
-            guard let count = unclaimed[window.title], count > 0 else { continue }
-            unclaimed[window.title] = count - 1
-            showing[index] = true
-        }
-        if showing[targetIndex] { return .showing }
-
-        let hidden = ordered.filter {
-            !$0.spaces.isEmpty && !$0.spaces.contains(where: visibleSpaces.contains)
-        }
-        // Nothing of Ghostty's is out of view, whatever the titles said.
+        let placed = ordered.filter { !$0.spaces.isEmpty }
+        let inView: (OrderedWindow) -> Bool = { $0.spaces.contains(where: visibleSpaces.contains) }
+        let hidden = placed.filter { !inView($0) }
+        // Nothing of Ghostty's is out of view.
         if hidden.isEmpty { return .showing }
 
-        let hiddenIndices = scripted.indices.filter { !showing[$0] }
-        if hiddenIndices.count == hidden.count,
-            let position = hiddenIndices.firstIndex(of: targetIndex)
-        {
-            var candidates = hidden
-            let likely = candidates.remove(at: position)
-            return .hidden(candidates: [likely] + candidates)
+        if placed.count == scripted.count, titlesAgree(scripted, placed, seen) {
+            let window = placed[targetIndex]
+            if inView(window) { return .showing }
+            return .hidden(candidates: [window] + hidden.filter { $0 != window })
         }
-        return .hidden(candidates: hidden)
+
+        let title = scripted[targetIndex].title
+        let inViewCount = seen.filter { !title.isEmpty && $0.title == title }.count
+        if inViewCount == 0 { return .hidden(candidates: hidden) }
+        let listedCount = scripted.filter { $0.title == title }.count
+        return inViewCount >= listedCount ? .showing : .unknown
+    }
+
+    /// Whether every window in view pairs with a listed window of its title.
+    private static func titlesAgree(
+        _ scripted: [ScriptedWindow], _ placed: [OrderedWindow], _ seen: [SeenWindow]
+    ) -> Bool {
+        var titles: [UInt32: String] = [:]
+        for window in seen where titles[window.number] == nil {
+            titles[window.number] = window.title
+        }
+        return zip(scripted, placed).allSatisfy { listed, window in
+            titles[window.number].map { $0 == listed.title } ?? true
+        }
     }
 }

@@ -71,21 +71,65 @@ import Testing
                 visibleSpaces: visible) == .hidden(candidates: [ordered[1], ordered[2]]))
     }
 
-    /// Two windows titled alike, one in view: the title is counted, so the
-    /// hidden one is not passed off as showing.
-    @Test func aDuplicateTitleDoesNotHideAHiddenWindow() {
+    /// Two windows titled alike, one in view: the order pairs them, so the
+    /// hidden one is not passed off as showing, whichever is in front.
+    @Test(arguments: [false, true])
+    func windowsTitledAlikeArePairedByOrder(hiddenInFront: Bool) {
         let scripted = [
             ScriptedWindow(id: "tab-group-a", title: "zsh"),
             ScriptedWindow(id: "tab-group-b", title: "zsh"),
         ]
+        let showingWindow = OrderedWindow(number: 224_461, spaces: [10])
+        let hiddenWindow = OrderedWindow(number: 221_248, spaces: [8])
+        let ordered =
+            hiddenInFront ? [hiddenWindow, showingWindow] : [showingWindow, hiddenWindow]
         let seen = [SeenWindow(number: 224_461, title: "zsh")]
+        let front = WindowPlace.of(
+            "tab-group-a", scripted: scripted, ordered: ordered, seen: seen,
+            visibleSpaces: visible)
+        let back = WindowPlace.of(
+            "tab-group-b", scripted: scripted, ordered: ordered, seen: seen,
+            visibleSpaces: visible)
+        #expect(front == (hiddenInFront ? .hidden(candidates: [hiddenWindow]) : .showing))
+        #expect(back == (hiddenInFront ? .showing : .hidden(candidates: [hiddenWindow])))
+    }
+
+    /// The lists differ in length, so only titles are left, and a title in
+    /// view fewer times than it is listed could be either window: no travel.
+    @Test func anAmbiguousTitleConcludesNothing() {
+        let scripted = [
+            ScriptedWindow(id: "tab-group-a", title: "zsh"),
+            ScriptedWindow(id: "tab-group-b", title: "zsh"),
+        ]
+        let ordered = [
+            OrderedWindow(number: 1, spaces: [10]), OrderedWindow(number: 2, spaces: [8]),
+            OrderedWindow(number: 3, spaces: [5]),
+        ]
+        let seen = [SeenWindow(number: 1, title: "zsh")]
         #expect(
             WindowPlace.of(
                 "tab-group-a", scripted: scripted, ordered: ordered, seen: seen,
-                visibleSpaces: visible) == .showing)
+                visibleSpaces: visible) == .unknown)
+    }
+
+    /// A title Accessibility shows on another window than the order says
+    /// means the order is off; the titles decide instead.
+    @Test func aPairingTheTitlesContradictFallsBackToTitles() {
+        let scripted = [
+            ScriptedWindow(id: "tab-group-a", title: "alpha"),
+            ScriptedWindow(id: "tab-group-b", title: "beta"),
+        ]
+        let ordered = [
+            OrderedWindow(number: 1, spaces: [10]), OrderedWindow(number: 2, spaces: [8]),
+        ]
+        let seen = [SeenWindow(number: 1, title: "beta")]
         #expect(
             WindowPlace.of(
                 "tab-group-b", scripted: scripted, ordered: ordered, seen: seen,
+                visibleSpaces: visible) == .showing)
+        #expect(
+            WindowPlace.of(
+                "tab-group-a", scripted: scripted, ordered: ordered, seen: seen,
                 visibleSpaces: visible) == .hidden(candidates: [ordered[1]]))
     }
 
@@ -112,10 +156,13 @@ import Testing
                 visibleSpaces: visible) == .hidden(candidates: [ordered[2]]))
     }
 
+    /// With only titles to go on, an empty one is never taken as in view.
     @Test func anEmptyTitleNeverMatches() {
         let scripted = [ScriptedWindow(id: "tab-group-a", title: "")]
-        let seen = [SeenWindow(number: 1, title: "")]
-        let ordered = [OrderedWindow(number: 1, spaces: [8])]
+        let seen = [SeenWindow(number: 9, title: "")]
+        let ordered = [
+            OrderedWindow(number: 1, spaces: [8]), OrderedWindow(number: 2, spaces: [5]),
+        ]
         #expect(
             WindowPlace.of(
                 "tab-group-a", scripted: scripted, ordered: ordered, seen: seen,
