@@ -123,6 +123,14 @@ In **System Settings → Notifications → AI Ghostty Notifier**, choose
 Allow the app in any Focus modes you use. External notification backends require
 their own notification authorization.
 
+If you keep Ghostty windows on more than one Space, also allow
+**Accessibility** when macOS asks. It asks the first time a click finds the
+session's window on a Space you are not looking at: going there takes a press
+of your own "Move left/right a space" shortcut, and macOS lets an app send that
+only with this permission. Without it the click still selects the tab but
+brings its window to the Space you are on, and the menu bar item says what is
+missing. Nothing else uses the permission.
+
 Restart open Claude/Codex sessions to load their hook registrations and settings.
 The app's menu bar item shows authorization and alert-style status — a problem
 System Settings can fix links straight to it — and lists the sessions waiting
@@ -289,6 +297,18 @@ What the notification is able to say, and how it finds the tab:
   reads back which tab is selected. A read that arrives before Ghostty has
   finished the switch gets one settle re-read, and a selection that truly did
   not move gets one more focus command; the log records which of these it took.
+- A click takes you to the window, not the window to you. When the session's
+  window is on a Space you are not looking at and Ghostty has a window in view
+  elsewhere, macOS moves the window to your Space as Ghostty brings it forward
+  (#63). So the jump first asks the window server which Space the window is on
+  and presses your "Move left/right a space" shortcut on that display, with the
+  pointer moved there for the moment, until that Space shows; only then does it
+  focus the tab. Every press is checked, and a press that switched another
+  display is undone. This needs the Accessibility permission and the shortcut
+  switched on under **System Settings → Keyboard → Keyboard Shortcuts →
+  Mission Control**; without either, the jump focuses as before.
+  `ghostty-notify-agent --where <tab-id>` prints what a jump to that tab would
+  find, and changes nothing.
   Switching tabs inside Ghostty activates no app, so while Ghostty is in front
   and a notification waits on a known tab, the app also reads the selected tab
   once a second; that stops as soon as either no longer holds.
@@ -360,6 +380,11 @@ without removing any of the macOS-specific integration.
   binding degrades to activation only, with retry/backoff; a closed tab cannot
   be reopened by clicking. Title restoration is best effort during terminal or
   Automation failures, not an unconditional guarantee.
+- **A click brings the window to your Space instead of taking you there:**
+  allow Accessibility for the app (the menu bar item links to it) and keep
+  "Move left/right a space" switched on. Moving the mouse while the Space
+  switches can send a press to the other display; that press is undone and the
+  jump falls back to focusing. The log's `jump:` line says which way it went.
 - **Old notifications after an upgrade:** dismiss stale pre-upgrade notices and
   test a freshly posted one; macOS may no longer route the old sender identity.
 - macOS/Ghostty only. Terminal CLI ownership is required for Codex notifications,
@@ -434,6 +459,18 @@ needs two Ghostty windows already open. It focuses the source tab, asks the
 runtime to focus the target, and asserts that the target's window actually came
 to the front, because Ghostty's own selected-tab property reported success while
 the window stayed behind. It takes `GHOSTTY_NOTIFY_NATIVE_APP` only.
+
+A fourth, `bash tests/test-live-space-hop.sh [executable]`, is the regression
+for #63. It needs a display with at least two Spaces whose current Space has
+none of your Ghostty windows, Accessibility for Ghostty (the script's shell
+inherits it), and the default Control-arrow shortcuts. It opens a two-tab
+window of its own, parks it on that display, switches the display one Space
+away, and runs the jump through `--focus`. It passes when the display is back
+on the window's Space, no other display moved, and the background tab is
+selected; then it closes its window and puts every display back. Keep your
+hands off the mouse while it runs, because the shortcut acts on the display
+under the pointer. It tests the installed app unless given a build's
+executable, which needs the `--where` mode this check reads.
 
 The tab is the fixture. Each check writes markers into its title, expects every
 lookup to find them, and leaves the tab with Ghostty's default title, whatever

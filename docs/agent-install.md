@@ -178,9 +178,12 @@ the install is not finished until they are done:
    **Persistent** if the alert and its button should stay on screen.
 2. Allow **Automation** control of Ghostty when macOS asks. Without it the
    notification can only activate Ghostty, not jump to the exact tab.
-3. Allow the app in any Focus modes they use, or the notification is held back.
-4. In Codex, run `/hooks` and trust the new entries (step 3).
-5. Restart every Claude Code / Codex session that is already open, including the
+3. If they keep Ghostty windows on more than one Space, allow
+   **Accessibility** when macOS asks, the first time a click has to switch
+   Spaces. Without it the click brings the window over instead of going to it.
+4. Allow the app in any Focus modes they use, or the notification is held back.
+5. In Codex, run `/hooks` and trust the new entries (step 3).
+6. Restart every Claude Code / Codex session that is already open, including the
    one you are running in. Hook registrations load at session start.
 
 Tell them too that tasks under 3 minutes never notify, so a quick prompt to try
