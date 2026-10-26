@@ -512,4 +512,25 @@ struct DisplayNameTests {
             #expect(state.accessibilityDescription.hasPrefix(AgentConstants.displayName + ": "))
         }
     }
+
+    /// The Accessibility line shows only after a jump needed it, links to
+    /// its own pane, and never pushes a notification problem aside.
+    @Test func theAccessibilityLineShowsOnlyWhenAJumpNeededIt() {
+        #expect(
+            MenuStatusLine.block(permission: .granted, alertStyle: "alert").map(\.opens) == [nil])
+        let missing = MenuStatusLine.block(
+            permission: .granted, alertStyle: "alert", accessibilityMissing: true)
+        #expect(missing.count == 2)
+        #expect(missing.first?.tone == .ok)
+        #expect(missing.last?.opens == .accessibility)
+        #expect(missing.last?.opensSettings == false)
+        #expect(missing.last?.tone == .problem)
+        let banner = MenuStatusLine.block(
+            permission: .granted, alertStyle: "banner", accessibilityMissing: true)
+        #expect(banner.map(\.opens) == [.notifications, .accessibility])
+        // Without notifications nothing else matters yet.
+        let denied = MenuStatusLine.block(
+            permission: .denied, alertStyle: "none", accessibilityMissing: true)
+        #expect(denied.map(\.opens) == [.notifications])
+    }
 }

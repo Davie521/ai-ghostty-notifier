@@ -12,6 +12,28 @@ public struct ScriptedWindow: Equatable, Sendable {
     }
 }
 
+extension ScriptedWindow {
+    /// The locate script's reply: the id of the window holding the tab, then
+    /// every window's id and title, records split by U+001E and fields by
+    /// U+001F, which no title contains. Nil is a failed script, which is
+    /// "don't know", never "not there": the script says that with an empty
+    /// first field.
+    public static func locateReply(_ answer: String?) -> (TabJump.Probe, [ScriptedWindow]) {
+        guard let answer else { return (.unknown, []) }
+        var records = answer.split(separator: "\u{1E}", omittingEmptySubsequences: false)
+        guard !records.isEmpty else { return (.unknown, []) }
+        let found = String(records.removeFirst())
+        let windows = records.compactMap { record -> ScriptedWindow? in
+            let fields = record.split(
+                separator: "\u{1F}", maxSplits: 1, omittingEmptySubsequences: false)
+            guard let id = fields.first, !id.isEmpty else { return nil }
+            return ScriptedWindow(id: String(id), title: fields.count > 1 ? String(fields[1]) : "")
+        }
+        guard !found.isEmpty else { return (.notFound, windows) }
+        return (.found(window: found), windows)
+    }
+}
+
 /// One of Ghostty's windows as the window server orders them, front to back:
 /// only the window of a tab group's selected tab is ordered in, so there is one
 /// of these per group. `spaces` are the Spaces it sits on.

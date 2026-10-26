@@ -121,4 +121,30 @@ import Testing
                 "tab-group-a", scripted: scripted, ordered: ordered, seen: seen,
                 visibleSpaces: visible) == .hidden(candidates: ordered))
     }
+
+    @Test func theLocateReplyNamesTheWindowAndListsTheRest() {
+        let reply =
+            "tab-group-b\u{1E}tab-group-a\u{1F}✳ backend\u{1E}tab-group-b\u{1F}yifan@mac:~\u{1E}"
+        let (probe, windows) = ScriptedWindow.locateReply(reply)
+        #expect(probe == .found(window: "tab-group-b"))
+        #expect(windows == scripted)
+    }
+
+    @Test func aLocateReplyWithNoWindowIdMeansNotFound() {
+        let (probe, windows) = ScriptedWindow.locateReply("\u{1E}tab-group-a\u{1F}zsh\u{1E}")
+        #expect(probe == .notFound)
+        #expect(windows == [ScriptedWindow(id: "tab-group-a", title: "zsh")])
+    }
+
+    /// A script that failed is not "no such tab".
+    @Test func noLocateReplyIsUnknown() {
+        let (probe, windows) = ScriptedWindow.locateReply(nil)
+        #expect(probe == .unknown)
+        #expect(windows.isEmpty)
+    }
+
+    @Test func aTitleMayBeEmpty() {
+        let (_, windows) = ScriptedWindow.locateReply("x\u{1E}tab-group-a\u{1F}\u{1E}")
+        #expect(windows == [ScriptedWindow(id: "tab-group-a", title: "")])
+    }
 }

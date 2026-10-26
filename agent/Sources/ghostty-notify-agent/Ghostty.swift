@@ -86,24 +86,7 @@ enum Ghostty {
                 """, label: "locate"
             ) { continuation.resume(returning: $0) }
         }
-        return locateAnswer(answer)
-    }
-
-    /// The locate script's reply. Nil is a failed script, which is "don't
-    /// know", never "not there": the script says so with an empty first field.
-    static func locateAnswer(_ answer: String?) -> (TabJump.Probe, [ScriptedWindow]) {
-        guard let answer else { return (.unknown, []) }
-        var records = answer.split(separator: "\u{1E}", omittingEmptySubsequences: false)
-        guard !records.isEmpty else { return (.unknown, []) }
-        let found = String(records.removeFirst())
-        let windows = records.compactMap { record -> ScriptedWindow? in
-            let fields = record.split(
-                separator: "\u{1F}", maxSplits: 1, omittingEmptySubsequences: false)
-            guard let id = fields.first, !id.isEmpty else { return nil }
-            return ScriptedWindow(id: String(id), title: fields.count > 1 ? String(fields[1]) : "")
-        }
-        guard !found.isEmpty else { return (.notFound, windows) }
-        return (.found(window: found), windows)
+        return ScriptedWindow.locateReply(answer)
     }
 
     static func focus(tabID: String) async -> String? {
