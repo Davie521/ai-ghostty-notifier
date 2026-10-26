@@ -130,10 +130,12 @@ public enum SpaceWalk {
         }
     }
 
-    /// Walks `spot.display` back to `spot.space`, allowing it a step's time for
-    /// every Space between and an undo on top: the walk back after a trip that
-    /// gave up, and the putting back of a trip that arrived at the wrong
-    /// window. The process's end bounds it as it bounds every press.
+    /// Walks `spot.display` back to `spot.space`: the walk back after a trip
+    /// that gave up, and the putting back of a trip that arrived at the wrong
+    /// window. It is allowed a step's time for every Space between, an undo on
+    /// top, and two steps for each press it may retry after one that landed
+    /// on another display — that press and its undo bring it no nearer. The
+    /// process's end bounds it as it bounds every press.
     @MainActor
     public static func goBack(to spot: SpaceSpot, driver: some SpaceWalkDriver) async -> Outcome {
         guard let topology = driver.topology() else { return .stopped("no Space topology") }
@@ -143,7 +145,7 @@ public enum SpaceWalk {
         case .unreachable: return .stopped("Space \(spot.space) is out of reach")
         case .hop(let hop): steps = hop.steps
         }
-        let allowance = Double(steps) * stepSeconds + undoSeconds
+        let allowance = Double(steps + 2 * maxStrayRetries) * stepSeconds + undoSeconds
         return await walk(
             to: spot.space, deadline: driver.now().addingTimeInterval(allowance), leg: .back,
             driver: driver)

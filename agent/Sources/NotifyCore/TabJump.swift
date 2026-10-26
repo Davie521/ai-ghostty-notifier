@@ -140,8 +140,10 @@ public struct TabJump: Equatable, Sendable {
     public var start: Step { .locate }
 
     /// The jump is to stop where it stands: the app is quitting. Whatever step
-    /// was next is not taken.
-    public func abandon() -> Step { .stop(.abandoned) }
+    /// was next is not taken — except putting back displays a trip moved.
+    /// The jump did not get to see its window in view, so the Space a trip
+    /// left in view may well be the wrong one.
+    public mutating func abandon() -> Step { putBackFirst(then: .stop(.abandoned)) }
 
     /// What the lookup found.
     public mutating func observe(probe: Probe) -> Step {
@@ -171,7 +173,11 @@ public struct TabJump: Equatable, Sendable {
             return .locate
         case .hidden(let candidates):
             self.candidates = candidates
-            return nextHop() ?? putBackFirst(then: .focus)
+            // A display an earlier trip moved goes back before the next trip:
+            // that trip arrived where the window turned out not to be, and the
+            // next one may well be on another display.
+            guard let next = nextHop() else { return putBackFirst(then: .focus) }
+            return putBackFirst(then: next)
         }
     }
 

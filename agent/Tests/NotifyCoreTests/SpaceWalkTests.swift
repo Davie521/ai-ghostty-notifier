@@ -380,4 +380,20 @@ final class FakeSpaces: SpaceWalkDriver {
             await SpaceWalk.goBack(to: SpaceSpot(display: "A", space: 1), driver: fake)
                 == .arrived(presses: 0, strayRetries: 0))
     }
+
+    /// One Space back, with presses that take their time, and the first one
+    /// landing on the other display: that press and its undo bring the walk no
+    /// nearer, and are budgeted for.
+    @Test func aWalkBackHasTimeForAPressThatLandsOnTheOtherDisplay() async {
+        let fake = FakeSpaces([
+            SpaceTopology.Display(identifier: "A", spaces: [1, 2, 3], current: 2),
+            SpaceTopology.Display(identifier: "B", spaces: [10, 11], current: 11),
+        ])
+        fake.switchSeconds = 0.8
+        fake.effects = [.stray("B")]
+        let outcome = await SpaceWalk.goBack(to: SpaceSpot(display: "A", space: 1), driver: fake)
+        #expect(outcome == .arrived(presses: 1, strayRetries: 1))
+        #expect(fake.current("A") == 1)
+        #expect(fake.current("B") == 11)
+    }
 }

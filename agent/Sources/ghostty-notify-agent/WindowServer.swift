@@ -144,29 +144,44 @@ enum WindowServer {
 
     /// Ghostty's windows as Accessibility lists them — those on Spaces in
     /// view — with their titles. Empty without the Accessibility permission.
-    static func seenWindows(ownedBy pid: pid_t) -> [SeenWindow] {
-        guard isTrusted, let elementWindowNumber else { return [] }
+    /// The longest a read of Ghostty's windows may take, all of them.
+    static let seenWindowsBudget = 1.5
+
+    /// Nil when Ghostty did not answer in time: a busy Ghostty must not hold
+    /// the click, and the main actor, for a second per window. A partial list
+    /// is no answer either — a window left out of it would be taken for one
+    /// out of view — so the jump then travels nowhere.
+    static func seenWindows(ownedBy pid: pid_t) -> [SeenWindow]? {
+        guard isTrusted, let elementWindowNumber else { return nil }
+        let until = Date().addingTimeInterval(seenWindowsBudget)
         let application = AXUIElementCreateApplication(pid)
-        // A Ghostty that is busy must not hold the click for long.
         AXUIElementSetMessagingTimeout(application, 1)
         var value: CFTypeRef?
         guard
             AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &value)
                 == .success, let windows = value as? [AXUIElement]
-        else { return [] }
+        else { return nil }
         var seen: [SeenWindow] = []
         for element in windows {
+            guard Date() < until else { return nil }
             // A timeout set on the application does not carry over to the
             // window elements it returns.
             AXUIElementSetMessagingTimeout(element, 1)
             var number: CGWindowID = 0
-            guard elementWindowNumber(element, &number) == .success else { continue }
             var title: CFTypeRef?
-            let read = AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &title)
-            // A Ghostty that stopped answering will not answer the next one either.
-            if read == .cannotComplete { break }
             var minimized: CFTypeRef?
-            AXUIElementCopyAttributeValue(element, kAXMinimizedAttribute as CFString, &minimized)
+            // A Ghostty that stopped answering will not answer the next one
+            // either; another failure means the element went away meanwhile.
+            switch elementWindowNumber(element, &number) {
+            case .success: break
+            case .cannotComplete: return nil
+            default: continue
+            }
+            let titleRead = AXUIElementCopyAttributeValue(
+                element, kAXTitleAttribute as CFString, &title)
+            let minimizedRead = AXUIElementCopyAttributeValue(
+                element, kAXMinimizedAttribute as CFString, &minimized)
+            if titleRead == .cannotComplete || minimizedRead == .cannotComplete { return nil }
             seen.append(
                 SeenWindow(
                     number: number, title: title as? String ?? "",

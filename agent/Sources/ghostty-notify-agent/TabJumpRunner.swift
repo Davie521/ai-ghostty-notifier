@@ -141,10 +141,12 @@ enum TabJumpRunner {
                 visibleSpaces: topology.visibleSpaces)
             return .untrusted(mayBeOutOfView: place.mayBeOutOfView)
         }
+        guard let seen = WindowServer.seenWindows(ownedBy: pid) else {
+            return .unanswered("Ghostty did not answer Accessibility in time")
+        }
         return .placed(
             WindowPlace.of(
-                window, scripted: scripted, ordered: ordered,
-                seen: WindowServer.seenWindows(ownedBy: pid),
+                window, scripted: scripted, ordered: ordered, seen: seen,
                 visibleSpaces: topology.visibleSpaces))
     }
 
