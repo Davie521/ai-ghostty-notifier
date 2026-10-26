@@ -22,12 +22,27 @@ enum TabJumpRunner {
 
     /// `deadline` is when the caller's process will be ended, if it will be;
     /// a trip to another Space keeps clear of it.
+    /// How long a jump waits for another one, in this process or another, to
+    /// finish before it goes on without travelling.
+    static let leaseWait = 10.0
+
     static func run(tabID: String, deadline: Date? = nil) async -> Report {
         var plan = TabJump(requested: tabID)
         var step = plan.start
         var scripted: [ScriptedWindow] = []
         var route = "window in view"
         var accessibilityMissing = false
+        // One jump at a time across processes: the resident's and the
+        // `--focus` mode's would interleave their presses and take each
+        // other's Space changes for their own. Held to the end, putting back
+        // included. Without it — another jump stuck for longer than the wait —
+        // this one still focuses, but travels nowhere.
+        var wait = Date().addingTimeInterval(leaseWait)
+        if let deadline {
+            wait = min(wait, deadline.addingTimeInterval(-SpaceHopper.focusReserveSeconds))
+        }
+        let lease = await jumpLease(until: wait)
+        defer { lease?.release() }
         /// The last trip, once it has arrived, for the log.
         var travelled: String?
         while true {
@@ -50,7 +65,7 @@ enum TabJumpRunner {
                 if probe == .unknown { route = "window not located" }
                 step = plan.observe(probe: probe)
             case .survey(let window):
-                let survey = survey(window: window, scripted: scripted)
+                let survey = survey(window: window, scripted: scripted, leased: lease != nil)
                 switch survey {
                 case .placed(let place):
                     if let travelled {
@@ -129,7 +144,26 @@ enum TabJumpRunner {
         case unanswered(String)
     }
 
-    private static func survey(window: String, scripted: [ScriptedWindow]) -> Survey {
+    /// The lease every jump holds while it runs; nil when another jump held it
+    /// until `deadline`, when this jump was cancelled meanwhile, or when the
+    /// lock file cannot be had.
+    private static func jumpLease(until deadline: Date) async -> FileLease? {
+        guard let paths = try? AgentPaths(env: ProcessInfo.processInfo.environment) else {
+            return nil
+        }
+        while true {
+            // A try, not a wait: `FileLease` waits by blocking its thread,
+            // and this is the main actor.
+            if let lease = FileLease.acquire(paths.root + "/jump", timeout: 0) { return lease }
+            guard Date() < deadline, !Task.isCancelled else { return nil }
+            await withCheckedContinuation { continuation in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { continuation.resume() }
+            }
+        }
+    }
+
+    private static func survey(window: String, scripted: [ScriptedWindow], leased: Bool) -> Survey {
+        guard leased else { return .unanswered("another jump was still under way") }
         guard let pid = Ghostty.processID else { return .unanswered("Ghostty not running") }
         guard let topology = WindowServer.topology() else {
             return .unanswered("no Space topology")

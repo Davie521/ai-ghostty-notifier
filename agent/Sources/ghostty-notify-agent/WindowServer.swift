@@ -154,8 +154,14 @@ enum WindowServer {
     static func seenWindows(ownedBy pid: pid_t) -> [SeenWindow]? {
         guard isTrusted, let elementWindowNumber else { return nil }
         let until = Date().addingTimeInterval(seenWindowsBudget)
+        // Each read waits at most what is left of the budget, so the budget
+        // holds within a window's reads as well as between windows.
+        func timeout() -> Float? {
+            let left = until.timeIntervalSinceNow
+            return left > 0 ? Float(min(1, left)) : nil
+        }
         let application = AXUIElementCreateApplication(pid)
-        AXUIElementSetMessagingTimeout(application, 1)
+        AXUIElementSetMessagingTimeout(application, timeout() ?? 0.01)
         var value: CFTypeRef?
         guard
             AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &value)
@@ -163,10 +169,10 @@ enum WindowServer {
         else { return nil }
         var seen: [SeenWindow] = []
         for element in windows {
-            guard Date() < until else { return nil }
             // A timeout set on the application does not carry over to the
             // window elements it returns.
-            AXUIElementSetMessagingTimeout(element, 1)
+            guard let first = timeout() else { return nil }
+            AXUIElementSetMessagingTimeout(element, first)
             var number: CGWindowID = 0
             var title: CFTypeRef?
             var minimized: CFTypeRef?
@@ -177,11 +183,20 @@ enum WindowServer {
             case .cannotComplete: return nil
             default: continue
             }
-            let titleRead = AXUIElementCopyAttributeValue(
-                element, kAXTitleAttribute as CFString, &title)
-            let minimizedRead = AXUIElementCopyAttributeValue(
-                element, kAXMinimizedAttribute as CFString, &minimized)
-            if titleRead == .cannotComplete || minimizedRead == .cannotComplete { return nil }
+            guard let second = timeout() else { return nil }
+            AXUIElementSetMessagingTimeout(element, second)
+            if AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &title)
+                == .cannotComplete
+            {
+                return nil
+            }
+            guard let third = timeout() else { return nil }
+            AXUIElementSetMessagingTimeout(element, third)
+            if AXUIElementCopyAttributeValue(element, kAXMinimizedAttribute as CFString, &minimized)
+                == .cannotComplete
+            {
+                return nil
+            }
             seen.append(
                 SeenWindow(
                     number: number, title: title as? String ?? "",
