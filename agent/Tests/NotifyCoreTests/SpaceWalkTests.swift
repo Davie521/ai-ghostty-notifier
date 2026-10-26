@@ -208,4 +208,21 @@ final class FakeSpaces: SpaceWalkDriver {
             outcome == .failed("the move-a-space shortcut is switched off, or the display is gone"))
         #expect(fake.current("A") == 1)
     }
+
+    /// On the way back, close to the end: a press that lands on the other
+    /// display and an undo that waits in vain must both fit before it.
+    @Test func aStrayPressOnTheWayBackStillEndsBeforeTheHardDeadline() async {
+        let fake = spaces()
+        let start = fake.clock
+        // One step out, then a dead press: the trip gives up 2.25 s in.
+        fake.effects = [.aimed, .nothing, .stray("B"), .nothing]
+        let hard = start.addingTimeInterval(2.25 + 1.6)
+        let outcome = await SpaceWalk.travel(
+            to: 6, deadline: plenty(fake), hardDeadline: hard, driver: fake)
+        guard case .failed = outcome else {
+            Issue.record("expected a failure, got \(outcome)")
+            return
+        }
+        #expect(fake.clock <= hard)
+    }
 }

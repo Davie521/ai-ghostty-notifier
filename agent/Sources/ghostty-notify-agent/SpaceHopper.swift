@@ -47,6 +47,10 @@ enum SpaceHopper {
     /// the hook runtime's `--focus` mode has one, and ends with `_exit`, which
     /// leaves no chance to put the pointer back. The trip ends early enough to
     /// leave the focus its time.
+    /// Whether a trip is under way; shutdown waits for it, because the
+    /// pointer is put back only at its end.
+    private(set) static var isTravelling = false
+
     static func travel(to window: OrderedWindow, before callerDeadline: Date? = nil) async
         -> Outcome
     {
@@ -61,7 +65,11 @@ enum SpaceHopper {
             hardDeadline = callerDeadline.addingTimeInterval(-hardReserveSeconds)
         }
         let pointerBefore = WindowServer.pointer
-        defer { if let pointerBefore { WindowServer.movePointer(to: pointerBefore) } }
+        isTravelling = true
+        defer {
+            if let pointerBefore { WindowServer.movePointer(to: pointerBefore) }
+            isTravelling = false
+        }
         let outcome = await SpaceWalk.travel(
             to: space, deadline: deadline, hardDeadline: hardDeadline, driver: LiveDriver())
         switch outcome {

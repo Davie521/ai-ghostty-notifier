@@ -57,6 +57,9 @@ public enum SpaceWalk {
     public static let maxStrayRetries = 2
     /// The longest a walk back may take, after a trip that gave up.
     public static let maxWalkBackSeconds = 8.0
+    /// What undoing a stray press may take: its press, its wait, and the
+    /// pointer's move before it.
+    static let undoSeconds = pressTimeout + settleAfterPress + 0.5
 
     /// Goes to `space` and, should the trip give up part-way, back to where
     /// the display was: the focus that follows a failed trip brings the window
@@ -83,7 +86,11 @@ public enum SpaceWalk {
             guard let start, driver.topology()?.current(on: first.display) != start else {
                 return .failed(why)
             }
-            let back = min(driver.now().addingTimeInterval(maxWalkBackSeconds), hardDeadline)
+            // A press on the way back may land on the other display too, and
+            // its undo waits as long as the press did; both must fit.
+            let back = min(
+                driver.now().addingTimeInterval(maxWalkBackSeconds),
+                hardDeadline.addingTimeInterval(-undoSeconds))
             switch await walk(to: start, deadline: back, driver: driver) {
             case .arrived: return .failed("\(why); went back")
             case .stopped(let backWhy): return .failed("\(why); could not go back: \(backWhy)")

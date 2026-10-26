@@ -172,6 +172,12 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         readiness.close()
         spool?.stop()
         Task {
+            // A trip to another Space puts the pointer back only at its end.
+            // Let one under way finish, for a bounded while.
+            let until = Date().addingTimeInterval(Agent.travelShutdownGrace)
+            while SpaceHopper.isTravelling, Date() < until {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
             await hookProcessor.shutdown()
             sender.reply(toApplicationShouldTerminate: true)
         }
@@ -297,6 +303,8 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private var accessibilityMissing = false
     /// The jump running now, if any; the next one waits for it.
     private var jumpInFlight: Task<Void, Never>?
+    /// How long shutdown waits for a trip under way: one trip, and a little.
+    static let travelShutdownGrace = SpaceHopper.maxTripSeconds + 2
     /// How long after posting a notification is left out of reconciliation.
     private static let deliverySettleSeconds: Double = 5
 
@@ -566,6 +574,10 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             tabID = Agent.persistedTabID(paths: paths, sessionID: sessionID)
         }
         if tabID == nil { tabID = fallbackTabID }
+        guard !shuttingDown else {
+            log("jump: skipped, the agent is shutting down")
+            return
+        }
         guard let tabID else {
             // No tab was ever resolved (tmux, unscriptable Ghostty). Front the
             // app so the user is one keystroke away instead of nowhere.
@@ -589,6 +601,7 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         let previous = jumpInFlight
         jumpInFlight = Task { @MainActor [weak self] in
             await previous?.value
+            guard self?.shuttingDown == false else { return }
             let report = await TabJumpRunner.run(tabID: tabID)
             self?.finishJump(report)
         }
