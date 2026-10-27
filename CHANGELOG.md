@@ -3,7 +3,7 @@
 What changed in each release. The one-command installer always fetches the
 latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-notifier/releases).
 
-## Unreleased
+## 0.7.0 — 2026-10-27
 
 ### Fixed
 
@@ -11,8 +11,9 @@ latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-n
   Space takes you to that Space, instead of bringing the window to yours. The
   jump presses your own "Move left/right a space" shortcut on that display until
   the window's Space shows, then selects the tab. This needs the Accessibility
-  permission, which macOS asks for the first time a click needs it; without it
-  a click works as before and the menu bar item says what is missing (#63).
+  permission, which macOS asks for the first time a click needs it, and both
+  shortcuts switched on, as they are by default; without them a click works as
+  before, and the menu bar item says when the permission is missing (#63).
 
 ### Added
 
