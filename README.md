@@ -41,8 +41,9 @@ in one project.
 - **A menu bar list** of the sessions waiting on you.
 - **In your language.** Notifications and the menu bar in English or Simplified
   Chinese, following macOS.
-- **Nothing extra.** No Node, no telemetry, no network, no Accessibility
-  permission. Signed with a Developer ID and notarized by Apple.
+- **Nothing extra.** No Node, no telemetry, no network; the Accessibility
+  permission only if a click has to switch Spaces. Signed with a Developer ID
+  and notarized by Apple.
 
 ## Why not the built-in notifications?
 

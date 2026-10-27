@@ -19,28 +19,47 @@ public final class FileLease {
     /// `timeout` 0 tries once. Nil when the lock is held elsewhere for that
     /// long, or the file cannot be created.
     public static func acquire(_ path: String, timeout: Double = 1) -> FileLease? {
-        let file = path + ".flock"
         let deadline = ProcessInfo.processInfo.systemUptime + timeout
         repeat {
-            // O_CLOEXEC: a notification backend started while this is held must
-            // not inherit the descriptor, and with it the lock.
-            let descriptor = open(file, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
-            guard descriptor >= 0 else { return nil }
-            if flock(descriptor, LOCK_EX | LOCK_NB) == 0 {
-                // Pruning may have removed the file since it was opened. A lock
-                // on a file that is no longer at this path excludes nobody.
-                var mine = stat()
-                var current = stat()
-                if fstat(descriptor, &mine) == 0, stat(file, &current) == 0,
-                    mine.st_ino == current.st_ino, mine.st_dev == current.st_dev
-                {
-                    return FileLease(descriptor)
-                }
+            switch attempt(path) {
+            case .acquired(let lease): return lease
+            case .unavailable: return nil
+            case .held: break
             }
-            close(descriptor)
             if ProcessInfo.processInfo.systemUptime >= deadline { return nil }
             Thread.sleep(forTimeInterval: 0.01)
         } while true
+    }
+
+    public enum Attempt {
+        case acquired(FileLease)
+        /// Someone else holds it, or held it at the moment of the try.
+        case held
+        /// The lock file cannot be opened or created: nobody can hold it.
+        case unavailable
+    }
+
+    /// One try that never waits, and tells a lock held elsewhere from a lock
+    /// file that cannot be had at all.
+    public static func attempt(_ path: String) -> Attempt {
+        let file = path + ".flock"
+        // O_CLOEXEC: a notification backend started while this is held must
+        // not inherit the descriptor, and with it the lock.
+        let descriptor = open(file, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else { return .unavailable }
+        if flock(descriptor, LOCK_EX | LOCK_NB) == 0 {
+            // Pruning may have removed the file since it was opened. A lock
+            // on a file that is no longer at this path excludes nobody.
+            var mine = stat()
+            var current = stat()
+            if fstat(descriptor, &mine) == 0, stat(file, &current) == 0,
+                mine.st_ino == current.st_ino, mine.st_dev == current.st_dev
+            {
+                return .acquired(FileLease(descriptor))
+            }
+        }
+        close(descriptor)
+        return .held
     }
 
     /// Removes a lock file nobody holds. Taken first, so that it cannot vanish

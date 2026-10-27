@@ -61,15 +61,24 @@ struct MacTerminalAutomation: TerminalAutomationProviding {
         }
     }
     func focus(tabID: String?) async {
-        if let tabID {
-            let selected = await withCheckedContinuation { continuation in
-                Ghostty.focus(tabID: tabID) { continuation.resume(returning: $0) }
-            }
-            if selected == tabID { return }
+        // This runs in the short-lived `--focus` mode, which its own deadline
+        // ends with `_exit`.
+        guard let tabID else {
+            // No tab to go to: Ghostty brought forward, in turn like a jump.
+            // Not when stopping: with nobody waiting for it, it could pull a
+            // window across Spaces.
+            guard !Task.isCancelled else { return }
+            _ = await TabJumpRunner.activateGhostty(
+                deadline: NativeLifecycle.deadline, activatesItself: true)
+            return
         }
-        await MainActor.run {
-            NSApplication.shared.activate(ignoringOtherApps: true)
-            Ghostty.activate()
+        // The same jump as a notification click, trip to the window's Space
+        // included, so a jump sent from a shell checks what a click does. A
+        // jump that could not select its tab brings Ghostty forward itself.
+        let report = await TabJumpRunner.run(
+            tabID: tabID, deadline: NativeLifecycle.deadline, activatesItself: true)
+        if let paths = try? AgentPaths(env: ProcessInfo.processInfo.environment) {
+            AgentLog.append(TabJumpRun.describe(report), to: paths.log)
         }
     }
     func isFrontmost() async -> Bool? {

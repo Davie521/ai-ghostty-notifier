@@ -3,6 +3,23 @@
 What changed in each release. The one-command installer always fetches the
 latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-notifier/releases).
 
+## Unreleased
+
+### Fixed
+
+- Clicking a notification for a session whose Ghostty window is on another
+  Space takes you to that Space, instead of bringing the window to yours. The
+  jump presses your own "Move left/right a space" shortcut on that display until
+  the window's Space shows, then selects the tab. This needs the Accessibility
+  permission, which macOS asks for the first time a click needs it; without it
+  a click works as before and the menu bar item says what is missing (#63).
+
+### Added
+
+- `ghostty-notify-agent --where <tab-id>` prints what a jump to that tab would
+  find — its window, that window's Space, whether it is in view — and changes
+  nothing.
+
 ## 0.6.2 — 2026-10-06
 
 ### Fixed

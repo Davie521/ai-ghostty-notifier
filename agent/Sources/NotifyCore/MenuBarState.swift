@@ -154,6 +154,15 @@ public enum MenuStatusTone: Equatable, Sendable {
     case problem
 }
 
+/// A pane of System Settings a status line can open.
+public enum SettingsPane: Equatable, Sendable {
+    /// This app's notification settings.
+    case notifications
+    /// Privacy & Security → Accessibility, where a trip to another Space is
+    /// allowed.
+    case accessibility
+}
+
 /// One line of the status block at the top of the menu.
 ///
 /// Decided here rather than in the AppKit half so that what the menu says, in
@@ -161,16 +170,22 @@ public enum MenuStatusTone: Equatable, Sendable {
 public struct MenuStatusLine: Equatable, Sendable {
     public let tone: MenuStatusTone
     public let text: String
-    /// Whether the line is a button to this app's notification settings. True
-    /// exactly where that pane holds the fix — and it has to be: a menu item
-    /// that does nothing is drawn disabled, dimmed to the same grey as
-    /// "everything is fine", which is the wrong look for a problem.
-    public let opensSettings: Bool
+    /// The settings pane the line is a button to, where one holds the fix —
+    /// and it has to be: a menu item that does nothing is drawn disabled,
+    /// dimmed to the same grey as "everything is fine", which is the wrong
+    /// look for a problem.
+    public let opens: SettingsPane?
+    /// Whether the line opens this app's notification settings.
+    public var opensSettings: Bool { opens == .notifications }
 
     public init(tone: MenuStatusTone, text: String, opensSettings: Bool = false) {
+        self.init(tone: tone, text: text, opens: opensSettings ? .notifications : nil)
+    }
+
+    public init(tone: MenuStatusTone, text: String, opens: SettingsPane?) {
         self.tone = tone
         self.text = text
-        self.opensSettings = opensSettings
+        self.opens = opens
     }
 
     /// The status block.
@@ -179,8 +194,13 @@ public struct MenuStatusLine: Equatable, Sendable {
     /// only pushed the waiting sessions further down. Otherwise one line per
     /// part that is not in order, so a problem is never folded into a summary
     /// the user has to unpack.
+    ///
+    /// `accessibilityMissing` adds a line when a click's jump found Ghostty's
+    /// window on another Space and could not go there for want of the
+    /// Accessibility permission. Only then: the permission is optional, and
+    /// a user who never uses Spaces should not be told to grant it.
     public static func block(
-        permission: NotificationPermission, alertStyle: String
+        permission: NotificationPermission, alertStyle: String, accessibilityMissing: Bool = false
     ) -> [MenuStatusLine] {
         let permissionLine = Self.permission(permission)
         // Without permission there is no alert style to speak of — macOS
@@ -188,17 +208,26 @@ public struct MenuStatusLine: Equatable, Sendable {
         // repeat the first one with a different fix.
         if let permissionLine, permissionLine.tone == .problem { return [permissionLine] }
 
+        let accessibility =
+            accessibilityMissing
+            ? [
+                MenuStatusLine(
+                    tone: .problem,
+                    text: UIText.text("Jumps can't switch Spaces — allow Accessibility…"),
+                    opens: .accessibility)
+            ] : []
         let open = [permissionLine, Self.alertStyle(alertStyle)].compactMap { $0 }
         if open.isEmpty {
             return [MenuStatusLine(tone: .ok, text: UIText.text("Notifications on · Persistent"))]
+                + accessibility
         }
         if open.count > 1, open.allSatisfy({ $0.tone == .checking }) {
             return [
                 MenuStatusLine(
                     tone: .checking, text: UIText.text("Checking notification settings…"))
-            ]
+            ] + accessibility
         }
-        return open
+        return open + accessibility
     }
 
     /// Nil when there is nothing to say beyond "fine".

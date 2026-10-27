@@ -96,6 +96,38 @@ struct FileLeaseTests {
         #expect(acquired == 40 * 12)
     }
 
+    private func kind(_ attempt: FileLease.Attempt) -> String {
+        switch attempt {
+        case .acquired(let lease):
+            lease.release()
+            return "acquired"
+        case .held: return "held"
+        case .unavailable: return "unavailable"
+        }
+    }
+
+    /// One try, for a caller that must not block its thread, and that waits
+    /// for a lock someone holds but not for one nobody can have.
+    @Test func anAttemptTellsAHeldLockFromOneNobodyCanHave() throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.path + "/jump"
+        guard case .acquired(let lease) = FileLease.attempt(path) else {
+            Issue.record("a free lock was not acquired")
+            return
+        }
+        #expect(kind(FileLease.attempt(path)) == "held")
+        #expect(try anotherProcessTries(path + ".flock") == 75)
+        lease.release()
+        #expect(kind(FileLease.attempt(path)) == "acquired")
+        // No directory to create the file in.
+        let nowhere = root.path + "/missing/jump"
+        #expect(kind(FileLease.attempt(nowhere)) == "unavailable")
+        let started = Date()
+        #expect(FileLease.acquire(nowhere, timeout: 1) == nil)
+        #expect(Date().timeIntervalSince(started) < 0.5)
+    }
+
     @Test func pruningRemovesAnIdleLockFileAndLeavesAHeldOne() throws {
         let root = try scratch()
         defer { try? FileManager.default.removeItem(at: root) }

@@ -171,8 +171,24 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Retain the PID until cleanup ends so a second resident cannot enter.
         readiness.close()
         spool?.stop()
+        // No jump starts from here on. The one under way stops going onward,
+        // walks back to where its trip began and puts the pointer back, all
+        // before this deadline, which every press keeps clear of; one that
+        // was still finding its window gives up without a trip or a focus.
+        SpaceHopper.shutdownDeadline = Date().addingTimeInterval(Agent.jumpShutdownGrace - 0.5)
+        for task in jumps.values { task.cancel() }
         Task {
-            await hookProcessor.shutdown()
+            async let hooks: Void = hookProcessor.shutdown()
+            let until = Date().addingTimeInterval(Agent.jumpShutdownGrace)
+            while !jumps.isEmpty, Date() < until {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            // The last resort, for a window server that stopped answering
+            // mid-trip: the pointer at least goes back where it was.
+            if SpaceHopper.restorePointerIfTravelling() {
+                log("shutdown: a trip was still under way; put the pointer back")
+            }
+            await hooks
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
@@ -292,6 +308,30 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     private static let watchedGraceSeconds: Double = 3
     private static let systemSettingsBundleID = "com.apple.systempreferences"
+    /// Set by a jump that needed to travel to another Space and was not
+    /// allowed to. Cleared when the menu finds the permission granted.
+    private var accessibilityMissing = false
+    /// The jump started last, if any; the next one waits for it.
+    private var jumpInFlight: Task<Void, Never>?
+    /// A look at Ghostty is waiting for the jumps under way to end.
+    private var lookAgainPending = false
+    /// Longer than any jump may take: its wait for another, the trip and the
+    /// way back, and every lookup.
+    private static let jumpWatchSeconds = 60.0
+    /// Every jump started and not yet finished, the waiting ones included:
+    /// shutdown cancels them all and waits for them.
+    private var jumps: [UUID: Task<Void, Never>] = [:]
+    /// How long shutdown waits for jumps to wind down. A cancelled trip
+    /// finishes the press under way, undoes it should it have gone to the
+    /// other display, and walks back to where it began: about half a second a
+    /// Space normally, two at the very worst. As long as the twenty seconds
+    /// launchd and the installer give a stopping agent allow, with the hook
+    /// cleanup running alongside, not after. A trip so long, with every step
+    /// back so slow, that it cannot walk back by then stops where it got to,
+    /// and the pointer is put back regardless; capping how far any trip may
+    /// go, to rule that out, would refuse every jump more than five Spaces
+    /// away.
+    static let jumpShutdownGrace = 18.0
     /// How long after posting a notification is left out of reconciliation.
     private static let deliverySettleSeconds: Double = 5
 
@@ -437,6 +477,10 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             stopTabPoll()
             return
         }
+        guard !jumpUnderWay else {
+            scheduleTabPoll()
+            return
+        }
         let asked = state.outstanding()
         // One query at a time. The next is scheduled from this answer, so a slow
         // Ghostty (each send is bounded at three seconds) stretches the interval
@@ -445,6 +489,11 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             guard let self else { return }
             guard !self.shuttingDown, self.frontmostIsGhostty else {
                 self.stopTabPoll()
+                return
+            }
+            // Asked before a jump began, answered during it.
+            guard !self.jumpUnderWay else {
+                self.scheduleTabPoll()
                 return
             }
             let arrived = self.tabWatch.observe(
@@ -471,6 +520,10 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Event round-trip, and the first one raises the Automation consent
         // dialog — neither belongs on a plain Cmd-Tab with nothing on screen.
         guard state.hasOutstandingNotifications else { return }
+        guard !jumpUnderWay else {
+            lookAgainAfterJumps()
+            return
+        }
 
         let asked = state.outstanding()
         Ghostty.selectedTabID { [weak self] selected in
@@ -478,6 +531,11 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             // Ghostty again, and a round may have finished meanwhile: neither
             // that departure nor that notification is covered by the answer.
             guard let self, self.frontmostIsGhostty else { return }
+            // Asked before a jump began, answered during it.
+            guard !self.jumpUnderWay else {
+                self.lookAgainAfterJumps()
+                return
+            }
             let identifiers = self.state.takeNotifications(
                 for: .ghosttyActivated(selectedTabID: selected), among: asked)
             if !identifiers.isEmpty {
@@ -494,6 +552,42 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
                 self?.withdrawForGhostty(retriesLeft: retriesLeft - 1)
             }
+        }
+    }
+
+    /// Whether a jump is under way: this process's, queued or running, or
+    /// another process's, which holds the lease. What Ghostty shows meanwhile
+    /// is a trip's way there — the window a trip arrives at shows its own
+    /// selected tab until the jump focuses the one asked for — and says
+    /// nothing about where the user went: it must not clear that tab's
+    /// notifications.
+    private var jumpUnderWay: Bool { !jumps.isEmpty || TabJumpRunner.leaseIsHeld() }
+
+    /// Ghostty came forward during a jump: looked at again once the jump is
+    /// over, as if it had just come forward. Another process's jump ends
+    /// without a word, so the lease is checked twice a second, for as long as
+    /// any jump may last.
+    private func lookAgainAfterJumps() {
+        guard !lookAgainPending else { return }
+        lookAgainPending = true
+        checkJumpsOver(until: Date().addingTimeInterval(Agent.jumpWatchSeconds))
+    }
+
+    private func checkJumpsOver(until deadline: Date) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self else { return }
+            guard !self.shuttingDown, Date() < deadline else {
+                self.lookAgainPending = false
+                return
+            }
+            guard !self.jumpUnderWay else {
+                self.checkJumpsOver(until: deadline)
+                return
+            }
+            self.lookAgainPending = false
+            guard self.frontmostIsGhostty else { return }
+            self.withdrawForGhostty(retriesLeft: 1)
+            self.startTabPoll()
         }
     }
 
@@ -561,71 +655,78 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             tabID = Agent.persistedTabID(paths: paths, sessionID: sessionID)
         }
         if tabID == nil { tabID = fallbackTabID }
+        guard !shuttingDown else {
+            log("jump: skipped, the agent is shutting down")
+            return
+        }
+        // One jump at a time: two trips at once would interleave their
+        // presses. A click during a jump waits for it to finish, its jumps in
+        // the order of the clicks — but no longer than a jump waits for one
+        // from another process, counted from the click: a jump that only gets
+        // its turn later would switch Spaces long after the click, with the
+        // user perhaps somewhere else by then, and does nothing.
+        let giveUpAt = Date().addingTimeInterval(TabJumpRunner.leaseWait)
         guard let tabID else {
             // No tab was ever resolved (tmux, unscriptable Ghostty). Front the
-            // app so the user is one keystroke away instead of nowhere.
+            // app so the user is one keystroke away instead of nowhere — in
+            // turn like a jump: bringing an app forward can switch to a Space
+            // with its windows, under a trip on its way somewhere else.
             log("jump: no tab for \(sessionID ?? "<none>"), activating Ghostty")
-            NSApp.activate(ignoringOtherApps: true)
-            Ghostty.activate()
+            enqueueJump { agent in
+                if !(await TabJumpRunner.activateGhostty(waitUntil: giveUpAt, activatesItself: true))
+                {
+                    agent.log("jump: left Ghostty alone, another jump was still under way")
+                }
+            }
             return
         }
         // Focusing the terminal raises its window and selects its tab together.
         // Do not issue a second app-wide activation after success: it can put
         // the previously active window back in front of the verified target.
         //
-        // The selection the focus command reports can be read before Ghostty
-        // has finished moving it (issue #40), so a mismatch gets a settle
-        // re-read and, if the selection really has not moved, one more focus.
-        // TabJump bounds all of it; this only carries out its steps.
-        let finish: @MainActor (TabJump.Outcome) -> Void = { [weak self] outcome in
-            self?.finishJump(tabID: tabID, outcome: outcome)
+        // What the jump does, and in what order, is TabJump's: the lookup and
+        // the trip to the window's Space that keep a window where it is
+        // (issue #63), and the settle re-read and second focus for a read that
+        // raced the focus (issue #40). The run asks, sends, and brings Ghostty
+        // forward when it could not select the tab, still in its turn; this
+        // only logs the outcome.
+        enqueueJump { agent in
+            agent.finishJump(await TabJumpRunner.run(tabID: tabID, waitUntil: giveUpAt))
         }
-        func carryOut(_ plan: TabJump, _ step: TabJump.Step) {
-            switch step {
-            case .focus:
-                Ghostty.focus(tabID: tabID) { selected in
-                    var next = plan
-                    let step = next.observe(focusResult: selected)
-                    carryOut(next, step)
-                }
-            case .verify(let delay):
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                    Ghostty.selectedTabID { selected in
-                        var next = plan
-                        let step = next.observe(selected: selected)
-                        carryOut(next, step)
-                    }
-                }
-            case .stop(let outcome):
-                finish(outcome)
-            }
-        }
-        let plan = TabJump(requested: tabID)
-        carryOut(plan, plan.start)
     }
 
-    private func finishJump(tabID: String, outcome: TabJump.Outcome) {
-        switch outcome {
-        case .notFound:
-            Ghostty.activate()
-            log("jump: \(tabID) not found, activated Ghostty only")
-        case .verified(reads: 0, focusAttempts: 1):
-            log("jump: focused \(tabID), verified selected")
-        case .verified(let reads, let attempts):
-            // The first read raced the focus. Logged apart from the plain
-            // case so the log keeps counting how often that happens.
-            log(
-                "jump: focused \(tabID), verified selected after \(reads) re-read(s), "
-                    + "\(attempts) focus attempt(s)")
-        case .unverified(let selected, let attempts):
-            Ghostty.activate()
-            // Focusing reported success but the selection never followed.
-            // Worth its own line: it is the difference between "we asked"
-            // and "it happened", and the two look identical from outside.
-            log(
-                "jump: asked for \(tabID) but \(selected ?? "<none>") is selected "
-                    + "after \(attempts) focus attempt(s)")
+    /// `work` once every jump clicked before it has finished, unless the
+    /// agent is quitting by then.
+    private func enqueueJump(_ work: @escaping @MainActor (Agent) async -> Void) {
+        let previous = jumpInFlight
+        let id = UUID()
+        let task = Task { @MainActor [weak self] in
+            defer { self?.jumps[id] = nil }
+            await previous?.value
+            guard let self, !self.shuttingDown, !Task.isCancelled else { return }
+            await work(self)
         }
+        jumps[id] = task
+        jumpInFlight = task
+    }
+
+    private func finishJump(_ report: TabJumpRun.Report) {
+        log(TabJumpRun.describe(report))
+        if report.accessibilityMissing { noteAccessibilityMissing() }
+    }
+
+    /// A jump just found Ghostty's window on another Space and could not go
+    /// there. The menu says so until the permission is granted, and macOS is
+    /// asked once — its own dialog leads to the setting — so that the first
+    /// such click explains itself and later ones do not nag.
+    private func noteAccessibilityMissing() {
+        accessibilityMissing = true
+        menuBar?.refresh()
+        let marker = paths.accessibilityAskedFile
+        guard !FileManager.default.fileExists(atPath: marker) else { return }
+        try? "asked\n".write(toFile: marker, atomically: true, encoding: .utf8)
+        log("asking for the Accessibility permission (jumps to another Space need it)")
+        WindowServer.askForTrust()
     }
 
     /// Reads the tab id ghostty-tab-save.sh wrote for a session.
@@ -798,11 +899,16 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                     return AgentStatus(
                         permission: .unknown, alertStyle: "", waiting: [], trackedSessions: 0)
                 }
+                if self.accessibilityMissing, WindowServer.isTrusted {
+                    self.accessibilityMissing = false
+                    self.log("the Accessibility permission is now granted")
+                }
                 return AgentStatus(
                     permission: self.permission,
                     alertStyle: self.alertStyle,
                     waiting: self.state.waitingSessions(),
-                    trackedSessions: self.state.sessions.count
+                    trackedSessions: self.state.sessions.count,
+                    accessibilityMissing: self.accessibilityMissing
                 )
             },
             onJump: { [weak self] sessionID in
@@ -824,6 +930,11 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                 guard let url = URL(string: Agent.notificationSettingsURL) else { return }
                 NSWorkspace.shared.open(url)
                 self?.log("menu: opened notification settings")
+            },
+            onOpenAccessibilitySettings: { [weak self] in
+                guard let url = URL(string: WindowServer.accessibilitySettingsURL) else { return }
+                NSWorkspace.shared.open(url)
+                self?.log("menu: opened accessibility settings")
             },
             onOpenLog: { [weak self] in
                 guard let self else { return }
