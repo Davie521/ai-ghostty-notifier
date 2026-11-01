@@ -134,8 +134,14 @@ final class SpoolWatcher {
 
         let cutoff = now() - AgentConstants.staleNotifyAge
         for candidate in candidates {
-            // Also nil when its writer took it back first (`--nudge`).
-            guard let data = AtomicSpool.take(candidate.path) else { continue }
+            let data: Data
+            switch AtomicSpool.take(candidate.path) {
+            case .request(let taken): data = taken
+            case .gone: continue  // Unreadable, or taken back by `--nudge`.
+            case .stuck(let reason):
+                log("left \(candidate.name) in the spool: \(reason)")
+                continue
+            }
 
             let request: AgentRequest
             do {

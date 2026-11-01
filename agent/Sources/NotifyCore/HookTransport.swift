@@ -35,19 +35,31 @@ public enum AtomicSpool {
         return final.path
     }
 
-    /// The agent's side: read a published request, then unlink it. Nil when it
-    /// cannot be read, and when it is already gone by the time it is unlinked:
-    /// its writer took it back (`withdraw`). Whoever unlinks first decides, so
-    /// a request taken back is never acted on, even when it was read first.
-    /// Any other unlink failure still hands over what was read, as before.
-    public static func take(_ path: String) -> Data? {
+    public enum Taken: Equatable, Sendable {
+        case request(Data)
+        /// Unlinked but unreadable, or already gone: its writer took it back
+        /// (`withdraw`). Nothing to act on either way.
+        case gone
+        /// Could not be unlinked, so it is not this reader's: left where it
+        /// is for a later drain, when the unlink can succeed.
+        case stuck(String)
+    }
+
+    /// The agent's side: read a published request, then unlink it. Only a
+    /// successful unlink hands the request over. Whoever unlinks first
+    /// decides, so a request taken back is never acted on, even when it was
+    /// read first, and one that cannot be removed is never acted on twice.
+    public static func take(_ path: String) -> Taken {
         claim(path, read: try? Data(contentsOf: URL(fileURLWithPath: path)))
     }
 
     /// The second half of `take`, apart so a test can withdraw in between.
-    static func claim(_ path: String, read data: Data?) -> Data? {
-        if unlink(path) != 0, errno == ENOENT { return nil }
-        return data
+    static func claim(_ path: String, read data: Data?) -> Taken {
+        guard unlink(path) == 0 else {
+            let error = errno
+            return error == ENOENT ? .gone : .stuck(String(cString: strerror(error)))
+        }
+        return data.map(Taken.request) ?? .gone
     }
 
     public enum Withdrawal: Equatable, Sendable {
