@@ -12,6 +12,8 @@ import NotifyCore
 /// runs in a shell the CLI started without one.
 @MainActor
 enum Nudge {
+    static let titleSeconds = 4.0
+
     static func run(words: [String], environment: [String: String], paths: AgentPaths) async
         -> Int32
     {
@@ -39,7 +41,14 @@ enum Nudge {
         let tab = await binding.existing(event)
         event.payload.transcriptPath = transcript(
             sessionID: sessionID, environment: environment, home: paths.home)
-        let title = await DiskSessionContent().title(for: event)
+        // A long transcript must not use up the time the wait for the agent,
+        // and taking the nudge back, need before the 20-second deadline in
+        // main.swift: past `titleSeconds` the nudge goes out untitled.
+        let titled = event
+        let title =
+            (try? await QueryDeadline.run(seconds: titleSeconds) {
+                await DiskSessionContent().title(for: titled)
+            }) ?? ""
         let request = NudgeNotification.request(
             sessionID: sessionID, message: message, title: title, project: project(event),
             tabID: tab, roundID: event.roundID, settings: event.settings)
