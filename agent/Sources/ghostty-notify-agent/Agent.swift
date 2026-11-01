@@ -256,7 +256,10 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             state.anchor(sessionID: notify.stateKey, tabID: notify.tabID, now: Agent.now())
             deliver(notify)
             shortenIfAlreadyWatching(notify)
-            if let title = notify.tabTitle, state.sessions[notify.stateKey]?.tabID == nil {
+            // Not with Ghostty gone: a `tell` would start it again.
+            if let title = notify.tabTitle, state.sessions[notify.stateKey]?.tabID == nil,
+                Ghostty.processID != nil
+            {
                 findTab(titled: title, for: notify)
             }
 
@@ -367,9 +370,15 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             self.stateChanged()
             // Delivery found no tab to watch for, so nothing polls for the
             // user's return to it yet; and they may be looking at it already.
-            // Both look at what the session has on screen now, if anything.
+            // Both go by what the session has on screen now, if anything: a
+            // notification that replaced this one keeps its own clearing.
             self.startTabPoll()
-            self.shortenIfAlreadyWatching(notify)
+            guard let record = self.state.sessions[key], !record.notificationIDs.isEmpty else {
+                return
+            }
+            var current = notify
+            current.clearOnFocus = record.clearOnFocus
+            self.shortenIfAlreadyWatching(current)
         }
     }
     private static let systemSettingsBundleID = "com.apple.systempreferences"
