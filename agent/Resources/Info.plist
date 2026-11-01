@@ -26,9 +26,9 @@
     <key>CFBundleIdentifier</key>
     <string>io.github.davie521.cgnotify</string>
     <key>CFBundleVersion</key>
-    <string>9</string>
+    <string>10</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.8.0</string>
+    <string>0.9.0</string>
     <!-- Must match the SwiftPM executable product name. -->
     <key>CFBundleExecutable</key>
     <string>ghostty-notify-agent</string>
