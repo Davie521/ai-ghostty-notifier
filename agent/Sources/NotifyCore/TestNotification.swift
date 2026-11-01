@@ -64,11 +64,10 @@ public enum TestNotification {
         return nil
     }
 
-    /// `unsent` and `queued` name what was being sent, for `--nudge`, which
-    /// meets the same problems.
+    /// `unsent` says what was not sent, for `--nudge`, which meets the same
+    /// problems.
     public static func explain(
-        _ problem: Problem, app: String, unsent: String = "no test was sent",
-        queued: String = "The test was queued"
+        _ problem: Problem, app: String, unsent: String = "no test was sent"
     ) -> String {
         switch problem {
         case .notRunning:
@@ -92,7 +91,7 @@ public enum TestNotification {
                 """
         case .notCollected:
             return """
-                \(queued), but the agent did not pick it up within five seconds.
+                The test was queued, but the agent did not pick it up within five seconds.
                 Its log may say why: ~/.claude/notifications/ghostty-agent/agent.log
                 """
         }

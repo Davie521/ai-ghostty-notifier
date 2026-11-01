@@ -234,7 +234,9 @@ for the commands it runs, and the tab through what that session's hooks
 recorded, so it never touches the terminal. It goes through the resident app
 only. When it cannot send (no session, the app not running, notifications not
 allowed), it exits 1 and says why; the skill then has Claude say what it needs
-in its reply instead. Codex CLI is not supported yet.
+in its reply instead. A nudge the app has not taken within five seconds is
+taken back, so it does not turn up later after Claude has already asked in its
+reply. Codex CLI is not supported yet.
 
 Notifications, the menu bar and the alert-style guidance are in English or
 Simplified Chinese. macOS chooses per app from your language list; to give this

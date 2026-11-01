@@ -113,9 +113,22 @@ import Testing
         #expect(
             NudgeNotification.explain(.agent(.notAuthorized("denied")), app: app)
                 .contains("System Settings → Notifications"))
+        // Not taken within five seconds, so taken back: nothing will appear.
         let late = NudgeNotification.explain(.agent(.notCollected), app: app)
-        #expect(late.hasPrefix("The nudge was queued"))
+        #expect(late.contains("taken back and nothing was sent"))
         #expect(late.contains("agent.log"))
+        // The one case where something may still appear says so.
+        let stuck = NudgeNotification.explain(.stuck("Permission denied"), app: app)
+        #expect(stuck.contains("may still appear later"))
+        #expect(stuck.contains("Permission denied"))
+        #expect(!stuck.contains("nothing was sent"))
+    }
+
+    @Test func theTestKeepsItsOwnWording() {
+        let app = "/Apps/X.app"
+        #expect(TestNotification.explain(.notRunning, app: app).contains("no test was sent"))
+        #expect(
+            TestNotification.explain(.notCollected, app: app).hasPrefix("The test was queued"))
     }
 
     @Test func theReportSaysWhereGoToTabLeads() {
