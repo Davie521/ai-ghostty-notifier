@@ -76,7 +76,7 @@ cleanup() {
     # inside cleanup.
     if [[ -n "$AGENT_PID" ]] && kill -0 "$AGENT_PID" 2>/dev/null &&
         command -v agent_queue >/dev/null 2>&1; then
-        for sid in "${SID:-}" "${OTHER:-}" "${NATIVE_SID:-}" "${EXPIRING:-}" "${KEPT:-}" "${TEST_SID:-}"; do
+        for sid in "${SID:-}" "${OTHER:-}" "${NATIVE_SID:-}" "${EXPIRING:-}" "${KEPT:-}" "${TEST_SID:-}" "${NUDGE_SID:-}"; do
             [[ -n "$sid" ]] || continue
             agent_queue "$(jq -nc --arg s "$sid" '{type:"dismiss",session_id:$s}')" \
                 2>/dev/null || true
@@ -112,6 +112,10 @@ cleanup() {
 trap cleanup EXIT
 
 export HOME="$SANDBOX"
+# The user's own nudge spool is keyed by the real HOME already; this keeps the
+# test's beside the rest of its sandbox, where cleanup removes it.
+export GHOSTTY_NOTIFY_NUDGE_SPOOL="$SANDBOX/nudges"
+NUDGES=$GHOSTTY_NOTIFY_NUDGE_SPOOL
 ROOT="$HOME/.claude/notifications/ghostty-agent"
 STATE="$ROOT/state.json"
 LOG="$ROOT/agent.log"
@@ -174,6 +178,7 @@ NATIVE_SID="deadbeef-2222-3333"
 EXPIRING="deadbeef-4444"
 KEPT="deadbeef-5555"
 TEST_SID="00000000-0000-0000-0000-000000007e57"  # TestNotification.sessionID
+NUDGE_SID="deadbeef-6666"
 
 # ── 0. --test with no agent says so instead of queueing into the void ──────
 selftest() { "$BIN" --test >"$SANDBOX/selftest.out" 2>&1; }
@@ -300,6 +305,29 @@ check "dismissed session has nothing outstanding" \
 # destroy a sibling session's still-unread notification.
 check "the other session's notification survives" \
     test "$(state_outstanding "$OTHER")" = "claude-$OTHER"
+
+# ── 5b. The nudge spool takes notifications and nothing else ───────────────
+# Codex CLI's sandbox refuses writes under ~/.claude, so a sandboxed --nudge
+# publishes here instead, the way AtomicSpool does: a temporary name, renamed.
+nudge_queue() {
+    local temporary="$NUDGES/.request.$$.$RANDOM.tmp"
+    printf '%s' "$1" > "$temporary" && mv "$temporary" "$NUDGES/$(date +%s)000-$RANDOM.json"
+}
+nudge_spool_drained() {
+    [[ "$(find "$NUDGES" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')" == "0" ]]
+}
+check "the agent prepares the nudge spool, private to the user" \
+    test "$(stat -f %Lp "$NUDGES" 2>/dev/null)" = "700"
+nudge_queue "$(jq -nc --arg s "$NUDGE_SID" '{type:"notify",session_id:$s,title:"nudge"}')"
+check "a notification in the nudge spool is posted" \
+    wait_for 10 state_is "$NUDGE_SID" "claude-$NUDGE_SID"
+nudge_queue "$(jq -nc --arg s "$NUDGE_SID" '{type:"dismiss",session_id:$s}')"
+check "any other request in it is dropped" \
+    wait_for 10 log_has "dropped a request other than a notification from the nudge spool"
+check "and not acted on" test "$(state_outstanding "$NUDGE_SID")" = "claude-$NUDGE_SID"
+check "both were consumed" wait_for 10 nudge_spool_drained
+agent_queue "$(jq -nc --arg s "$NUDGE_SID" '{type:"dismiss",session_id:$s}')"
+check "the usual spool still withdraws it" wait_for 10 state_is "$NUDGE_SID" ""
 
 # ── 6. anchor prefers the id the hook supplies ─────────────────────────────
 # Sampling the focused tab at drain time anchors a session to whatever tab the

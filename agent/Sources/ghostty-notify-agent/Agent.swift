@@ -16,6 +16,8 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private let notifier: Notifier
     private var state = SessionState()
     private var spool: SpoolWatcher?
+    /// `AgentPaths.nudgeSpool`: notifications only, from a sandboxed `--nudge`.
+    private var nudgeSpool: SpoolWatcher?
     private var pruneTimer: DispatchSourceTimer?
     private var activationObserver: NSObjectProtocol?
     private var terminationSource: DispatchSourceSignal?
@@ -133,6 +135,25 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         )
         watcher.start()
         spool = watcher
+
+        // Codex CLI's sandbox leaves this writable and nothing under ~/.claude.
+        // Anything other than a notification here was not written by --nudge.
+        if let directory = paths.nudgeSpool {
+            let nudges = SpoolWatcher(
+                directory: directory,
+                log: { [weak self] in self?.log($0) },
+                onRequest: { [weak self] request in
+                    guard let self else { return }
+                    guard case .notify = request else {
+                        self.log("dropped a request other than a notification from the nudge spool")
+                        return
+                    }
+                    self.handle(request)
+                }
+            )
+            nudges.start()
+            nudgeSpool = nudges
+        }
     }
 
     /// Turn SIGTERM into an orderly shutdown.
@@ -171,6 +192,7 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Retain the PID until cleanup ends so a second resident cannot enter.
         readiness.close()
         spool?.stop()
+        nudgeSpool?.stop()
         // No jump starts from here on. The one under way stops going onward,
         // walks back to where its trip began and puts the pointer back, all
         // before this deadline, which every press keeps clear of; one that

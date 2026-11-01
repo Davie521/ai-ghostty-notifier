@@ -266,6 +266,7 @@ uninstall_app() {
     echo "  ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json (commands ending in ghostty-*.sh)"
     echo "  ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/ghostty-nudge (delete the folder)"
     echo "  ${CODEX_HOME:-$HOME/.codex}/hooks.json (commands containing ghostty-notify/codex-hook.sh)"
+    echo "  ${CODEX_HOME:-$HOME/.codex}/skills/ghostty-nudge (delete the folder)"
     echo "then restart open Claude Code / Codex sessions."
 }
 

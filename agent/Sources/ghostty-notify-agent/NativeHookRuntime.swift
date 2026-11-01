@@ -193,9 +193,11 @@ enum NativeHookRuntime {
 
     /// An event for a session named by its id alone, outside any hook: where
     /// its state lives and its current round, as its hooks recorded them.
+    /// `source` defaults to GHOSTTY_NOTIFY_PROCESS_NAME, which the hooks set.
     /// Nil for an id or a HOME that cannot be a path component.
     static func sessionEvent(
-        sessionID: String, environment: [String: String], paths: AgentPaths
+        sessionID: String, source explicit: HookSource? = nil, environment: [String: String],
+        paths: AgentPaths
     ) -> HookEvent? {
         guard RequestCodec.isValidSessionID(sessionID), paths.home.hasPrefix("/"),
             paths.home != "/", !paths.home.contains("\0")
@@ -204,7 +206,9 @@ enum NativeHookRuntime {
             environment[key].flatMap { $0.isEmpty ? nil : $0 }
         }
         let source =
-            HookSource(rawValue: environment["GHOSTTY_NOTIFY_PROCESS_NAME"] ?? "claude") ?? .claude
+            explicit
+            ?? HookSource(rawValue: environment["GHOSTTY_NOTIFY_PROCESS_NAME"] ?? "claude")
+            ?? .claude
         var directory =
             nonempty("GHOSTTY_NOTIFY_SESSION_DIR")
             ?? (source == .codex

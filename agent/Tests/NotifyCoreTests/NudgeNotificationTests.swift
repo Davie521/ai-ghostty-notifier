@@ -15,15 +15,43 @@ import Testing
             project: project, tabID: tabID, roundID: roundID, settings: settings)
     }
 
-    @Test func theSessionIsTheOneClaudeCodeRunsTheCommandFor() {
+    static let thread = "01a1974d-5956-7ad1-9c87-b3ffeffb8fd8"
+
+    @Test func theSessionIsTheOneTheCLIRunsTheCommandFor() {
+        let claude = NudgeNotification.Session(id: Self.session, source: .claude)
+        let codex = NudgeNotification.Session(id: Self.thread, source: .codex)
         #expect(
-            NudgeNotification.sessionID(environment: ["CLAUDE_CODE_SESSION_ID": Self.session])
-                == Self.session)
-        #expect(NudgeNotification.sessionID(environment: [:]) == nil)
-        #expect(NudgeNotification.sessionID(environment: ["CLAUDE_CODE_SESSION_ID": ""]) == nil)
+            NudgeNotification.session(environment: ["CLAUDE_CODE_SESSION_ID": Self.session])
+                == claude)
+        #expect(NudgeNotification.session(environment: ["CODEX_THREAD_ID": Self.thread]) == codex)
+        #expect(NudgeNotification.session(environment: [:]) == nil)
+        #expect(NudgeNotification.session(environment: ["CLAUDE_CODE_SESSION_ID": ""]) == nil)
         // Becomes a file name under the session directory.
         #expect(
-            NudgeNotification.sessionID(environment: ["CLAUDE_CODE_SESSION_ID": "../x"]) == nil)
+            NudgeNotification.session(environment: ["CLAUDE_CODE_SESSION_ID": "../x"]) == nil)
+        #expect(NudgeNotification.session(environment: ["CODEX_THREAD_ID": "a/b"]) == nil)
+    }
+
+    /// Codex run inside Claude Code inherits Claude's variable, and the other
+    /// way round: the CLI nearest above the command is the one asking.
+    @Test func withBothSetTheNearestCLIDecides() {
+        let both = ["CLAUDE_CODE_SESSION_ID": Self.session, "CODEX_THREAD_ID": Self.thread]
+        #expect(NudgeNotification.session(environment: both, nearest: .codex)?.source == .codex)
+        #expect(NudgeNotification.session(environment: both, nearest: .claude)?.source == .claude)
+        #expect(NudgeNotification.session(environment: both)?.source == .claude)
+        // A malformed one does not hide the other.
+        let broken = ["CLAUDE_CODE_SESSION_ID": "../x", "CODEX_THREAD_ID": Self.thread]
+        #expect(NudgeNotification.session(environment: broken, nearest: .claude)?.id == Self.thread)
+    }
+
+    @Test func aCodexNudgeIsCodexsOwnNotification() throws {
+        let request = NudgeNotification.request(
+            sessionID: Self.thread, source: .codex, message: "Scan the QR code", title: "",
+            project: "repo", tabID: nil, roundID: nil, settings: [:])
+        #expect(request.source == .codex)
+        #expect(request.stateKey == "codex-" + Self.thread)
+        #expect(request.title == "Codex")
+        #expect(try RequestCodec.decode(RequestCodec.encode(.notify(request))) == .notify(request))
     }
 
     @Test func theMessageIsOneBoundedLine() {
@@ -105,7 +133,11 @@ import Testing
         let app = "/Apps/X.app"
         let none = NudgeNotification.explain(.noSession, app: app)
         #expect(none.contains("CLAUDE_CODE_SESSION_ID"))
+        #expect(none.contains("CODEX_THREAD_ID"))
         #expect(none.contains("nothing was sent"))
+        let sandboxed = NudgeNotification.explain(.notCollectedFromSandbox, app: app)
+        #expect(sandboxed.contains("taken back and nothing was sent"))
+        #expect(sandboxed.contains("0.9.0"))
         let stopped = NudgeNotification.explain(.agent(.notRunning), app: app)
         #expect(stopped.contains("nothing was sent"))
         #expect(stopped.contains("open \"/Apps/X.app\""))

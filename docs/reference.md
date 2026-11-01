@@ -103,7 +103,8 @@ python3 scripts/install-codex.py
 
 Python 3.11+ is needed **only for this installer**. It copies launchers into
 `~/.codex/ghostty-notify/`, adds `UserPromptSubmit` and `Stop` entries to
-`~/.codex/hooks.json`, and preserves unrelated settings/hooks. `CODEX_HOME`
+`~/.codex/hooks.json`, puts the [`ghostty-nudge` skill](#when-claude-or-codex-needs-you)
+in `~/.codex/skills/`, and preserves unrelated settings/hooks. `CODEX_HOME`
 is supported. Start Codex in Ghostty and use `/hooks` to trust new entries.
 
 Re-running the installer preserves existing hook definitions and positions where
@@ -208,18 +209,21 @@ earlier. Focusing the session's tab or submitting another prompt withdraws its
 notification. Permission/input prompts are silent unless
 `GHOSTTY_NOTIFY_ON_PROMPT=1`.
 
-### When Claude needs you
+<a id="when-claude-needs-you"></a>
 
-The notifications above come when a run ends. When Claude Code needs you
-part-way through (Face ID on your phone, a verification code, a QR scan, a
+### When Claude or Codex needs you
+
+The notifications above come when a run ends. When Claude Code or Codex CLI
+needs you part-way through (Face ID on your phone, a verification code, a QR scan, a
 decision it cannot make for you), it can call you itself:
 
 ```bash
 "$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge "Face ID on your iPhone to finish the login"
 ```
 
-The installer puts a `ghostty-nudge` skill in `<config>/skills/`, and the
-plugin carries the same one. It tells Claude when to run this: only when it
+The installers put a `ghostty-nudge` skill in `<config>/skills/` for Claude
+Code and in `$CODEX_HOME/skills/` for Codex, and the plugin carries the same
+one. It tells the agent when to run this: only when it
 needs you to act and you may not be watching, once for each thing it needs,
 never for progress or for the end of a run.
 
@@ -229,14 +233,18 @@ The menu bar lists it, and it clears like the others: when you return to the
 tab, when you send a prompt, or after `GHOSTTY_NOTIFY_TIMEOUT`. A later nudge,
 or the run's completion notification, replaces it.
 
-It finds its session through `CLAUDE_CODE_SESSION_ID`, which Claude Code sets
-for the commands it runs, and the tab through what that session's hooks
-recorded, so it never touches the terminal. It goes through the resident app
-only. When it cannot send (no session, the app not running, notifications not
+It finds its session through `CLAUDE_CODE_SESSION_ID` or `CODEX_THREAD_ID`,
+which Claude Code and Codex set for the commands they run (with both set, as
+in Codex started from Claude Code, the CLI nearest above the command wins), and
+the tab through what that session's hooks recorded, so it never touches the
+terminal. It goes through the resident app only. Codex's sandbox refuses
+writes under `~/.claude`, so there the nudge goes to a second queue in the
+user's own temporary directory, which the sandbox leaves writable and from
+which the app takes notifications and nothing else; it needs no escalation. When it cannot send (no session, the app not running, notifications not
 allowed), it exits 1 and says why; the skill then has Claude say what it needs
 in its reply instead. A nudge the app has not taken within five seconds is
-taken back, so it does not turn up later after Claude has already asked in its
-reply. Codex CLI is not supported yet.
+taken back, so it does not turn up later after the agent has already asked in
+its reply.
 
 Notifications, the menu bar and the alert-style guidance are in English or
 Simplified Chinese. macOS chooses per app from your language list; to give this
@@ -547,7 +555,7 @@ exist is in `docs/incident-2026-09-17-pretooluse-hang.md`.
 Remove hook registrations first and restart open CLI sessions. For plugin
 installs, use `/plugin uninstall ai-ghostty-notifier@ai-ghostty-notifier`. For manual Claude
 installs remove this project's entries from `settings.json` and the
-`<config>/skills/ghostty-nudge/` folder; for Codex remove
+`<config>/skills/ghostty-nudge/` folder; for Codex remove `~/.codex/skills/ghostty-nudge/` and
 entries containing `ghostty-notify/codex-hook.sh` from `hooks.json`.
 
 After unregistering hooks for **both** CLIs, remove the shared app: the first

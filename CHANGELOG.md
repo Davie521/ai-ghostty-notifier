@@ -3,6 +3,18 @@
 What changed in each release. The one-command installer always fetches the
 latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-notifier/releases).
 
+## Unreleased
+
+### Added
+
+- Codex CLI can nudge you too. `--nudge` finds a Codex session through
+  `CODEX_THREAD_ID`, and the Codex installer puts the `ghostty-nudge` skill in
+  `$CODEX_HOME/skills/`. Codex's sandbox refuses writes under `~/.claude`, so
+  there the nudge goes to a second queue in your own temporary directory,
+  which the app reads for notifications only; Codex needs no escalation for
+  it. With Codex run from Claude Code, the CLI nearest above the command is
+  the one asking.
+
 ## 0.8.0 — 2026-11-01
 
 ### Added

@@ -117,17 +117,44 @@ public enum HookProcessContext {
             guard current > 1, visited.insert(current).inserted,
                 let process = inspector.process(current)
             else { return nil }
-            let executableName = URL(fileURLWithPath: process.executable).lastPathComponent
-            let argumentName = inspector.arguments(current).first.map {
-                URL(fileURLWithPath: $0).lastPathComponent
-            }
-            if process.name == source.rawValue || executableName == source.rawValue
-                || argumentName == source.rawValue
-            {
+            if runs(source, process, inspector) {
                 return process.tty == nil ? nil : process
             }
             current = process.parent
         }
         return nil
+    }
+
+    /// Which of `sources` is the nearest CLI above this process, terminal or
+    /// not. Each CLI's session variable is inherited by everything below it,
+    /// so a command run by Codex inside Claude Code sees both; the nearest one
+    /// is the one running it.
+    public static func nearest(
+        among sources: [HookSource], startingAt pid: pid_t = getpid(),
+        inspector: any ProcessInspecting = MacProcessInspector()
+    ) -> HookSource? {
+        var current = pid
+        var visited = Set<pid_t>()
+        for _ in 0..<24 {
+            guard current > 1, visited.insert(current).inserted,
+                let process = inspector.process(current)
+            else { return nil }
+            if let source = sources.first(where: { runs($0, process, inspector) }) {
+                return source
+            }
+            current = process.parent
+        }
+        return nil
+    }
+
+    private static func runs(
+        _ source: HookSource, _ process: HostProcess, _ inspector: any ProcessInspecting
+    ) -> Bool {
+        let executableName = URL(fileURLWithPath: process.executable).lastPathComponent
+        let argumentName = inspector.arguments(process.pid).first.map {
+            URL(fileURLWithPath: $0).lastPathComponent
+        }
+        return process.name == source.rawValue || executableName == source.rawValue
+            || argumentName == source.rawValue
     }
 }

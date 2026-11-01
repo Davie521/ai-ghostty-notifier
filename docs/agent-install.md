@@ -160,7 +160,8 @@ python3 scripts/install-codex.py
 ```
 
 It copies launchers to `~/.codex/ghostty-notify/`, adds `UserPromptSubmit` and
-`Stop` entries to `~/.codex/hooks.json`, keeps unrelated hooks and settings,
+`Stop` entries to `~/.codex/hooks.json`, puts the `ghostty-nudge` skill in
+`~/.codex/skills/`, keeps unrelated hooks and settings,
 honours `CODEX_HOME`, and puts backups of changed files under
 `~/.codex/backups/`. Re-running it is safe. It also narrows Codex's built-in TUI
 notifications to `["approval-requested", "plan-mode-prompt"]` when needed, so

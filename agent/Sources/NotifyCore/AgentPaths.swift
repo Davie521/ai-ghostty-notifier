@@ -45,16 +45,55 @@ public enum AgentPathsError: Error, Equatable {
 public struct AgentPaths: Equatable, Sendable {
     public let home: String
 
+    /// `GHOSTTY_NOTIFY_NUDGE_SPOOL`, an absolute path, moves `nudgeSpool`; only
+    /// the integration test sets it.
+    private let nudgeSpoolOverride: String?
+
     public init(env: [String: String]) throws {
         guard let home = env["HOME"], !home.isEmpty else {
             throw AgentPathsError.missingHome
         }
         self.home = home
+        nudgeSpoolOverride = env["GHOSTTY_NOTIFY_NUDGE_SPOOL"].flatMap {
+            $0.hasPrefix("/") && $0 != "/" && !$0.contains("\0") ? $0 : nil
+        }
     }
 
     public var root: String { home + "/.claude/notifications/ghostty-agent" }
     /// Requests land here as one JSON file each, made visible by rename.
     public var spool: String { root + "/spool" }
+    /// Where `--nudge` puts its notification when it may not write `spool`:
+    /// Codex CLI's sandbox refuses every write under ~/.claude, but leaves the
+    /// user's own temporary directory writable, and that is the agent's too.
+    /// The agent takes only notifications from here. Keyed by HOME, so a test
+    /// agent with a sandboxed HOME never shares it with the user's. Nil when
+    /// macOS names no temporary directory.
+    public var nudgeSpool: String? {
+        if let nudgeSpoolOverride { return nudgeSpoolOverride }
+        guard let temporary = Self.userTemporaryDirectory() else { return nil }
+        return temporary + "io.github.davie521.cgnotify-" + Self.digest(home) + "/nudges"
+    }
+
+    /// The per-user directory under /var/folders, the same for every process
+    /// of the user whatever TMPDIR says, the agent under launchd included.
+    static func userTemporaryDirectory() -> String? {
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
+        let length = confstr(_CS_DARWIN_USER_TEMP_DIR, &buffer, buffer.count)
+        guard length > 0, length <= buffer.count else { return nil }
+        let path = String(cString: buffer)
+        guard path.hasPrefix("/"), path != "/" else { return nil }
+        return path.hasSuffix("/") ? path : path + "/"
+    }
+
+    /// FNV-1a, 64 bits: stable across processes and releases, unlike Hasher.
+    static func digest(_ text: String) -> String {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in text.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01b3
+        }
+        return String(format: "%016llx", hash)
+    }
     /// Session bookkeeping, so a restart does not orphan live notifications.
     public var state: String { root + "/state.json" }
     /// Written on launch, removed on exit; lets hooks tell "agent is up" from

@@ -177,6 +177,9 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual((installed / name).read_bytes(), (REPO / "hooks" / name).read_bytes())
             self.assertTrue(os.access(installed / name, os.X_OK))
         self.assertFalse((installed / "codex-notify.py").exists())
+        skill = codex / "skills/ghostty-nudge/SKILL.md"
+        self.assertEqual(skill.read_bytes(), (REPO / "skills/ghostty-nudge/SKILL.md").read_bytes())
+        self.assertEqual([p.name for p in skill.parent.iterdir()], ["SKILL.md"])
         config = json.loads((installed / "config.json").read_text())
         self.assertEqual(config["GHOSTTY_NOTIFY_MIN_ELAPSED"], "120")
         self.assertEqual(config["GHOSTTY_NOTIFY_BACKEND"], "terminal-notifier")
@@ -249,6 +252,15 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual({p.name: p.read_bytes() for p in destination.iterdir()}, before)
         self.assertEqual((codex / "hooks.json").read_text(), '{"hooks":{}}\n')
         self.assertFalse((codex / "backups").exists())
+
+    def test_a_missing_skill_changes_nothing(self):
+        _, codex, settings = self.sandbox()
+        with patch.object(installer, "SKILL", codex / "absent/SKILL.md"), \
+                self.assertRaises(SystemExit):
+            installer.install(codex, settings)
+        self.assertFalse((codex / "ghostty-notify").exists())
+        self.assertFalse((codex / "skills").exists())
+        self.assertFalse((codex / "hooks.json").exists())
 
     def test_invalid_staged_script_preserves_registered_codex_hooks(self):
         root, codex, settings = self.sandbox()
