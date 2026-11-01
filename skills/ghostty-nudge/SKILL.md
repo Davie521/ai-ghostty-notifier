@@ -25,5 +25,7 @@ Run this once, with one line saying what you need from them:
   off, the app did not take it in time). Nothing will appear later unless
   stderr says it may. Either way, say what you need in your reply instead, and
   do not retry in a loop.
-- Only Claude Code sessions in Ghostty: the command finds its session through
-  `CLAUDE_CODE_SESSION_ID`, which Claude Code sets for the commands it runs.
+- Works in Claude Code and Codex CLI sessions in Ghostty: the command finds
+  its session through `CLAUDE_CODE_SESSION_ID` or `CODEX_THREAD_ID`, which they
+  set for the commands they run. Run it as it is, inside Codex's sandbox too;
+  it needs no escalation.

@@ -24,6 +24,8 @@ import tomllib
 
 
 REPO = Path(__file__).resolve().parent.parent
+# Tells Codex when and how to run `ghostty-notify-agent --nudge`.
+SKILL = REPO / "skills" / "ghostty-nudge" / "SKILL.md"
 FILES = (
     "native-hook.sh", "codex-hook.sh", "ghostty-tab-save.sh", "ghostty-tab-focus.sh",
     "ghostty-notify.sh", "ghostty-notify-clear.sh", "ghostty-round-reset.sh",
@@ -355,6 +357,10 @@ def install(codex_home, claude_settings):
                 "`notify` callback and narrow `[tui] notifications` by hand, then rerun."
                 .format(config_path, error))
 
+    if not SKILL.is_file() or SKILL.stat().st_size == 0:
+        raise SystemExit("{} is missing; nothing was changed.".format(SKILL))
+    skill_dir = codex_home / "skills" / "ghostty-nudge"
+
     destination.mkdir(parents=True, exist_ok=True)
     # Stage/validate the whole set before touching registered hooks. Publish
     # the new shared dependency first, then atomically replace its launchers.
@@ -370,6 +376,11 @@ def install(codex_home, claude_settings):
     # The notify-callback adapter of earlier versions; a leftover copy would
     # only mislead anyone reading the directory.
     (destination / "codex-notify.py").unlink(missing_ok=True)
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".native-install-", dir=skill_dir) as folder:
+        staged = Path(folder) / "SKILL.md"
+        shutil.copy2(SKILL, staged)
+        staged.replace(skill_dir / "SKILL.md")
 
     settings_path = destination / "config.json"
     if not settings_path.exists():
@@ -386,6 +397,7 @@ def install(codex_home, claude_settings):
     print("Installed: {}".format(destination))
     print("Hooks:     {}".format(hooks_path))
     print("Settings:  {}".format(settings_path))
+    print("Skill:     {}".format(skill_dir / "SKILL.md"))
     if renumbered:
         print()
         print("Removing a retired entry moved other hooks under {}. Codex keys hook trust "

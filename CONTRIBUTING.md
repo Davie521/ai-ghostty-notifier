@@ -8,7 +8,7 @@ Everyone taking part is expected to follow the [Code of Conduct](CODE_OF_CONDUCT
 | --- | --- |
 | `agent/` | The Swift package. `NotifyCore` holds policy, session state and terminal binding, and is testable without AppKit; `Sources/ghostty-notify-agent/` is the resident menu bar app and the `--hook` / `--worker` entry points. Tests are under `agent/Tests/`. |
 | `hooks/` | The launchers Claude Code and Codex CLI run. They only locate the installed app and `exec` it; every decision is made in Swift. `hooks.json` registers them for the plugin. |
-| `skills/` | The `ghostty-nudge` skill, which tells Claude Code when to run `ghostty-notify-agent --nudge`. The plugin loads it from here; `install.sh` copies it into `<config>/skills/`. |
+| `skills/` | The `ghostty-nudge` skill, which tells Claude Code and Codex CLI when to run `ghostty-notify-agent --nudge`. The plugin loads it from here; `install.sh` copies it into `<config>/skills/`, `scripts/install-codex.py` into `$CODEX_HOME/skills/`. |
 | `scripts/` | Build, install, package and release glue. Shell stays here and in `install.sh`; nothing on the hook path depends on it. |
 | `tests/` | Python and shell suites that drive the real executable. `test-live-*` need a running Ghostty and are run by hand, not by CI. |
 | `docs/` | What a user or contributor needs now: the reference in both languages, the agent-driven install guide, releasing, and the incident record the code comments point at. Screenshots and the logo are under `docs/assets/`. |

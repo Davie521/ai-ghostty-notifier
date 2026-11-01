@@ -19,12 +19,32 @@ public enum NudgeNotification {
     /// a nudge says one thing.
     public static let maximumLength = 240
 
-    /// The Claude Code session the caller runs in. Claude Code sets this for
-    /// every command its Bash tool runs, and it is the id its hooks receive.
-    public static func sessionID(environment: [String: String]) -> String? {
-        guard let id = environment["CLAUDE_CODE_SESSION_ID"], RequestCodec.isValidSessionID(id)
-        else { return nil }
-        return id
+    public struct Session: Equatable, Sendable {
+        public var id: String
+        public var source: HookSource
+        public init(id: String, source: HookSource) {
+            self.id = id
+            self.source = source
+        }
+    }
+
+    /// The session the caller runs in. Claude Code sets CLAUDE_CODE_SESSION_ID
+    /// and Codex CLI CODEX_THREAD_ID for every command they run, and each is
+    /// the id that CLI's hooks receive (Codex's is also its `threads.id`, which
+    /// its titles are looked up by). Both are inherited by everything below,
+    /// so with both set, `nearest`, the CLI nearest above the caller, decides;
+    /// Claude Code when that cannot be told.
+    public static func session(environment: [String: String], nearest: HookSource? = nil)
+        -> Session?
+    {
+        func session(_ key: String, _ source: HookSource) -> Session? {
+            guard let id = environment[key], RequestCodec.isValidSessionID(id) else { return nil }
+            return Session(id: id, source: source)
+        }
+        let claude = session("CLAUDE_CODE_SESSION_ID", .claude)
+        let codex = session("CODEX_THREAD_ID", .codex)
+        if let claude, let codex { return nearest == .codex ? codex : claude }
+        return claude ?? codex
     }
 
     /// The message on one line, without control characters and bounded, or
@@ -47,12 +67,14 @@ public enum NudgeNotification {
     /// No owner: the session already has one, recorded by its hooks, and a
     /// different one would make the agent forget the session's tab.
     public static func request(
-        sessionID: String, message: String, title: String, project: String, tabID: String?,
-        roundID: String?, settings: [String: String], bundle: Bundle = .main
+        sessionID: String, source: HookSource = .claude, message: String, title: String,
+        project: String, tabID: String?, roundID: String?, settings: [String: String],
+        bundle: Bundle = .main
     ) -> NotifyRequest {
         let options = HookOptions(settings)
         let app =
-            settings["GHOSTTY_NOTIFY_APP_NAME"].flatMap { $0.isEmpty ? nil : $0 } ?? "Claude"
+            settings["GHOSTTY_NOTIFY_APP_NAME"].flatMap { $0.isEmpty ? nil : $0 }
+            ?? (source == .codex ? "Codex" : "Claude")
         let name = title.isEmpty ? UIText.text("Needs You", in: bundle) : title
         let subtitle = project.isEmpty ? name : name + " — " + project
         return NotifyRequest(
@@ -61,11 +83,11 @@ public enum NudgeNotification {
             // Sent because the user is wanted now, so never silent.
             sound: "Ping", tabID: tabID?.isEmpty == false ? tabID : nil,
             timeout: options.timeout, clearOnFocus: options.clearOnFocus,
-            roundID: roundID?.isEmpty == false ? roundID : nil, source: .claude)
+            roundID: roundID?.isEmpty == false ? roundID : nil, source: source)
     }
 
     public enum Problem: Equatable, Sendable {
-        /// Not run by Claude Code, so there is no session to post for.
+        /// Not run by Claude Code or Codex CLI, so there is no session to post for.
         case noSession
         /// The agent cannot take it. `.notCollected` means it was queued, not
         /// taken within five seconds, and taken back again.
@@ -73,16 +95,19 @@ public enum NudgeNotification {
         /// Queued, not taken, and could not be taken back: the agent may still
         /// post it later.
         case stuck(String)
+        /// Like `.agent(.notCollected)`, from the queue a sandboxed CLI can
+        /// write to (`AgentPaths.nudgeSpool`), which an older agent never reads.
+        case notCollectedFromSandbox
     }
 
     public static func explain(_ problem: Problem, app: String) -> String {
         switch problem {
         case .noSession:
             return """
-                CLAUDE_CODE_SESSION_ID is not set, so there is no session to nudge for and \
-                nothing was sent.
-                --nudge works in commands Claude Code runs; the notification leads back to \
-                that session's tab.
+                Neither CLAUDE_CODE_SESSION_ID nor CODEX_THREAD_ID is set, so there is no \
+                session to nudge for and nothing was sent.
+                --nudge works in commands Claude Code or Codex CLI runs; the notification \
+                leads back to that session's tab.
                 """
         case .agent(.notCollected):
             return """
@@ -97,6 +122,14 @@ public enum NudgeNotification {
                 The agent did not pick up the nudge within five seconds, and it could not be \
                 taken back (\(reason)), so it may still appear later.
                 Its log may say why: ~/.claude/notifications/ghostty-agent/agent.log
+                """
+        case .notCollectedFromSandbox:
+            return """
+                The agent did not pick up the nudge within five seconds, so it was taken \
+                back and nothing was sent.
+                A sandbox kept it out of the usual queue, and the queue it went to instead \
+                is read only by \(AgentConstants.displayName) 0.9.0 or later: update the \
+                app if it is older.
                 """
         }
     }
