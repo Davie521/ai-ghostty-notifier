@@ -237,7 +237,11 @@ It finds its session through `CLAUDE_CODE_SESSION_ID` or `CODEX_THREAD_ID`,
 which Claude Code and Codex set for the commands they run (with both set, as
 in Codex started from Claude Code, the CLI nearest above the command wins), and
 the tab through what that session's hooks recorded, so it never touches the
-terminal. It goes through the resident app only. Codex's sandbox refuses
+terminal. A Codex session's hooks record its tab only at the end of a run long
+enough to notify, because while Codex works it rewrites the tab title ten
+times a second; until then the app looks for the one tab titled after the
+session (Codex shows its thread name there), and when none or several are,
+Go to tab only brings Ghostty forward. It goes through the resident app only. Codex's sandbox refuses
 writes under `~/.claude`, so there the nudge goes to a second queue in the
 user's own temporary directory, which the sandbox leaves writable and from
 which the app takes notifications and nothing else; it needs no escalation. When it cannot send (no session, the app not running, notifications not

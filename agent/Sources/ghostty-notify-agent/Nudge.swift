@@ -69,10 +69,13 @@ enum Nudge {
             (try? await QueryDeadline.run(seconds: titleSeconds) {
                 await DiskSessionContent().title(for: titled)
             }) ?? ""
-        let request = NudgeNotification.request(
+        var request = NudgeNotification.request(
             sessionID: session.id, source: session.source, message: message, title: title,
             project: project(event), tabID: tab, roundID: event.roundID,
             settings: event.settings)
+        // No tab bound yet (a Codex session before its first long run): the
+        // agent looks for the tab titled after the session instead.
+        if tab == nil, !title.isEmpty { request.tabTitle = title }
         let file: String
         var sandboxed = false
         do {
@@ -106,7 +109,7 @@ enum Nudge {
             case .taken: break  // The agent took it after all.
             }
         }
-        print(NudgeNotification.sent(tabKnown: tab != nil))
+        print(NudgeNotification.sent(tabKnown: tab != nil, lookedUp: request.tabTitle != nil))
         return 0
     }
 

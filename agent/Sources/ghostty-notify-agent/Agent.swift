@@ -256,6 +256,12 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             state.anchor(sessionID: notify.stateKey, tabID: notify.tabID, now: Agent.now())
             deliver(notify)
             shortenIfAlreadyWatching(notify)
+            // Not with Ghostty gone: a `tell` would start it again.
+            if let title = notify.tabTitle, state.sessions[notify.stateKey]?.tabID == nil,
+                Ghostty.processID != nil
+            {
+                findTab(titled: title, for: notify)
+            }
 
         case .dismiss(let sessionID, let source):
             withdrawLegacyCodex(sessionID: sessionID, source: source)
@@ -333,6 +339,48 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     private static let watchedGraceSeconds: Double = 3
+
+    /// A nudge for a session no marker has bound: find its tab by the
+    /// session's title (see `TabTitleMatch`), once the banner is up, as every
+    /// other Apple Event here comes after delivery. Only a tab that is the one
+    /// match is taken, and only while the session still has no tab and the
+    /// same owner: a session resumed elsewhere meanwhile has dropped its tab
+    /// on purpose.
+    ///
+    /// The binding is the session's, not the notification's: it is kept when
+    /// a click withdrew the notification during the lookup's fraction of a
+    /// second, and serves one that replaced it.
+    private func findTab(titled title: String, for notify: NotifyRequest) {
+        let key = notify.stateKey
+        let owner = state.sessions[key]?.owner
+        Task { @MainActor [weak self] in
+            let tabs =
+                (try? await QueryDeadline.run(seconds: 4) {
+                    try await MacTerminalAutomation().tabs()
+                }) ?? []
+            guard let self, !self.shuttingDown, self.state.sessions[key]?.tabID == nil,
+                self.state.sessions[key]?.owner == owner
+            else { return }
+            guard let tab = TabTitleMatch.tab(titled: title, among: tabs) else {
+                self.log("no single tab titled after \(key) among \(tabs.count)")
+                return
+            }
+            self.state.anchor(sessionID: key, tabID: tab, now: Agent.now())
+            self.log("anchored \(key) -> \(tab) (by title)")
+            self.stateChanged()
+            // Delivery found no tab to watch for, so nothing polls for the
+            // user's return to it yet; and they may be looking at it already.
+            // Both go by what the session has on screen now, if anything: a
+            // notification that replaced this one keeps its own clearing.
+            self.startTabPoll()
+            guard let record = self.state.sessions[key], !record.notificationIDs.isEmpty else {
+                return
+            }
+            var current = notify
+            current.clearOnFocus = record.clearOnFocus
+            self.shortenIfAlreadyWatching(current)
+        }
+    }
     private static let systemSettingsBundleID = "com.apple.systempreferences"
     /// Set by a jump that needed to travel to another Space and was not
     /// allowed to. Cleared when the menu finds the permission granted.
