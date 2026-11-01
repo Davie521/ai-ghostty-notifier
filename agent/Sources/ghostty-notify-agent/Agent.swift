@@ -340,23 +340,24 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     /// A nudge for a session no marker has bound: find its tab by the
     /// session's title (see `TabTitleMatch`), once the banner is up, as every
     /// other Apple Event here comes after delivery. Only a tab that is the one
-    /// match is taken, and only while the session still has no tab.
+    /// match is taken, and only while the session still has no tab and the
+    /// same owner: a session resumed elsewhere meanwhile has dropped its tab
+    /// on purpose.
     ///
-    /// The binding is the session's, so it is kept even when the notification
-    /// went meanwhile (a click within the lookup's fraction of a second only
-    /// brought Ghostty forward); what concerns the notification, the focus
-    /// watch and the already-watching check, waits for it to still be there.
+    /// The binding is the session's, not the notification's: it is kept when
+    /// a click withdrew the notification during the lookup's fraction of a
+    /// second, and serves one that replaced it.
     private func findTab(titled title: String, for notify: NotifyRequest) {
         let key = notify.stateKey
-        let postedAt = state.sessions[key]?.postedAt
+        let owner = state.sessions[key]?.owner
         Task { @MainActor [weak self] in
             let tabs =
                 (try? await QueryDeadline.run(seconds: 4) {
                     try await MacTerminalAutomation().tabs()
                 }) ?? []
-            guard let self, !self.shuttingDown, self.state.sessions[key]?.tabID == nil else {
-                return
-            }
+            guard let self, !self.shuttingDown, self.state.sessions[key]?.tabID == nil,
+                self.state.sessions[key]?.owner == owner
+            else { return }
             guard let tab = TabTitleMatch.tab(titled: title, among: tabs) else {
                 self.log("no single tab titled after \(key) among \(tabs.count)")
                 return
@@ -364,9 +365,9 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             self.state.anchor(sessionID: key, tabID: tab, now: Agent.now())
             self.log("anchored \(key) -> \(tab) (by title)")
             self.stateChanged()
-            guard postedAt != nil, self.state.sessions[key]?.postedAt == postedAt else { return }
             // Delivery found no tab to watch for, so nothing polls for the
             // user's return to it yet; and they may be looking at it already.
+            // Both look at what the session has on screen now, if anything.
             self.startTabPoll()
             self.shortenIfAlreadyWatching(notify)
         }
