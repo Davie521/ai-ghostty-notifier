@@ -134,9 +134,8 @@ final class SpoolWatcher {
 
         let cutoff = now() - AgentConstants.staleNotifyAge
         for candidate in candidates {
-            let data = try? Data(contentsOf: URL(fileURLWithPath: candidate.path))
-            try? fm.removeItem(atPath: candidate.path)
-            guard let data else { continue }
+            // Also nil when its writer took it back first (`--nudge`).
+            guard let data = AtomicSpool.take(candidate.path) else { continue }
 
             let request: AgentRequest
             do {

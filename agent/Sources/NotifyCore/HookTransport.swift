@@ -34,6 +34,37 @@ public enum AtomicSpool {
         try FileManager.default.moveItem(at: temporary, to: final)
         return final.path
     }
+
+    /// The agent's side: read a published request, then unlink it. Nil when it
+    /// cannot be read, and when it is already gone by the time it is unlinked:
+    /// its writer took it back (`withdraw`). Whoever unlinks first decides, so
+    /// a request taken back is never acted on, even when it was read first.
+    /// Any other unlink failure still hands over what was read, as before.
+    public static func take(_ path: String) -> Data? {
+        claim(path, read: try? Data(contentsOf: URL(fileURLWithPath: path)))
+    }
+
+    /// The second half of `take`, apart so a test can withdraw in between.
+    static func claim(_ path: String, read data: Data?) -> Data? {
+        if unlink(path) != 0, errno == ENOENT { return nil }
+        return data
+    }
+
+    public enum Withdrawal: Equatable, Sendable {
+        case withdrawn
+        /// Already gone: the agent took it first, and will act on it.
+        case taken
+        /// Still there, and the agent may yet take it.
+        case stuck(String)
+    }
+
+    /// The writer's side: take back a request the agent has not taken.
+    public static func withdraw(_ path: String) -> Withdrawal {
+        if unlink(path) == 0 { return .withdrawn }
+        let error = errno
+        if error == ENOENT { return .taken }
+        return .stuck(String(cString: strerror(error)))
+    }
 }
 
 public struct HookTransport: Sendable {

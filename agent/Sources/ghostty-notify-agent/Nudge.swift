@@ -54,7 +54,7 @@ enum Nudge {
             // Not taken: take it back, or an agent that recovers later posts a
             // nudge the coding agent was told had not been sent, and the user
             // hears about the same thing twice.
-            switch withdraw(file) {
+            switch AtomicSpool.withdraw(file) {
             case .withdrawn:
                 SelfTest.fail(NudgeNotification.explain(.agent(.notCollected), app: app))
                 return 1
@@ -66,23 +66,6 @@ enum Nudge {
         }
         print(NudgeNotification.sent(tabKnown: tab != nil))
         return 0
-    }
-
-    private enum Withdrawal {
-        case withdrawn
-        /// Gone before it could be removed: the agent read it, then unlinked it.
-        case taken
-        case stuck(String)
-    }
-
-    /// The agent reads a request and then unlinks it, so a read begun an
-    /// instant before this unlink still posts. After five seconds without a
-    /// read, that instant is the only window left.
-    private static func withdraw(_ file: String) -> Withdrawal {
-        if unlink(file) == 0 { return .withdrawn }
-        let error = errno
-        if error == ENOENT { return .taken }
-        return .stuck(String(cString: strerror(error)))
     }
 
     /// Claude Code keeps each session's transcript as
