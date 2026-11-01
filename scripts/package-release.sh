@@ -2,8 +2,8 @@
 # Package a built (and, for a real release, signed and notarized) bundle into
 # the assets a GitHub Release carries:
 #
-#   ai-ghostty-notifier-macos.zip   the App, the hook launchers and the scripts
-#                                   that install them
+#   ai-ghostty-notifier-macos.zip   the App, the hook launchers, the nudge skill
+#                                   and the scripts that install them
 #   setup.sh                        the one-command installer, which downloads
 #                                   the zip above
 #   SHA256SUMS                      checksums of both
@@ -45,12 +45,13 @@ codesign --verify --deep --strict "$APP"
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 DIST="$STAGE/$NAME"
-mkdir -p "$DIST/scripts" "$DIST/hooks"
+mkdir -p "$DIST/scripts" "$DIST/hooks" "$DIST/skills/ghostty-nudge"
 
 # ditto, not cp: it keeps the signature, the stapled ticket and extended
 # attributes intact.
 ditto "$APP" "$DIST/ClaudeGhosttyNotify.app"
 cp "$REPO/install.sh" "$REPO/LICENSE" "$DIST/"
+cp "$REPO/skills/ghostty-nudge/SKILL.md" "$DIST/skills/ghostty-nudge/"
 cp "$REPO/scripts/install-agent.sh" "$REPO/scripts/install-codex.py" \
     "$REPO/scripts/register-claude-hooks.py" "$DIST/scripts/"
 # The launchers only: hooks/bin is local build output, and hooks.json is the

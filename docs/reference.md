@@ -67,9 +67,11 @@ bash install.sh --register-settings
 ```
 
 It verifies that the native app is installed, copies the small launchers to
-`<config>/hooks/` and merges their entries into `<config>/settings.json`, where
-`<config>` is `$CLAUDE_CONFIG_DIR` when set and `~/.claude` otherwise. The
-merge keeps everything else in the file, copies it aside first as
+`<config>/hooks/` and the [`ghostty-nudge` skill](#when-claude-needs-you) to
+`<config>/skills/`, and merges the launchers' entries into
+`<config>/settings.json`, where `<config>` is `$CLAUDE_CONFIG_DIR` when set and
+`~/.claude` otherwise. The merge keeps everything else in the file, copies it
+aside first as
 `settings.json.ghostty-notify-backup-<time>`, adds nothing to an event that
 already runs one of these launchers, and writes nothing when the file does not
 parse or when the plugin is enabled. With more than one configuration
@@ -205,6 +207,34 @@ Resident notifications expire after 20 minutes unless cleared
 earlier. Focusing the session's tab or submitting another prompt withdraws its
 notification. Permission/input prompts are silent unless
 `GHOSTTY_NOTIFY_ON_PROMPT=1`.
+
+### When Claude needs you
+
+The notifications above come when a run ends. When Claude Code needs you
+part-way through (Face ID on your phone, a verification code, a QR scan, a
+decision it cannot make for you), it can call you itself:
+
+```bash
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge "Face ID on your iPhone to finish the login"
+```
+
+The installer puts a `ghostty-nudge` skill in `<config>/skills/`, and the
+plugin carries the same one. It tells Claude when to run this: only when it
+needs you to act and you may not be watching, once for each thing it needs,
+never for progress or for the end of a run.
+
+A nudge is the session's own notification. It always plays a sound, carries the
+session's title and project, and its Go to tab returns to the session's tab.
+The menu bar lists it, and it clears like the others: when you return to the
+tab, when you send a prompt, or after `GHOSTTY_NOTIFY_TIMEOUT`. A later nudge,
+or the run's completion notification, replaces it.
+
+It finds its session through `CLAUDE_CODE_SESSION_ID`, which Claude Code sets
+for the commands it runs, and the tab through what that session's hooks
+recorded, so it never touches the terminal. It goes through the resident app
+only. When it cannot send (no session, the app not running, notifications not
+allowed), it exits 1 and says why; the skill then has Claude say what it needs
+in its reply instead. Codex CLI is not supported yet.
 
 Notifications, the menu bar and the alert-style guidance are in English or
 Simplified Chinese. macOS chooses per app from your language list; to give this
@@ -514,7 +544,8 @@ exist is in `docs/incident-2026-09-17-pretooluse-hang.md`.
 
 Remove hook registrations first and restart open CLI sessions. For plugin
 installs, use `/plugin uninstall ai-ghostty-notifier@ai-ghostty-notifier`. For manual Claude
-installs remove this project's entries from `settings.json`; for Codex remove
+installs remove this project's entries from `settings.json` and the
+`<config>/skills/ghostty-nudge/` folder; for Codex remove
 entries containing `ghostty-notify/codex-hook.sh` from `hooks.json`.
 
 After unregistering hooks for **both** CLIs, remove the shared app: the first

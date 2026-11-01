@@ -58,7 +58,8 @@ hook 和 launchd 都使用这个固定位置，所以移动源码仓库不会导
 bash install.sh --register-settings
 ```
 
-安装器先检查原生 App，再把薄入口复制到 `<config>/hooks/`，并把它们的条目合并进
+安装器先检查原生 App，再把薄入口复制到 `<config>/hooks/`、把 [`ghostty-nudge` skill](#claude-需要你的时候)
+复制到 `<config>/skills/`，并把入口的条目合并进
 `<config>/settings.json`；`<config>` 是 `$CLAUDE_CONFIG_DIR`（设了的话），否则是 `~/.claude`。
 合并会保留文件里其他所有内容，先备份为 `settings.json.ghostty-notify-backup-<时间>`，
 已经跑着这些入口的事件不会重复添加；文件解析不了或插件已启用时不写入，并说明原因。
@@ -174,6 +175,29 @@ hook 会读取完 stdin、写明诊断并返回成功，避免阻塞 CLI，但�
 
 阈值可以修改（[全部配置项](#配置)）。默认 20 分钟后通知过期；回到会话标签页或提交新提问时会提前清除。
 权限/输入提示默认静默，只有设置 `GHOSTTY_NOTIFY_ON_PROMPT=1` 才开启。
+
+### Claude 需要你的时候
+
+上面这些通知都在一轮跑完时才来。Claude Code 干到一半需要你（在手机上刷 Face ID、
+报验证码、扫二维码、替它拍板）时，可以自己叫你：
+
+```bash
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge "在 iPhone 上刷 Face ID，完成登录"
+```
+
+安装器会在 `<config>/skills/` 放一个 `ghostty-nudge` skill，插件里也带着同一个。它告诉
+Claude 什么时候该这么做：只在需要你动手、而你可能没在看的时候，每件事叫一次，
+不用来报进度，也不用来报一轮跑完。
+
+这条通知就是这个会话自己的通知：不管跑了多久都带提示音，显示会话标题和项目，
+点 Go to tab 回到这个会话的标签页。菜单栏会列出它，撤掉的方式也和其他通知一样：
+回到那个标签页、提交新提问，或者过了 `GHOSTTY_NOTIFY_TIMEOUT`。之后再叫一次，
+或者这一轮跑完的通知，会替换掉它。
+
+它靠 Claude Code 给自己跑的命令设置的 `CLAUDE_CODE_SESSION_ID` 认出会话，靠这个会话的
+hook 记下的信息找到标签页，所以完全不碰终端。只走常驻 App；发不出去时（没有会话、
+App 没在运行、通知没授权）以 1 退出并说明原因，skill 会让 Claude 改在回复里说清楚要你
+做什么。暂不支持 Codex CLI。
 
 通知、菜单栏和提醒样式引导窗口有英文和简体中文两种。macOS 按你的语言列表逐个 App 选择；
 想让这个 App 用和系统不同的语言，去「系统设置 › 通用 › 语言与地区 › 应用程序」单独指定。
@@ -397,7 +421,7 @@ python3 tests/test-live-worker.py
 
 先移除 hook 注册并重启已打开的 CLI 会话。
 插件方式使用 `/plugin uninstall ai-ghostty-notifier@ai-ghostty-notifier`；
-手动 Claude 安装删除 `settings.json` 中本项目的条目；
+手动 Claude 安装删除 `settings.json` 中本项目的条目和 `<config>/skills/ghostty-nudge/` 文件夹；
 Codex 删除 `hooks.json` 中命令包含 `ghostty-notify/codex-hook.sh` 的条目。
 
 **两个 CLI** 都取消使用后，再卸载共用 App：从 checkout 装的用第一条，从 release 装的用第二条。

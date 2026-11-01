@@ -1,6 +1,7 @@
 /* 通知本身。 */
 "Task Complete" = "任务完成";
 "Input Required" = "需要你输入";
+"Needs You" = "需要你";
 "Finished after %.0fm %.0fs" = "耗时 %.0f 分 %.0f 秒";
 "Claude is waiting for you" = "Claude 在等你";
 "Go to tab" = "回到标签页";

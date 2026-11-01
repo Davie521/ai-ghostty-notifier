@@ -3,6 +3,18 @@
 What changed in each release. The one-command installer always fetches the
 latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-notifier/releases).
 
+## Unreleased
+
+### Added
+
+- Claude Code can call you back part-way through a task.
+  `ghostty-notify-agent --nudge "<what it needs>"` posts the session's own
+  notification, with sound, whose Go to tab returns to its tab; it clears like
+  the others. A new `ghostty-nudge` skill, which the installer copies into
+  `<config>/skills/` and the plugin carries, tells Claude to use it only when it
+  needs you to act (Face ID, a code, a scan, a decision) and you may not be
+  watching. Codex CLI is not supported yet.
+
 ## 0.7.0 — 2026-10-27
 
 ### Fixed

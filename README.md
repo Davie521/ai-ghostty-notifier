@@ -38,6 +38,9 @@ in one project.
 - **Claude Code and Codex CLI**, each notification under its session's own title.
 - **Gets out of the way.** Return to the tab or send another prompt and the
   notification disappears; one nobody answers expires after 20 minutes.
+- **It can call you back.** When Claude Code needs you part-way through, for
+  Face ID, a code, a scan or a decision, it sends a notification with sound
+  that leads to its tab ([how](docs/reference.md#when-claude-needs-you)).
 - **A menu bar list** of the sessions waiting on you.
 - **In your language.** Notifications and the menu bar in English or Simplified
   Chinese, following macOS.
