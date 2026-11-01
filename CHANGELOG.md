@@ -3,7 +3,7 @@
 What changed in each release. The one-command installer always fetches the
 latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-notifier/releases).
 
-## Unreleased
+## 0.8.0 — 2026-11-01
 
 ### Added
 
@@ -14,6 +14,12 @@ latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-n
   `<config>/skills/` and the plugin carries, tells Claude to use it only when it
   needs you to act (Face ID, a code, a scan, a decision) and you may not be
   watching. Codex CLI is not supported yet.
+
+### Fixed
+
+- A request the app could not remove from its queue, which happens only when
+  the queue's folder has lost its permissions, is no longer acted on again on
+  every pass; it waits until it can be removed (#70).
 
 ## 0.7.0 — 2026-10-27
 
