@@ -53,6 +53,11 @@ public struct NotifyRequest: Equatable, Sendable {
     /// notification is never withdrawn by a focus change — some people keep
     /// them in Notification Center as a to-do list.
     public var clearOnFocus: Bool
+    /// The session's title, from a `--nudge` that knew no tab for it. The
+    /// agent looks for the one Ghostty tab titled after it (see
+    /// `TabTitleMatch`): a Codex session gets its tab only at the end of a
+    /// run long enough to notify, and a nudge often comes before that.
+    public var tabTitle: String?
 
     public init(
         sessionID: String,
@@ -65,7 +70,8 @@ public struct NotifyRequest: Equatable, Sendable {
         clearOnFocus: Bool = true,
         roundID: String? = nil,
         source: HookSource = .claude,
-        owner: String? = nil
+        owner: String? = nil,
+        tabTitle: String? = nil
     ) {
         self.sessionID = sessionID
         self.title = title
@@ -78,6 +84,7 @@ public struct NotifyRequest: Equatable, Sendable {
         self.roundID = roundID
         self.source = source
         self.owner = owner
+        self.tabTitle = tabTitle
     }
 }
 
@@ -183,7 +190,8 @@ public enum RequestCodec {
                     clearOnFocus: clearOnFocus,
                     roundID: optional("round_id"),
                     source: try source(),
-                    owner: optional("owner")
+                    owner: optional("owner"),
+                    tabTitle: optional("tab_title")
                 )
             )
         case "dismiss":
@@ -223,6 +231,7 @@ public enum RequestCodec {
             if let timeout = n.timeout { object["timeout"] = timeout }
             if let round = n.roundID { object["round_id"] = round }
             if let owner = n.owner { object["owner"] = owner }
+            if let tabTitle = n.tabTitle { object["tab_title"] = tabTitle }
             if n.source != .claude { object["source"] = n.source.rawValue }
         case .dismiss(let sessionID, let source):
             object = ["type": "dismiss", "session_id": sessionID]

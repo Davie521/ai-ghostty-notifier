@@ -90,7 +90,8 @@ public struct AgentPaths: Equatable, Sendable {
         var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
         let length = confstr(_CS_DARWIN_USER_TEMP_DIR, &buffer, buffer.count)
         guard length > 0, length <= buffer.count else { return nil }
-        return String(cString: buffer)
+        let bytes = buffer.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     /// `named` when macOS named one, else TMPDIR, which for the user's own

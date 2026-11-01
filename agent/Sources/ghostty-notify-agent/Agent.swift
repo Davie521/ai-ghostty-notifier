@@ -256,6 +256,9 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             state.anchor(sessionID: notify.stateKey, tabID: notify.tabID, now: Agent.now())
             deliver(notify)
             shortenIfAlreadyWatching(notify)
+            if let title = notify.tabTitle, state.sessions[notify.stateKey]?.tabID == nil {
+                findTab(titled: title, for: notify)
+            }
 
         case .dismiss(let sessionID, let source):
             withdrawLegacyCodex(sessionID: sessionID, source: source)
@@ -333,6 +336,35 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     private static let watchedGraceSeconds: Double = 3
+
+    /// A nudge for a session no marker has bound: find its tab by the
+    /// session's title (see `TabTitleMatch`), once the banner is up, as every
+    /// other Apple Event here comes after delivery. Only a tab that is the one
+    /// match is taken, and only while the session still has no tab and this
+    /// is still its notification.
+    private func findTab(titled title: String, for notify: NotifyRequest) {
+        let key = notify.stateKey
+        let postedAt = state.sessions[key]?.postedAt
+        Task { @MainActor [weak self] in
+            let tabs =
+                (try? await QueryDeadline.run(seconds: 4) {
+                    try await MacTerminalAutomation().tabs()
+                }) ?? []
+            guard let self, !self.shuttingDown,
+                self.state.sessions[key]?.postedAt == postedAt,
+                self.state.sessions[key]?.tabID == nil
+            else { return }
+            guard let tab = TabTitleMatch.tab(titled: title, among: tabs) else {
+                self.log("no single tab titled after \(key) among \(tabs.count)")
+                return
+            }
+            self.state.anchor(sessionID: key, tabID: tab, now: Agent.now())
+            self.log("anchored \(key) -> \(tab) (by title)")
+            self.stateChanged()
+            // Bound now, so the user may turn out to be looking at it already.
+            self.shortenIfAlreadyWatching(notify)
+        }
+    }
     private static let systemSettingsBundleID = "com.apple.systempreferences"
     /// Set by a jump that needed to travel to another Space and was not
     /// allowed to. Cleared when the menu finds the permission granted.

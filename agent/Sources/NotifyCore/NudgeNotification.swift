@@ -136,10 +136,16 @@ public enum NudgeNotification {
 
     public static let usage = "usage: ghostty-notify-agent --nudge <what you need from the user>"
 
-    public static func sent(tabKnown: Bool) -> String {
-        tabKnown
-            ? "Sent. Go to tab brings the user back to this session's tab."
-            : "Sent, but this session's tab is not known yet, so Go to tab only brings "
+    /// `lookedUp`: the tab was not known, and the agent was asked to find it
+    /// by the session's title.
+    public static func sent(tabKnown: Bool, lookedUp: Bool = false) -> String {
+        if tabKnown { return "Sent. Go to tab brings the user back to this session's tab." }
+        if lookedUp {
+            return "Sent. This session's tab was not known yet, so the app looks for the one tab "
+                + "titled after the session; if none or several are, Go to tab only brings "
                 + "Ghostty forward."
+        }
+        return "Sent, but this session's tab is not known yet, so Go to tab only brings "
+            + "Ghostty forward."
     }
 }

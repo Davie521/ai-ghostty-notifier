@@ -3,6 +3,17 @@
 What changed in each release. The one-command installer always fetches the
 latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-notifier/releases).
 
+## Unreleased
+
+### Fixed
+
+- A Codex nudge's Go to tab reaches the session's tab even before the session
+  has had a run long enough to notify. Codex sessions get their tab recorded
+  only at the end of such a run (while Codex works it rewrites the tab title
+  ten times a second), so until then the button only brought Ghostty forward.
+  Now the app looks for the one tab titled after the session, which is how
+  Codex titles it; with none or several, it behaves as before.
+
 ## 0.9.0 — 2026-11-01
 
 ### Added
