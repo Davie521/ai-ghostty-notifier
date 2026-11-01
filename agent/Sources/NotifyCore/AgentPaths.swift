@@ -48,6 +48,8 @@ public struct AgentPaths: Equatable, Sendable {
     /// `GHOSTTY_NOTIFY_NUDGE_SPOOL`, an absolute path, moves `nudgeSpool`; only
     /// the integration test sets it.
     private let nudgeSpoolOverride: String?
+    /// TMPDIR, for when macOS will not name the user's temporary directory.
+    private let temporaryOverride: String?
 
     public init(env: [String: String]) throws {
         guard let home = env["HOME"], !home.isEmpty else {
@@ -57,6 +59,7 @@ public struct AgentPaths: Equatable, Sendable {
         nudgeSpoolOverride = env["GHOSTTY_NOTIFY_NUDGE_SPOOL"].flatMap {
             $0.hasPrefix("/") && $0 != "/" && !$0.contains("\0") ? $0 : nil
         }
+        temporaryOverride = env["TMPDIR"]
     }
 
     public var root: String { home + "/.claude/notifications/ghostty-agent" }
@@ -70,9 +73,16 @@ public struct AgentPaths: Equatable, Sendable {
     /// macOS names no temporary directory.
     public var nudgeSpool: String? {
         if let nudgeSpoolOverride { return nudgeSpoolOverride }
-        guard let temporary = Self.userTemporaryDirectory() else { return nil }
+        guard
+            let temporary = Self.temporaryDirectory(
+                named: Self.userTemporaryDirectory(), orTMPDIR: temporaryOverride)
+        else { return nil }
         return temporary + "io.github.davie521.cgnotify-" + Self.digest(home) + "/nudges"
     }
+    /// The agent writes the `nudgeSpool` it watches here. A sandbox may keep
+    /// a CLI from asking macOS for the temporary directory (Codex's read-only
+    /// one does), and reading a file under ~/.claude it still allows.
+    public var nudgeSpoolFile: String { root + "/nudge-spool" }
 
     /// The per-user directory under /var/folders, the same for every process
     /// of the user whatever TMPDIR says, the agent under launchd included.
@@ -80,9 +90,19 @@ public struct AgentPaths: Equatable, Sendable {
         var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
         let length = confstr(_CS_DARWIN_USER_TEMP_DIR, &buffer, buffer.count)
         guard length > 0, length <= buffer.count else { return nil }
-        let path = String(cString: buffer)
-        guard path.hasPrefix("/"), path != "/" else { return nil }
-        return path.hasSuffix("/") ? path : path + "/"
+        return String(cString: buffer)
+    }
+
+    /// `named` when macOS named one, else TMPDIR, which for the user's own
+    /// processes is the same directory; with a trailing slash. Nil when
+    /// neither is an absolute path.
+    static func temporaryDirectory(named: String?, orTMPDIR tmpdir: String?) -> String? {
+        for candidate in [named, tmpdir] {
+            guard let path = candidate, path.hasPrefix("/"), path != "/", !path.contains("\0")
+            else { continue }
+            return path.hasSuffix("/") ? path : path + "/"
+        }
+        return nil
     }
 
     /// FNV-1a, 64 bits: stable across processes and releases, unlike Hasher.

@@ -36,6 +36,23 @@ private func process(_ pid: Int32, _ parent: Int32, _ name: String, _ executable
         #expect(AgentPaths.digest("") == "cbf29ce484222325")
     }
 
+    /// A sandbox may refuse the question to macOS; TMPDIR names the same
+    /// directory for the user's own processes.
+    @Test func withoutAnAnswerFromMacOSTMPDIRIsUsed() {
+        #expect(AgentPaths.temporaryDirectory(named: "/var/f/T/", orTMPDIR: "/x/") == "/var/f/T/")
+        #expect(AgentPaths.temporaryDirectory(named: nil, orTMPDIR: "/var/f/T") == "/var/f/T/")
+        #expect(AgentPaths.temporaryDirectory(named: "", orTMPDIR: "/var/f/T/") == "/var/f/T/")
+        #expect(AgentPaths.temporaryDirectory(named: nil, orTMPDIR: "relative") == nil)
+        #expect(AgentPaths.temporaryDirectory(named: "/", orTMPDIR: nil) == nil)
+        #expect(AgentPaths.temporaryDirectory(named: nil, orTMPDIR: nil) == nil)
+    }
+
+    @Test func theAgentPublishesItBesideItsOtherState() throws {
+        #expect(
+            try AgentPaths(env: ["HOME": "/h"]).nudgeSpoolFile
+                == "/h/.claude/notifications/ghostty-agent/nudge-spool")
+    }
+
     @Test func onlyAnAbsoluteOverrideMovesIt() throws {
         let moved = try AgentPaths(env: ["HOME": "/h", "GHOSTTY_NOTIFY_NUDGE_SPOOL": "/s/n"])
         #expect(moved.nudgeSpool == "/s/n")

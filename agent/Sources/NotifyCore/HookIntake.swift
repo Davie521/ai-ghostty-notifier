@@ -136,7 +136,10 @@ public enum HookIntake {
         return result
     }
 
-    private static func absolute(_ value: String?, fallback: String, home: String, cwd: String)
+    /// How the hooks resolve a configured path: empty means `fallback`, `~/`
+    /// is HOME, and a relative path is taken from `cwd`. `--nudge` resolves the
+    /// same variables the same way.
+    public static func absolute(_ value: String?, fallback: String, home: String, cwd: String)
         -> String
     {
         var path = value?.isEmpty == false ? value! : fallback

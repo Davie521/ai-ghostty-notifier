@@ -318,6 +318,8 @@ nudge_spool_drained() {
 }
 check "the agent prepares the nudge spool, private to the user" \
     test "$(stat -f %Lp "$NUDGES" 2>/dev/null)" = "700"
+check "and says where it is, for a CLI that may not ask macOS" \
+    test "$(cat "$ROOT/nudge-spool" 2>/dev/null)" = "$NUDGES"
 nudge_queue "$(jq -nc --arg s "$NUDGE_SID" '{type:"notify",session_id:$s,title:"nudge"}')"
 check "a notification in the nudge spool is posted" \
     wait_for 10 state_is "$NUDGE_SID" "claude-$NUDGE_SID"

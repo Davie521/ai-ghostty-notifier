@@ -55,8 +55,10 @@ enum Nudge {
         case .codex:
             // Where the title lookup finds Codex's own database, as for its hooks.
             event.codexHome = codexHome
-            event.codexSQLiteHome = settings["CODEX_SQLITE_HOME"].flatMap {
-                $0.hasPrefix("/") ? $0 : nil
+            event.codexSQLiteHome = settings["CODEX_SQLITE_HOME"].map {
+                HookIntake.absolute(
+                    $0, fallback: codexHome, home: paths.home,
+                    cwd: FileManager.default.currentDirectoryPath)
             }
         }
         // A long transcript must not use up the time the wait for the agent,
@@ -78,7 +80,7 @@ enum Nudge {
         } catch {
             // Codex CLI's sandbox refuses writes under ~/.claude. The agent
             // also reads notifications from a place the sandbox leaves open.
-            guard let nudges = paths.nudgeSpool,
+            guard let nudges = Self.nudgeSpool(paths),
                 let queued = try? AtomicSpool.write(
                     RequestCodec.encode(.notify(request)), to: nudges)
             else {
@@ -108,14 +110,22 @@ enum Nudge {
         return 0
     }
 
-    /// CODEX_HOME as Codex CLI reads it, absolute; ~/.codex when unset.
+    /// CODEX_HOME resolved as the hooks resolve it; ~/.codex when unset.
     private static func codexHome(environment: [String: String], home: String) -> String {
-        guard var path = environment["CODEX_HOME"], !path.isEmpty, !path.contains("\0") else {
-            return home + "/.codex"
+        HookIntake.absolute(
+            environment["CODEX_HOME"].flatMap { $0.contains("\0") ? nil : $0 },
+            fallback: home + "/.codex", home: home,
+            cwd: FileManager.default.currentDirectoryPath)
+    }
+
+    /// The nudge spool the running agent says it watches, else where it would
+    /// be: a sandbox may not let this process ask macOS for the directory.
+    private static func nudgeSpool(_ paths: AgentPaths) -> String? {
+        let published = DiskRoundJournal.read(paths.nudgeSpoolFile)
+        if published.hasPrefix("/"), published != "/", !published.contains("\0") {
+            return published
         }
-        if path.hasPrefix("~/") { path = home + String(path.dropFirst()) }
-        guard path.hasPrefix("/") else { return home + "/.codex" }
-        return URL(fileURLWithPath: path).standardizedFileURL.path
+        return paths.nudgeSpool
     }
 
     /// The settings the session's hooks run with. Codex CLI passes none of its

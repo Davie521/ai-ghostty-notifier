@@ -153,6 +153,10 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             )
             nudges.start()
             nudgeSpool = nudges
+            // For a --nudge whose sandbox will not let it ask macOS where this is.
+            do { try PrivateFile.write(directory, to: paths.nudgeSpoolFile) } catch {
+                log("cannot publish the nudge spool: \(error)")
+            }
         }
     }
 
