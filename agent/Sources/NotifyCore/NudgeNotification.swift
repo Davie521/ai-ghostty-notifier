@@ -67,7 +67,12 @@ public enum NudgeNotification {
     public enum Problem: Equatable, Sendable {
         /// Not run by Claude Code, so there is no session to post for.
         case noSession
+        /// The agent cannot take it. `.notCollected` means it was queued, not
+        /// taken within five seconds, and taken back again.
         case agent(TestNotification.Problem)
+        /// Queued, not taken, and could not be taken back: the agent may still
+        /// post it later.
+        case stuck(String)
     }
 
     public static func explain(_ problem: Problem, app: String) -> String {
@@ -79,9 +84,20 @@ public enum NudgeNotification {
                 --nudge works in commands Claude Code runs; the notification leads back to \
                 that session's tab.
                 """
+        case .agent(.notCollected):
+            return """
+                The agent did not pick up the nudge within five seconds, so it was taken \
+                back and nothing was sent.
+                Its log may say why: ~/.claude/notifications/ghostty-agent/agent.log
+                """
         case .agent(let problem):
-            return TestNotification.explain(
-                problem, app: app, unsent: "nothing was sent", queued: "The nudge was queued")
+            return TestNotification.explain(problem, app: app, unsent: "nothing was sent")
+        case .stuck(let reason):
+            return """
+                The agent did not pick up the nudge within five seconds, and it could not be \
+                taken back (\(reason)), so it may still appear later.
+                Its log may say why: ~/.claude/notifications/ghostty-agent/agent.log
+                """
         }
     }
 

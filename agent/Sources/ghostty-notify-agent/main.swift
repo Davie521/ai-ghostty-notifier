@@ -95,8 +95,14 @@ if arguments.count == 2, arguments[1] == "--test" {
 }
 if arguments.count >= 2, arguments[1] == "--nudge" {
     // Bounded like --test: the coding agent that ran it waits for the answer.
+    // Nudge bounds its own steps well inside this, the five-second wait for the
+    // agent included; reaching it means something hung, possibly after the
+    // nudge was queued, so it may still be posted.
     DispatchQueue.global().asyncAfter(deadline: .now() + 20) {
-        FileHandle.standardError.write(Data("ghostty-notify: --nudge timed out\n".utf8))
+        FileHandle.standardError.write(
+            Data(
+                "ghostty-notify: --nudge timed out; if it was queued, it may still appear later.\n"
+                    .utf8))
         _exit(1)
     }
     Task { @MainActor in
