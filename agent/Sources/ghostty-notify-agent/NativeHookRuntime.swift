@@ -31,7 +31,7 @@ enum NativeHookRuntime {
     private static func logger(_ paths: AgentPaths) -> @Sendable (String) -> Void {
         { AgentLog.append($0, to: paths.log) }
     }
-    private static func dependencies(paths: AgentPaths) -> (
+    static func dependencies(paths: AgentPaths) -> (
         NativeTerminalBinding, ExternalNotifications
     ) {
         let external = ExternalNotifications(
@@ -178,9 +178,28 @@ enum NativeHookRuntime {
     static func utility(
         mode: String, sessionID: String, environment: [String: String], paths: AgentPaths
     ) async {
+        guard let event = sessionEvent(sessionID: sessionID, environment: environment, paths: paths)
+        else { return }
+        let (binding, external) = dependencies(paths: paths)
+        if mode == "--focus" {
+            let tab = await binding.existing(event)
+            AgentLog.append(
+                "native focus: session=\(sessionID) tab=\(tab ?? "<none>")", to: paths.log)
+            await MacTerminalAutomation().focus(tabID: tab)
+        } else {
+            await external.clear(event, force: true)
+        }
+    }
+
+    /// An event for a session named by its id alone, outside any hook: where
+    /// its state lives and its current round, as its hooks recorded them.
+    /// Nil for an id or a HOME that cannot be a path component.
+    static func sessionEvent(
+        sessionID: String, environment: [String: String], paths: AgentPaths
+    ) -> HookEvent? {
         guard RequestCodec.isValidSessionID(sessionID), paths.home.hasPrefix("/"),
             paths.home != "/", !paths.home.contains("\0")
-        else { return }
+        else { return nil }
         func nonempty(_ key: String) -> String? {
             environment[key].flatMap { $0.isEmpty ? nil : $0 }
         }
@@ -191,13 +210,13 @@ enum NativeHookRuntime {
             ?? (source == .codex
                 ? (nonempty("CODEX_HOME") ?? paths.home + "/.codex") : paths.home + "/.claude")
             + "/notifications/ghostty-sessions"
-        guard !directory.contains("\0") else { return }
+        guard !directory.contains("\0") else { return nil }
         if directory.hasPrefix("~/") { directory = paths.home + String(directory.dropFirst()) }
         if !directory.hasPrefix("/") {
             directory = FileManager.default.currentDirectoryPath + "/" + directory
         }
         directory = URL(fileURLWithPath: directory).standardizedFileURL.path
-        guard directory != "/" else { return }
+        guard directory != "/" else { return nil }
         var event = HookEvent(
             source: source,
             roundID: DiskRoundJournal.read(directory + "/" + sessionID + ".round"),
@@ -207,14 +226,6 @@ enum NativeHookRuntime {
             payload: HookPayload(sessionID: sessionID, kind: .prompt))
         event.homeDirectory = paths.home
         event.searchPath = environment["PATH"]
-        let (binding, external) = dependencies(paths: paths)
-        if mode == "--focus" {
-            let tab = await binding.existing(event)
-            AgentLog.append(
-                "native focus: session=\(sessionID) tab=\(tab ?? "<none>")", to: paths.log)
-            await MacTerminalAutomation().focus(tabID: tab)
-        } else {
-            await external.clear(event, force: true)
-        }
+        return event
     }
 }

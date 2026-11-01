@@ -64,30 +64,35 @@ public enum TestNotification {
         return nil
     }
 
-    public static func explain(_ problem: Problem, app: String) -> String {
+    /// `unsent` and `queued` name what was being sent, for `--nudge`, which
+    /// meets the same problems.
+    public static func explain(
+        _ problem: Problem, app: String, unsent: String = "no test was sent",
+        queued: String = "The test was queued"
+    ) -> String {
         switch problem {
         case .notRunning:
             return """
-                The agent is not running, so no test was sent. Start it with:
+                The agent is not running, so \(unsent). Start it with:
                   open "\(app)"
                 or run the installer again.
                 """
         case .notAuthorized(AgentConstants.readyDenied):
             return """
                 macOS does not allow \(AgentConstants.displayName) to show notifications, \
-                so no test was sent.
+                so \(unsent).
                 Turn them on in System Settings → Notifications → \(AgentConstants.displayName).
                 """
         case .notAuthorized(let answer):
             let state = answer.isEmpty ? "no answer yet" : answer
             return """
                 \(AgentConstants.displayName) has no notification permission (\(state)), \
-                so no test was sent.
+                so \(unsent).
                 Run the installer again and click Allow when macOS asks.
                 """
         case .notCollected:
             return """
-                The test was queued, but the agent did not pick it up within five seconds.
+                \(queued), but the agent did not pick it up within five seconds.
                 Its log may say why: ~/.claude/notifications/ghostty-agent/agent.log
                 """
         }

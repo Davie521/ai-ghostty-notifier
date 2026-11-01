@@ -1,8 +1,8 @@
 #!/bin/bash
 # Installer for ai-ghostty-notifier.
-# Copies the hook scripts into <config>/hooks/ and prints the settings.json
-# snippet to merge into the user's config. <config> is $CLAUDE_CONFIG_DIR when
-# set, otherwise ~/.claude.
+# Copies the hook scripts into <config>/hooks/ and the ghostty-nudge skill
+# into <config>/skills/, and prints the settings.json snippet to merge into the
+# user's config. <config> is $CLAUDE_CONFIG_DIR when set, otherwise ~/.claude.
 #
 # --register-settings merges the entries into <config>/settings.json instead of
 # printing them (scripts/register-claude-hooks.py: keeps everything else, adds
@@ -50,12 +50,16 @@ STAGING=$(mktemp -d "$HOOKS_DIR/.native-install.XXXXXX")
 trap 'rm -rf "$STAGING"' EXIT
 # The shared bootstrap must exist before any newly published launcher uses it.
 HOOK_FILES=(native-hook.sh ghostty-tab-save.sh ghostty-tab-focus.sh ghostty-notify.sh ghostty-round-reset.sh ghostty-notify-clear.sh ghostty-agent-anchor.sh)
+# Tells Claude Code when and how to run `ghostty-notify-agent --nudge`.
+SKILL=skills/ghostty-nudge/SKILL.md
+SKILL_DIR="$CLAUDE_DIR/skills/ghostty-nudge"
 
 install_from_local() {
     # Stable launchers and their shared native-runtime bootstrap.
     for f in "${HOOK_FILES[@]}"; do
         cp "$LOCAL_HOOKS/$f" "$STAGING/$f"
     done
+    cp "$SCRIPT_DIR/$SKILL" "$STAGING/SKILL.md"
 }
 
 install_from_github() {
@@ -64,6 +68,7 @@ install_from_github() {
     for f in "${HOOK_FILES[@]}"; do
         curl -fsSL "$RAW/$f" -o "$STAGING/$f"
     done
+    curl -fsSL "${RAW%/hooks}/$SKILL" -o "$STAGING/SKILL.md"
 }
 
 if [[ -d "$LOCAL_HOOKS" ]] && [[ -f "$LOCAL_HOOKS/ghostty-tab-save.sh" ]]; then
@@ -80,10 +85,14 @@ for f in "${HOOK_FILES[@]}"; do
     /bin/bash -n "$STAGING/$f"
     chmod +x "$STAGING/$f"
 done
+[[ -s "$STAGING/SKILL.md" ]] || { echo "❌ The ghostty-nudge skill is empty. Nothing was installed." >&2; exit 1; }
 for f in "${HOOK_FILES[@]}"; do
     mv -f "$STAGING/$f" "$HOOKS_DIR/$f"
     echo "  ✓ installed $f"
 done
+mkdir -p "$SKILL_DIR"
+mv -f "$STAGING/SKILL.md" "$SKILL_DIR/SKILL.md"
+echo "  ✓ installed the ghostty-nudge skill"
 
 
 next_steps_after_registration() {

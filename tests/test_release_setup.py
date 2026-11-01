@@ -26,6 +26,7 @@ BUNDLE = "ClaudeGhosttyNotify.app"
 EXECUTABLE = "Contents/MacOS/ghostty-notify-agent"
 REGISTER = REPO / "scripts/register-claude-hooks.py"
 LAUNCHERS = ("ghostty-tab-save.sh", "ghostty-round-reset.sh", "ghostty-notify.sh")
+SKILL = "skills/ghostty-nudge/SKILL.md"
 EVENTS = ["Notification", "PreToolUse", "Stop", "UserPromptSubmit"]
 ASSET = "ai-ghostty-notifier-macos.zip"
 
@@ -235,6 +236,7 @@ class ReleaseSetupTests(unittest.TestCase):
         subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(self.app)], check=True)
         for launcher in LAUNCHERS:
             self.assertTrue((self.home / ".claude/hooks" / launcher).is_file(), launcher)
+        self.assertEqual((self.home / ".claude" / SKILL).read_bytes(), (REPO / SKILL).read_bytes())
         settings = json.loads(self.settings.read_text())
         self.assertEqual(settings["model"], "opus")
         self.assertEqual(sorted(settings["hooks"]), EVENTS)
@@ -392,7 +394,8 @@ class ReleaseSetupTests(unittest.TestCase):
         root = "ai-ghostty-notifier/"
         for required in ("install.sh", "LICENSE", "VERSION", "scripts/install-agent.sh",
                          "scripts/install-codex.py", "scripts/register-claude-hooks.py",
-                         BUNDLE + "/" + EXECUTABLE, *("hooks/" + launcher for launcher in LAUNCHERS)):
+                         BUNDLE + "/" + EXECUTABLE, SKILL,
+                         *("hooks/" + launcher for launcher in LAUNCHERS)):
             self.assertIn(root + required, names)
         self.assertFalse(any(name.startswith(root + "hooks/bin/") for name in names))
         self.assertNotIn(root + "hooks/hooks.json", names)

@@ -112,8 +112,9 @@ live resident, and the normal installer is the way to upgrade either.
 bash install.sh --register-settings
 ```
 
-It verifies the app is installed, copies the launchers into `<config>/hooks/`,
-and merges their entries into `<config>/settings.json`. `<config>` is
+It verifies the app is installed, copies the launchers into `<config>/hooks/`
+and the `ghostty-nudge` skill into `<config>/skills/`, and merges the
+launchers' entries into `<config>/settings.json`. `<config>` is
 `$CLAUDE_CONFIG_DIR` when set, otherwise `~/.claude`. The merge
 (`scripts/register-claude-hooks.py`):
 

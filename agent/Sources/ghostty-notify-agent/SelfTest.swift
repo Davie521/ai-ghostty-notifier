@@ -26,19 +26,24 @@ enum SelfTest {
             fail("Could not queue the test notification: \(error)")
             return 1
         }
-        // Delivery itself is the agent's, and only the screen can confirm it.
-        // What can be checked here is that the agent took the request.
-        var waited = 0
-        while FileManager.default.fileExists(atPath: file), waited < 50 {
-            try? await Task.sleep(nanoseconds: 100_000_000)
-            waited += 1
-        }
-        if FileManager.default.fileExists(atPath: file) {
+        guard await collected(file) else {
             fail(TestNotification.explain(.notCollected, app: app))
             return 1
         }
         print(TestNotification.sent(target))
         return 0
+    }
+
+    /// Whether the agent took a queued request within five seconds. Delivery
+    /// itself is the agent's, and only the screen can confirm it; what can be
+    /// checked from here is that the request left the spool.
+    static func collected(_ file: String) async -> Bool {
+        var waited = 0
+        while FileManager.default.fileExists(atPath: file), waited < 50 {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            waited += 1
+        }
+        return !FileManager.default.fileExists(atPath: file)
     }
 
     /// The tab in front when the test was run: the one typed in, by hand or
@@ -60,7 +65,7 @@ enum SelfTest {
         }
     }
 
-    private static func fail(_ message: String) {
+    static func fail(_ message: String) {
         FileHandle.standardError.write(Data(("ghostty-notify: " + message + "\n").utf8))
     }
 }

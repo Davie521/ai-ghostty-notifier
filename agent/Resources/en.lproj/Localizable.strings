@@ -1,6 +1,7 @@
 /* The notification. */
 "Task Complete" = "Task Complete";
 "Input Required" = "Input Required";
+"Needs You" = "Needs You";
 "Finished after %.0fm %.0fs" = "Finished after %.0fm %.0fs";
 "Claude is waiting for you" = "Claude is waiting for you";
 "Go to tab" = "Go to tab";

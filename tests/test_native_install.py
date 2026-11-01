@@ -49,6 +49,7 @@ class NativeInstallTests(unittest.TestCase):
             shutil.copy2(REPO / "scripts" / name, self.checkout / "scripts" / name)
         shutil.copy2(REPO / "install.sh", self.checkout / "install.sh")
         shutil.copytree(REPO / "hooks", self.checkout / "hooks")
+        shutil.copytree(REPO / "skills", self.checkout / "skills")
         self.built = self.checkout / "build" / BUNDLE
         shutil.copytree(self.bundle, self.built)
         self.app = self.home / "Library/Application Support/claude-ghostty-notify" / BUNDLE
@@ -112,6 +113,8 @@ class NativeInstallTests(unittest.TestCase):
                              (REPO / "hooks/native-hook.sh").read_bytes())
             self.assertFalse((destination / "agent-common.sh").exists())
             self.assertFalse((destination / "legacy-notify.sh").exists())
+        skill = "skills/ghostty-nudge/SKILL.md"
+        self.assertEqual((self.home / ".claude" / skill).read_bytes(), (REPO / skill).read_bytes())
         # Resolve the actual installed bundle (no override or checkout fallback).
         # Explicitly enter Ghostty intake; otherwise non-Ghostty input is
         # intentionally ignored before JSON parsing. Do not inherit this from
