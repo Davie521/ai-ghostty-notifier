@@ -14,8 +14,12 @@ public enum TabTitleMatch {
     /// The one tab whose title, without the glyphs in front, is `title` or
     /// begins with `title + " | "`. Nil when none does, and when more than one
     /// does: two sessions with one name must not be told apart by guessing.
+    ///
+    /// Both sides lose their glyph words in front the same way, so a session
+    /// named "🚀 Release" still finds "⠙ 🚀 Release | repo"; a name that is
+    /// only glyphs, or a single character, is too little to go by.
     public static func tab(titled title: String, among tabs: [TerminalTab]) -> String? {
-        let wanted = words(title).joined(separator: " ")
+        let wanted = stripped(title)
         guard wanted.count >= 2 else { return nil }
         let matches = tabs.filter { tab in
             let core = stripped(tab.title)

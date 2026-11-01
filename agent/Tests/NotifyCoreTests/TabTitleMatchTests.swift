@@ -54,6 +54,14 @@ import Testing
         #expect(TabTitleMatch.tab(titled: "nothing like it", among: Self.tabs) == nil)
     }
 
+    /// A name may begin with a glyph of its own; both sides lose it alike.
+    @Test func aNameThatStartsWithAnEmojiStillMatches() {
+        let tabs = [TerminalTab(id: "t", title: "⠙ 🚀 Release | repo")]
+        #expect(TabTitleMatch.tab(titled: "🚀 Release", among: tabs) == "t")
+        #expect(TabTitleMatch.tab(titled: "Release", among: tabs) == "t")
+        #expect(TabTitleMatch.tab(titled: "🚀", among: tabs) == nil)
+    }
+
     @Test func spacingDoesNotMatter() {
         #expect(
             TabTitleMatch.tab(
