@@ -1,14 +1,21 @@
 import AppKit
 import NotifyCore
 
-/// Brings a window's Space into view the way the user would: by pressing
-/// their "move left/right a space" shortcut, on the display that has the
-/// Space, as many times as it takes. The walk itself is `SpaceWalk`'s; this
-/// is the window server and the keyboard under it.
+/// Brings a window's Space into view: straight there by bringing the window
+/// forward as window switchers do, and failing that the way the user would,
+/// by pressing their "move left/right a space" shortcut on the display that
+/// has the Space, as many times as it takes. The trip itself is `SpaceWalk`'s;
+/// this is the window server, Accessibility and the keyboard under it.
 ///
-/// Asking the window server to front the window, as the window switchers
-/// do, fronted nothing on this machine (macOS 26.6.2) while Ghostty had a
-/// window in view on the other display; the shortcut switched every time.
+/// The window server's part of bringing a window forward, tried alone,
+/// fronted nothing on one machine (macOS 26.6.2) while Ghostty had a window in
+/// view on the other display; the shortcut switched every time. With the
+/// Accessibility raise after it, it switched straight to the window's Space on
+/// macOS 27 (one display) every time, where the walk showed every Space
+/// between — Ghostty's other window among them, as often as not. Hence the
+/// switch first and the walk after it, should no display have switched.
+/// `GHOSTTY_NOTIFY_SPACE_TRAVEL=walk` leaves the switch out.
+///
 /// The shortcut acts on the display under the pointer — measured: with the
 /// key window on one display and the pointer on the other, the pointer's
 /// display switched — so the pointer is moved there right before every press,
@@ -31,6 +38,10 @@ enum SpaceHopper {
     static var shutdownDeadline: Date?
     /// Where the pointer was when the trip began, while one is under way.
     private static var pointerToRestore: CGPoint?
+    /// Whether this trip has moved the pointer. A switch straight to a Space
+    /// does not, and then the pointer is left where the user has it now: put
+    /// back, it would jump under a hand that moved on after the click.
+    private static var pointerMoved = false
     /// Whether a trip is under way.
     private(set) static var isTravelling = false
 
@@ -38,7 +49,7 @@ enum SpaceHopper {
     /// a shutdown that could not wait any longer for the trip to end.
     @discardableResult
     static func restorePointerIfTravelling() -> Bool {
-        guard isTravelling, let pointerToRestore else { return false }
+        guard isTravelling, pointerMoved, let pointerToRestore else { return false }
         WindowServer.movePointer(to: pointerToRestore)
         return true
     }
@@ -63,13 +74,23 @@ enum SpaceHopper {
             deadline = min(deadline, callerDeadline.addingTimeInterval(-focusReserveSeconds))
         }
         pointerToRestore = WindowServer.pointer
+        pointerMoved = false
         isTravelling = true
         defer {
-            if let pointerToRestore { WindowServer.movePointer(to: pointerToRestore) }
+            if pointerMoved, let pointerToRestore { WindowServer.movePointer(to: pointerToRestore) }
             pointerToRestore = nil
             isTravelling = false
         }
-        return await SpaceWalk.travel(to: space, deadline: deadline, driver: LiveDriver())
+        return await SpaceWalk.travel(
+            to: space, window: walksOnly ? nil : window.number, deadline: deadline,
+            driver: LiveDriver())
+    }
+
+    /// Set to `walk`, trips never switch straight to a Space: for the live
+    /// check of a trip cut short, and for a macOS on which the switch goes
+    /// wrong.
+    static var walksOnly: Bool {
+        ProcessInfo.processInfo.environment["GHOSTTY_NOTIFY_SPACE_TRAVEL"] == "walk"
     }
 
     /// When the process will be ended, less the reserve every press keeps
@@ -97,9 +118,10 @@ enum SpaceHopper {
     static func restore(_ spots: [SpaceSpot]) async -> Bool {
         guard WindowServer.isTrusted else { return false }
         pointerToRestore = WindowServer.pointer
+        pointerMoved = false
         isTravelling = true
         defer {
-            if let pointerToRestore { WindowServer.movePointer(to: pointerToRestore) }
+            if pointerMoved, let pointerToRestore { WindowServer.movePointer(to: pointerToRestore) }
             pointerToRestore = nil
             isTravelling = false
         }
@@ -158,12 +180,22 @@ enum SpaceHopper {
 
         func hardDeadline() -> Date { SpaceHopper.hardDeadline() }
 
+        func raise(_ window: UInt32) async -> Bool {
+            guard let pid = Ghostty.processID else { return false }
+            return WindowServer.raise(CGWindowID(window), ownedBy: pid)
+        }
+
+        func spaces(of window: UInt32) -> [UInt64]? {
+            WindowServer.spaces(of: CGWindowID(window))
+        }
+
         /// Moves the pointer to the middle of `bounds` and waits, briefly,
         /// until it is seen there: the shortcut goes to the display the window
         /// server thinks the pointer is on, and a key sent on the heels of the
         /// move has gone to the other display.
         private func parkPointer(on bounds: CGRect) async {
             let center = CGPoint(x: bounds.midX, y: bounds.midY)
+            SpaceHopper.pointerMoved = true
             for _ in 0..<2 {
                 WindowServer.movePointer(to: center)
                 // Two tries within the time the walk budgets for parking.

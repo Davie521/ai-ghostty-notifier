@@ -168,6 +168,9 @@ public enum TabJumpRun {
         var accessibilityMissing = false
         /// The last trip, once it has arrived, for the log.
         var travelled: String?
+        /// The trips before it and how they ended, for the log: a jump that
+        /// went to the wrong window first must say so.
+        var earlierTrips = ""
         while true {
             // Cancelled with its task — the resident quitting, the `--focus`
             // mode sent SIGTERM — the jump stops where it stands. A trip under
@@ -228,7 +231,7 @@ public enum TabJumpRun {
                     if let travelled {
                         // The look after a trip, with titles read after it.
                         let seen = place == .showing ? "window in view" : "window still out of view"
-                        route = "\(travelled), \(seen)"
+                        route = earlierTrips + "\(travelled), \(seen)"
                     } else if case .unknown = place {
                         route = "window not placed"
                     } else if case .unsettled = place {
@@ -257,6 +260,7 @@ public enum TabJumpRun {
                     }
                 }
             case .hop(let window):
+                if plan.hops > 1 { earlierTrips = route + "; then " }
                 switch await driver.travel(to: window) {
                 case .arrived(let display, let from, let direction, let presses, let strayRetries):
                     let retried =
@@ -265,20 +269,29 @@ public enum TabJumpRun {
                     travelled =
                         "travelled \(presses) \(direction == .left ? "left" : "right") on "
                         + "display \(display.prefix(8))\(retried)"
-                    route = travelled ?? route
+                    route = earlierTrips + (travelled ?? "")
+                    step = plan.observe(
+                        hopResult: .arrived(from: SpaceSpot(display: display, space: from)))
+                case .switched(let display, let from):
+                    travelled = "switched straight to the Space on display \(display.prefix(8))"
+                    route = earlierTrips + (travelled ?? "")
                     step = plan.observe(
                         hopResult: .arrived(from: SpaceSpot(display: display, space: from)))
                 case .alreadyShowing:
                     travelled = "no travel: the Space came into view by itself"
-                    route = travelled ?? route
+                    route = earlierTrips + (travelled ?? "")
+                    step = plan.observe(hopResult: .arrived(from: nil))
+                case .broughtOver:
+                    travelled = "no travel: the window came to the Space in view"
+                    route = earlierTrips + (travelled ?? "")
                     step = plan.observe(hopResult: .arrived(from: nil))
                 case .failed(let why):
                     travelled = nil
-                    route = "no travel: \(why)"
+                    route = earlierTrips + "no travel: \(why)"
                     step = plan.observe(hopResult: .failed(reason: why))
                 case .stranded(let why):
                     travelled = nil
-                    route = "trip left unfinished: \(why)"
+                    route = earlierTrips + "trip left unfinished: \(why)"
                     step = plan.observe(hopResult: .stranded(reason: why))
                 }
             case .restore(let spots):

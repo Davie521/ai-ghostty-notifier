@@ -60,12 +60,44 @@ enum Ghostty {
         guard isPlausibleTabID(tabID) else { return (.unknown, []) }
         let literal = appleScriptLiteral(tabID)
         // Record and unit separators between the fields: no title has those.
+        // Bulk reads first, each one Apple Event: read one property at a time,
+        // a dozen tabs took 0.22 seconds against 0.07, and a jump that travels
+        // looks twice. Lists that do not line up — a window opened, closed or
+        // brought forward between the reads, which the order read again at
+        // the end shows — or any error, and it reads one at a time, as it
+        // always did.
         let answer: String? = await withCheckedContinuation { continuation in
             run(
                 """
                 tell application "Ghostty"
                     set rs to string id 30
                     set us to string id 31
+                    try
+                        set wids to id of every window
+                        set wnames to name of every window
+                        set tids to id of every tab of every window
+                        -- Each read lists the windows in their order of the
+                        -- moment. Read the order again: a window brought
+                        -- forward between the reads would put one window's
+                        -- tabs under another's id, and equal counts do not show it.
+                        set widsAfter to id of every window
+                        if widsAfter = wids and (count of wids) = (count of wnames) and (count of wids) = (count of tids) then
+                            set found to ""
+                            set listing to ""
+                            repeat with i from 1 to count of wids
+                                set wid to (item i of wids as text)
+                                set listing to listing & wid & us & (item i of wnames as text) & rs
+                                if found is "" then
+                                    -- As a list even should a lone tab come back
+                                    -- bare: a bare id would be read a letter at a time.
+                                    repeat with t in ((item i of tids) as list)
+                                        if (t as text) is \(literal) then set found to wid
+                                    end repeat
+                                end if
+                            end repeat
+                            return found & rs & listing
+                        end if
+                    end try
                     set found to ""
                     set listing to ""
                     set incomplete to false

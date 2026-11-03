@@ -3,6 +3,33 @@
 What changed in each release. The one-command installer always fetches the
 latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-notifier/releases).
 
+## Unreleased
+
+### Fixed
+
+- A click whose session is on another Space goes straight there, in one slide.
+  It used to step through every Space in between with your "Move left/right a
+  space" shortcut, stopping on each; with Ghostty windows on more than one
+  Space, the one passed was often the other window's, so the jump looked as if
+  it went to the wrong window first. Now the app brings the session's window
+  forward the way window switchers do, and macOS shows its Space. When no
+  display switches within a second, it walks as before;
+  `GHOSTTY_NOTIFY_SPACE_TRAVEL=walk` always walks.
+- A click no longer goes to another Ghostty window's Space before the right one.
+  Telling which window holds the tab paired Ghostty's list of windows with the
+  window server's by their order, and the two orders can disagree: with
+  windows on other Spaces, Ghostty listed the newest last where the window
+  server had it first. The jump went to the wrong window, found the tab not
+  there, came back and went on to the right one. Now the titles pair them, read
+  on every Space, whenever they say which window is which; the order is left
+  for windows titled alike.
+- Jumps are quicker. Finding the tab's window reads Ghostty's windows and tabs
+  in four Apple Events instead of one per tab: with a dozen tabs, the Space now
+  starts to slide about half a second after the click instead of up to a second,
+  and the whole jump takes about 1.1 seconds instead of 1.5.
+- A jump that went to a wrong window first says so in the log: its `jump:` line
+  keeps every trip, not only the last.
+
 ## 0.10.0 — 2026-11-04
 
 ### Changed

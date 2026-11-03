@@ -32,6 +32,14 @@ enum WindowServer {
     private typealias SymbolicHotKeyEnabled = @convention(c) (Int32) -> Bool
     private typealias ElementWindowNumber =
         @convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError
+    private typealias ElementFromToken = @convention(c) (CFData) -> Unmanaged<AXUIElement>?
+    private typealias ProcessForPID =
+        @convention(c) (pid_t, UnsafeMutablePointer<ProcessSerialNumber>) -> OSStatus
+    private typealias SetFrontProcess =
+        @convention(c) (UnsafeMutablePointer<ProcessSerialNumber>, CGWindowID, UInt32) -> CGError
+    private typealias PostEventRecord =
+        @convention(c) (UnsafeMutablePointer<ProcessSerialNumber>, UnsafeMutablePointer<UInt8>)
+        -> CGError
 
     private static let skyLight = dlopen(
         "/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_NOW)
@@ -58,6 +66,14 @@ enum WindowServer {
         "CGSIsSymbolicHotKeyEnabled", in: skyLight, SymbolicHotKeyEnabled.self)
     private static let elementWindowNumber = symbol(
         "_AXUIElementGetWindow", in: everything, ElementWindowNumber.self)
+    private static let elementFromToken = symbol(
+        "_AXUIElementCreateWithRemoteToken", in: everything, ElementFromToken.self)
+    private static let processForPID = symbol(
+        "GetProcessForPID", in: everything, ProcessForPID.self)
+    private static let setFrontProcess = symbol(
+        "_SLPSSetFrontProcessWithOptions", in: skyLight, SetFrontProcess.self)
+    private static let postEventRecord = symbol(
+        "SLPSPostEventRecordTo", in: skyLight, PostEventRecord.self)
 
     // MARK: - Spaces
 
@@ -208,6 +224,26 @@ enum WindowServer {
         return seen
     }
 
+    /// `seenWindows`, and with them the windows of `ordered` it leaves out —
+    /// those on Spaces out of view — under the titles their elements found by
+    /// id give, within what is left of `budget`. Titles for those are a help,
+    /// not a must: one not found leaves its window to be paired by order, as
+    /// before. Nil as `seenWindows` is nil.
+    static func seenWindows(
+        ownedBy pid: pid_t, alongWith ordered: [OrderedWindow],
+        within budget: Double = seenWindowsBudget
+    ) -> [SeenWindow]? {
+        let start = Date()
+        guard var seen = seenWindows(ownedBy: pid, within: budget) else { return nil }
+        let missing = Set(ordered.map(\.number)).subtracting(seen.map(\.number))
+        let left = min(elementSearchBudget, budget - Date().timeIntervalSince(start))
+        guard !missing.isEmpty, left > 0,
+            let titles = titles(of: missing, ownedBy: pid, within: left)
+        else { return seen }
+        seen += titles.keys.sorted().map { SeenWindow(number: $0, title: titles[$0] ?? "") }
+        return seen
+    }
+
     // MARK: - Accessibility
 
     /// Whether this process may read other apps' windows and post key events.
@@ -225,6 +261,139 @@ enum WindowServer {
 
     static let accessibilitySettingsURL =
         "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+
+    // MARK: - Bringing a window forward
+
+    /// The highest element id the search for a window's element tries.
+    /// Ghostty numbers its accessibility elements as it makes them, a handful
+    /// per window: one that had opened thirteen windows had its newest at 335.
+    static let maxElementID: UInt64 = 20_000
+    /// The longest that search may take: about thirteen thousand ids, measured.
+    static let elementSearchBudget = 0.3
+    /// The longest the raise is waited for. With the search, within
+    /// `SpaceWalk.raiseSeconds`.
+    static let raiseTimeout: Float = 0.5
+
+    /// Brings `window` forward with Ghostty the way window switchers do: the
+    /// window server makes Ghostty the front app with that window in front and
+    /// key, and Accessibility raises it. macOS then shows the window's Space in
+    /// one slide — measured on macOS 27 on one display, with Ghostty in front
+    /// and one of its windows in view, and with another app in front. Each part
+    /// alone fell short: the window server's part switched nothing, and the
+    /// raise alone only while Ghostty was already in front.
+    ///
+    /// Accessibility lists only windows on Spaces in view, so the element of a
+    /// window on another Space is found by its id, as window switchers find it.
+    /// False when nothing was asked: no permission, a call missing, or no
+    /// element found. True once the window server has been asked, whatever
+    /// the raise answers, because a Space may switch on that alone; whether
+    /// one did is for the caller to see.
+    static func raise(_ window: CGWindowID, ownedBy pid: pid_t) -> Bool {
+        guard isTrusted, let processForPID, let setFrontProcess, let postEventRecord,
+            let element = windowElement(window, ownedBy: pid)
+        else { return false }
+        var process = ProcessSerialNumber()
+        guard processForPID(pid, &process) == noErr else { return false }
+        // 0x200 is "user generated": a front app the user chose, whose window's
+        // Space comes into view.
+        guard setFrontProcess(&process, window, 0x200) == .success else { return false }
+        // The two event records that make the window key, as window switchers
+        // send them: 0xf8 bytes long, kind 1 then 2, the window at 0x3c.
+        for kind: UInt8 in [1, 2] {
+            var record = [UInt8](repeating: 0, count: 0xf8)
+            record[0x04] = 0xf8
+            record[0x08] = kind
+            record[0x3a] = 0x10
+            record.replaceSubrange(0x20..<0x30, with: repeatElement(0xff, count: 0x10))
+            withUnsafeBytes(of: window) { record.replaceSubrange(0x3c..<0x40, with: $0) }
+            _ = postEventRecord(&process, &record)
+        }
+        AXUIElementSetMessagingTimeout(element, raiseTimeout)
+        _ = AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+        return true
+    }
+
+    /// The Accessibility element of `window`, found by trying Ghostty's
+    /// element ids in turn within `elementSearchBudget`. Nil when it was not
+    /// found by then, or Ghostty stopped answering: a busy Ghostty must not
+    /// hold the click, and the main actor.
+    private static func windowElement(_ window: CGWindowID, ownedBy pid: pid_t) -> AXUIElement? {
+        windowElements(
+            [window], ownedBy: pid, until: Date().addingTimeInterval(elementSearchBudget))?[window]
+    }
+
+    /// The titles of these windows of Ghostty's, read through their elements
+    /// found by id: Accessibility's own list leaves out windows on Spaces out
+    /// of view, and their titles are what pairs Ghostty's list with the window
+    /// server's when the two orders disagree. The search and the reads share
+    /// `budget`: those not found or not read within it are left out. Nil when
+    /// Ghostty stopped answering.
+    static func titles(of windows: Set<CGWindowID>, ownedBy pid: pid_t, within budget: Double)
+        -> [CGWindowID: String]?
+    {
+        let until = Date().addingTimeInterval(budget)
+        guard let elements = windowElements(windows, ownedBy: pid, until: until) else {
+            return nil
+        }
+        var titles: [CGWindowID: String] = [:]
+        for (number, element) in elements {
+            // Each read waits at most what is left: the timeout an element
+            // was given while the search went on is not that.
+            let left = until.timeIntervalSinceNow
+            guard left > 0 else { break }
+            AXUIElementSetMessagingTimeout(element, Float(min(0.1, left)))
+            var title: CFTypeRef?
+            switch AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &title) {
+            case .success: titles[number] = title as? String ?? ""
+            case .cannotComplete: return nil
+            default: continue
+            }
+        }
+        return titles
+    }
+
+    /// The window elements of these windows, found by trying Ghostty's
+    /// element ids in turn, until all are found or `until` has passed. Nil
+    /// when Ghostty stopped answering.
+    private static func windowElements(
+        _ windows: Set<CGWindowID>, ownedBy pid: pid_t, until: Date
+    ) -> [CGWindowID: AXUIElement]? {
+        guard let elementFromToken, let elementWindowNumber else { return [:] }
+        // The token names an element of another process: its pid, four zero
+        // bytes, "coco", then the element's id.
+        var token = Data(count: 20)
+        withUnsafeBytes(of: pid) { token.replaceSubrange(0..<4, with: $0) }
+        withUnsafeBytes(of: UInt32(0x636f_636f)) { token.replaceSubrange(8..<12, with: $0) }
+        var found: [CGWindowID: AXUIElement] = [:]
+        for id in UInt64(0)..<maxElementID {
+            guard found.count < windows.count else { break }
+            let left = until.timeIntervalSinceNow
+            guard left > 0 else { break }
+            withUnsafeBytes(of: id) { token.replaceSubrange(12..<20, with: $0) }
+            guard let element = elementFromToken(token as CFData)?.takeRetainedValue() else {
+                continue
+            }
+            AXUIElementSetMessagingTimeout(element, Float(min(0.1, left)))
+            var number: CGWindowID = 0
+            switch elementWindowNumber(element, &number) {
+            case .success: break
+            case .cannotComplete: return nil
+            default: continue
+            }
+            guard windows.contains(number), found[number] == nil else { continue }
+            let leftForRole = until.timeIntervalSinceNow
+            guard leftForRole > 0 else { break }
+            AXUIElementSetMessagingTimeout(element, Float(min(0.1, leftForRole)))
+            var role: CFTypeRef?
+            // Every element of a window names the window; only one is it.
+            guard
+                AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
+                    == .success, role as? String == kAXWindowRole as String
+            else { continue }
+            found[number] = element
+        }
+        return found
+    }
 
     // MARK: - The user's "move a space" shortcut
 

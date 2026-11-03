@@ -25,8 +25,9 @@
 # order them in, so the jump must set it aside to pair the two lists.
 #
 # --interrupt checks quitting mid-trip instead: the window is parked two
-# Spaces away, and one Space into the trip the jump is sent SIGTERM, as launchd
-# stops a process. It must walk back to where the trip began, put the pointer
+# Spaces away, the jump walks there with the shortcut (a switch straight there
+# has no middle to stop in), and one Space into the trip it is sent SIGTERM, as
+# launchd stops a process. It must walk back to where the trip began, put the pointer
 # back, focus nothing and exit within its grace. Exit 3 means the trip arrived
 # before the signal, so there was nothing to walk back: run it again.
 #
@@ -555,7 +556,8 @@ OTHER_NUMBERS=$(where "$BG" | awk -v n="$NUMBER" '$1=="ordered" && $2!=n {print 
 echo "frontmost before the jump: $(frontmost_app); Spaces: $(current_spaces | tr '\n' ' ')"
 echo "jumping to ${BG}…"
 if [[ "$INTERRUPT" == yes ]]; then
-    "$BIN" --focus "$SESSION" &
+    # A switch straight there has no middle to stop in: walk.
+    GHOSTTY_NOTIFY_SPACE_TRAVEL=walk "$BIN" --focus "$SESSION" &
     JUMP_PID=$!
     # Watch the display without the agent's help, fast enough to see the first
     # of the trip's two steps: the window server's own list, read in a loop.
@@ -649,8 +651,10 @@ if [[ "$CONCURRENT" == yes ]]; then
     JUMP_LINES=$(tail -n +"$((LOG_LINES + 1))" "$LOG" 2>/dev/null | grep 'jump:' || true)
     echo "log, both jumps:"; printf '%s\n' "$JUMP_LINES"
     [[ $(grep -c 'verified selected' <<<"$JUMP_LINES") == 2 ]] || fail "not both jumps verified the tab"
-    [[ $(grep -c 'travelled' <<<"$JUMP_LINES") == 1 ]] || fail "not exactly one jump travelled"
+    [[ $(grep -cE 'travelled|switched straight' <<<"$JUMP_LINES") == 1 ]] || fail "not exactly one jump travelled"
 else
-    [[ "$JUMP_LINE" == *"travelled"*"verified selected"* ]] || fail "the log does not say the jump travelled and verified"
+    # Straight there, or walked when no display switched in time.
+    [[ "$JUMP_LINE" == *"switched straight"*"verified selected"* || "$JUMP_LINE" == *"travelled"*"verified selected"* ]] \
+        || fail "the log does not say the jump travelled and verified"
 fi
 echo "PASS: the jump went to the window's Space and selected the tab (key window elsewhere: $KEY_ELSEWHERE)"

@@ -25,6 +25,13 @@ public protocol SpaceWalkDriver {
     /// When the process will be ended, or `distantFuture`. Read before every
     /// press, because a signal can bring it forward in the middle of a walk.
     func hardDeadline() -> Date
+    /// Asks for `window` to be brought forward with its app, the way window
+    /// switchers do; macOS answers by showing the window's Space. False when
+    /// nothing was asked: the window could not be found to ask for, or this
+    /// way is switched off. Within `SpaceWalk.raiseSeconds`.
+    func raise(_ window: UInt32) async -> Bool
+    /// The Spaces `window` is on now; nil when unanswered.
+    func spaces(of window: UInt32) -> [UInt64]?
 }
 
 extension SpaceTopology {
@@ -34,8 +41,19 @@ extension SpaceTopology {
     }
 }
 
-/// Walks a display to a Space with the user's own "move left/right a space"
-/// shortcut, one checked press at a time.
+/// Takes a display to a Space: straight there when it can, otherwise by
+/// walking with the user's own "move left/right a space" shortcut, one checked
+/// press at a time.
+///
+/// A walk shows every Space between on the way, each for as long as its press
+/// takes to settle. With Ghostty windows on more than one Space — and Mission
+/// Control's rearranging by recent use keeps those Spaces next to each other —
+/// the Space passed is often the one with Ghostty's other window, and the jump
+/// looks as if it went to the wrong window first. So a trip given the window
+/// first asks for that window to be brought forward, as window switchers do:
+/// macOS then shows its Space in one slide, with nothing in between. Only when
+/// no display has switched by `switchSeconds` does the walk below take over;
+/// a display the request did switch elsewhere is walked back first.
 ///
 /// Each press is checked against the topology before the next, and the route
 /// recomputed, so a Mission Control that rearranges Spaces by recent use
@@ -67,6 +85,12 @@ public enum SpaceWalk {
             display: String, from: UInt64, direction: SpaceHop.Direction, presses: Int,
             strayRetries: Int)
         case alreadyShowing
+        /// Switched straight there: the window was brought forward and macOS
+        /// showed its Space, with no Space between on the way.
+        case switched(display: String, from: UInt64)
+        /// The window came to a Space in view as it was brought forward, and
+        /// no display switched: there is nowhere left to go.
+        case broughtOver
         /// The trip did not get there, and the desktops are as they were.
         case failed(String)
         /// The trip did not get there, and could not put the desktops back:
@@ -99,14 +123,23 @@ public enum SpaceWalk {
     /// walk back, and the undo of a stray press, are one each.
     static let stepSeconds = parkSeconds + pressTimeout + settleAfterPress
     static let undoSeconds = stepSeconds
+    /// How long a window brought forward is given to bring its Space into
+    /// view before the walk takes over. Measured on macOS 27: 0.40 to 0.52
+    /// seconds from the request to the window server reporting the new Space.
+    public static let switchSeconds = 1.0
+    /// The longest the request itself may take, the search for the window
+    /// included: the driver keeps it within this.
+    public static let raiseSeconds = 1.0
 
     /// Goes to `space` and, should the trip give up part-way, back to where
     /// the display was: the focus that follows a failed trip brings the window
     /// to the Space in view, and that should be the one the user was on, not
     /// one they passed on the way. `deadline` bounds the trip onward.
+    /// `window`, the window on `space` the trip is for, lets it switch straight
+    /// there; without it the trip walks.
     @MainActor
     public static func travel(
-        to space: UInt64, deadline: Date, driver: some SpaceWalkDriver
+        to space: UInt64, window: UInt32? = nil, deadline: Date, driver: some SpaceWalkDriver
     ) async -> TripOutcome {
         guard let topology = driver.topology() else { return .failed("no Space topology") }
         let route = SpaceRoute.to(space, in: topology)
@@ -118,8 +151,24 @@ public enum SpaceWalk {
         }
         // A trip needs both: one shortcut to go, the other to come back, or to
         // undo a press that landed on another display.
+        // A switch straight there needs them too: the way back from a window
+        // that turns out not to be the one, or from a display switched by
+        // mistake, is a walk.
         guard driver.hasShortcut(.left), driver.hasShortcut(.right) else {
             return .failed("a move-a-space shortcut is switched off")
+        }
+        if let window {
+            switch await switchStraight(
+                to: space, window: window, hop: first, from: topology, deadline: deadline,
+                driver: driver)
+            {
+            case .arrived:
+                await driver.pause(settleOnArrival)
+                return .switched(display: first.display, from: start)
+            case .broughtOver: return .broughtOver
+            case .stranded(let why): return .stranded(why)
+            case .walk: break
+            }
         }
         switch await walk(to: space, deadline: deadline, leg: .onward, driver: driver) {
         case .arrived(let presses, let strayRetries):
@@ -140,6 +189,68 @@ public enum SpaceWalk {
                 return .stranded("\(why); could not go back: \(backWhy)")
             }
         }
+    }
+
+    /// How a switch straight to a window's Space ended.
+    enum Straight: Equatable {
+        case arrived
+        case broughtOver
+        /// Nothing came of it, and the desktops are as they were: walk.
+        case walk
+        /// A display it switched elsewhere could not be put back.
+        case stranded(String)
+    }
+
+    /// Brings `window` forward and waits for its Space to show on
+    /// `hop.display`. A display the request switched anywhere else is walked
+    /// back before the walk is left to it, so the walk starts from where the
+    /// user was. No request is made unless there would still be time after
+    /// the wait to walk back from the window's Space before the process is
+    /// ended: a trip that arrives may turn out to have arrived at the wrong
+    /// window, and that is walked back.
+    @MainActor
+    static func switchStraight(
+        to space: UInt64, window: UInt32, hop: SpaceHop, from before: SpaceTopology,
+        deadline: Date, driver: some SpaceWalkDriver
+    ) async -> Straight {
+        guard !driver.stopRequested() else { return .walk }
+        let done = driver.now().addingTimeInterval(raiseSeconds + switchSeconds + settleAfterPress)
+        let toPutRight = settleOnArrival + walkBackSeconds(steps: hop.steps)
+        guard done < deadline, done.addingTimeInterval(toPutRight) < driver.hardDeadline()
+        else { return .walk }
+        guard await driver.raise(window) else { return .walk }
+        guard
+            let after = await driver.poll(
+                within: switchSeconds, until: { !$0.changedDisplays(since: before).isEmpty })
+        else {
+            // No display switched. The window may have come over instead,
+            // which is what the walk is there to avoid; it is in view now, and
+            // there is nowhere left to go.
+            if let spaces = driver.spaces(of: window), let now = driver.topology(),
+                now.shows(anyOf: spaces)
+            {
+                return .broughtOver
+            }
+            return .walk
+        }
+        let arrived = after.current(on: hop.display) == space
+        for display in after.changedDisplays(since: before)
+        where !(arrived && display == hop.display) {
+            guard let original = before.current(on: display) else { continue }
+            guard
+                case .arrived = await goBack(
+                    to: SpaceSpot(display: display, space: original), driver: driver)
+            else {
+                return .stranded(
+                    "bringing the window forward switched display \(display.prefix(8)) "
+                        + "and it could not be put back")
+            }
+        }
+        guard arrived else { return .walk }
+        // The window server reports the new Space while the slide is still
+        // running, as it does for a press.
+        await driver.pause(settleAfterPress)
+        return .arrived
     }
 
     /// Walks `spot.display` back to `spot.space`: the walk back after a trip

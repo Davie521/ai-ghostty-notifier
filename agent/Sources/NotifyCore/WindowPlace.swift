@@ -51,7 +51,8 @@ public struct OrderedWindow: Equatable, Sendable {
 
 /// One of Ghostty's windows as Accessibility shows it. Accessibility lists
 /// only windows on Spaces in view, and minimized ones, which is what makes it
-/// useful here.
+/// useful here; the windows on Spaces out of view come along too, found
+/// element by element, when they could be found in time.
 public struct SeenWindow: Equatable, Sendable {
     public let number: UInt32
     public let title: String
@@ -95,14 +96,25 @@ public enum WindowPlace: Equatable, Sendable {
 
     /// Ghostty names its windows by their own stable ids, which nothing
     /// outside Ghostty can see; the window server knows window numbers and
-    /// Spaces but, without the Screen Recording permission, no titles. The
-    /// two sides meet on the order: Ghostty's AppleScript lists its windows
-    /// front to back in AppKit's order, which is the window server's, and the
-    /// window server lists one ordered window per tab group in that order too.
-    /// So when the two lists are as long as each other they pair one to one,
-    /// and the pairing is checked against the titles Accessibility reads for
-    /// the windows in view; titles cannot pair windows themselves, because
-    /// shells in different windows are often titled exactly alike.
+    /// Spaces but, without the Screen Recording permission, no titles.
+    /// Accessibility knows numbers and titles, and Ghostty's list has titles.
+    /// So when every placed window has been seen, on whatever Space, and the
+    /// titles seen are the titles listed, one for one, a title only one window
+    /// has pairs it, whatever its place in either list. Anything less — a
+    /// window not seen, a title that changed between the reads, as a busy
+    /// session's does several times a second — and a title could name the
+    /// wrong window: one in view taken for the hidden one would be focused
+    /// where it is, and brought over.
+    ///
+    /// Otherwise the two sides meet on the order, as they always did. Ghostty's
+    /// AppleScript lists its windows front to back as AppKit has them, and the
+    /// window server lists one ordered window per tab group front to back too;
+    /// when the two lists are as long as each other they pair one to one, and
+    /// the pairing is checked against the titles of the windows in view. The
+    /// two orders can disagree, though: with windows on other Spaces AppKit had
+    /// the newest window last where the window server had it first, and the
+    /// jump went to the wrong window's Space before the right one. Titles do
+    /// not help when shells in different windows are titled exactly alike.
     ///
     /// When the lengths differ or a title contradicts the pairing, nothing is
     /// concluded from titles alone: a window whose title just changed looks
@@ -157,12 +169,45 @@ public enum WindowPlace: Equatable, Sendable {
         // Nothing of Ghostty's is out of view.
         if hidden.isEmpty { return .showing }
 
-        guard placed.count == scripted.count, titlesAgree(scripted, placed, seen ?? []) else {
+        if let seenTitles,
+            let window = pairedByTitle(
+                scripted[targetIndex], scripted: scripted, placed: placed, titles: seenTitles)
+        {
+            if inView(window) { return .showing }
+            return .hidden(candidates: [window] + hidden.filter { $0 != window })
+        }
+        // The order's check reads only the windows in view, as it always has:
+        // a title out of view that changed between the reads would leave the
+        // lists unsettled, and a jump whose lists stay unsettled focuses
+        // without travelling.
+        let inViewNumbers = Set(placed.filter(inView).map(\.number))
+        let seenInView = (seen ?? []).filter { inViewNumbers.contains($0.number) }
+        guard placed.count == scripted.count, titlesAgree(scripted, placed, seenInView) else {
             return .unsettled
         }
         let window = placed[targetIndex]
         if inView(window) { return .showing }
         return .hidden(candidates: [window] + hidden.filter { $0 != window })
+    }
+
+    /// The placed window titled as `target`: when every placed window has a
+    /// title seen, those titles are the listed ones one for one, and `target`'s
+    /// is the only one of its kind. An empty title names nothing: windows that
+    /// are not terminals have them too.
+    private static func pairedByTitle(
+        _ target: ScriptedWindow, scripted: [ScriptedWindow], placed: [OrderedWindow],
+        titles: [UInt32: String]
+    ) -> OrderedWindow? {
+        guard !target.title.isEmpty, placed.count == scripted.count else { return nil }
+        var placedTitles: [String] = []
+        for window in placed {
+            guard let title = titles[window.number] else { return nil }
+            placedTitles.append(title)
+        }
+        guard placedTitles.sorted() == scripted.map(\.title).sorted(),
+            placedTitles.filter({ $0 == target.title }).count == 1
+        else { return nil }
+        return placed.first { titles[$0.number] == target.title }
     }
 
     /// Whether every window in view pairs with a listed window of its title.
