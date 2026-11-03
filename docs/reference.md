@@ -129,9 +129,9 @@ their own notification authorization.
 If you keep Ghostty windows on more than one Space, also allow
 **Accessibility** when macOS asks. It asks the first time a click finds the
 session's window on a Space you are not looking at, or cannot rule that out
-without the permission: going there takes a press
-of your own "Move left/right a space" shortcut, and macOS lets an app send that
-only with this permission. Without it the click still selects the tab but
+without the permission: going there takes bringing that window forward the way
+window switchers do, or else a press of your own "Move left/right a space"
+shortcut, and macOS allows either only with this permission. Without it the click still selects the tab but
 brings its window to the Space you are on, and the menu bar item says what is
 missing. Nothing else uses the permission.
 
@@ -279,6 +279,7 @@ paths and private helper controls are not copied.
 | `GHOSTTY_NOTIFY_AGENT_APP` | discovered | Resident bundle path; empty disables resident use, not the required native runtime |
 | `GHOSTTY_NOTIFY_NATIVE_APP` | installed app | Environment-only bootstrap override for the native executable's app; not read from Codex config |
 | `GHOSTTY_NOTIFY_MENU_BAR` | `1` | Resident-process setting; false-like values hide its menu bar item |
+| `GHOSTTY_NOTIFY_SPACE_TRAVEL` | switch | Resident-process and `--focus` setting; `walk` makes a jump to another Space press the "Move left/right a space" shortcut instead of switching straight there |
 | `GHOSTTY_NOTIFY_HOOK_DEADLINE` | `12` | Seconds before a hook process gives up and exits successfully; clamped to 1–120 |
 | `GHOSTTY_NOTIFY_APP_NAME` | `Claude` | App name in Claude notifications; Codex is always `Codex` |
 | `GHOSTTY_NOTIFY_GROUP_PREFIX` | `ghostty-notify` | Group prefix for external-backend delivery and removal; Codex defaults to `codex-ghostty-notify` |
@@ -350,10 +351,24 @@ What the notification is able to say, and how it finds the tab:
   window is on a Space you are not looking at and Ghostty has a window in view
   elsewhere, macOS moves the window to your Space as Ghostty brings it forward
   (#63). So the jump first asks the window server which Space the window is on
-  and presses your "Move left/right a space" shortcut on that display, with the
-  pointer moved there for the moment, until that Space shows; only then does it
-  focus the tab. Every press is checked, and a press that switched another
-  display is undone and tried again, twice at most. A trip that cannot finish
+  — which of Ghostty's windows is the session's it tells by title when the
+  titles of all of them, on every Space, are the ones Ghostty lists, and by
+  the order of the two lists otherwise, which can be off — and brings that
+  window forward the way window switchers do: the window
+  server makes Ghostty the front app with that window key, and Accessibility
+  raises it. macOS then shows the window's Space in one slide, without the
+  Spaces between and without moving the window; only then does the jump focus
+  the tab. When no display has switched within a second — the window server's
+  half of this once fronted nothing on a two-display Mac — it walks instead:
+  it presses your "Move left/right a space" shortcut on that display, with the
+  pointer moved there for the moment, until that Space shows. A walk shows
+  every Space between for as long as each press takes, which, with Ghostty
+  windows on several Spaces, often looks like a jump to the wrong window
+  first; that is why it comes second. Every press is checked, and a press that
+  switched another display is undone and tried again, twice at most. A display
+  the request switched anywhere but the window's Space is walked back before
+  the walk starts. `GHOSTTY_NOTIFY_SPACE_TRAVEL=walk` in the app's or the
+  `--focus` mode's environment leaves the request out. A trip that cannot finish
   walks back to the Space it started from, and one that arrives where the
   window turns out not to be is walked back before the plain focus the jump
   falls back to. Quitting the app during a jump, or
@@ -373,7 +388,8 @@ What the notification is able to say, and how it finds the tab:
   other jump is only passing through. This needs the Accessibility
   permission and both shortcuts switched on under **System Settings → Keyboard
   → Keyboard Shortcuts → Mission Control**, one to go and the other to come
-  back; without them, the jump focuses as before.
+  back — a switch straight there too, since the way back from a wrong window is
+  a walk; without them, the jump focuses as before.
   `ghostty-notify-agent --where <tab-id>` prints what a jump to that tab would
   find, and changes nothing.
   Switching tabs inside Ghostty activates no app, so while Ghostty is in front
@@ -455,7 +471,9 @@ without removing any of the macOS-specific integration.
   "Move left/right a space" switched on. A press can land on the other display,
   for instance when the mouse moves at that moment; it is undone and tried
   again, and after the third such press the jump falls back to focusing. The
-  log's `jump:` line says which way it went.
+  log's `jump:` line says which way it went: `switched straight to the Space`,
+  `travelled N left/right` for a walk, and every trip when there was more than
+  one.
 - **Old notifications after an upgrade:** dismiss stale pre-upgrade notices and
   test a freshly posted one; macOS may no longer route the old sender identity.
 - macOS/Ghostty only. Terminal CLI ownership is required for Codex notifications,
@@ -546,7 +564,9 @@ hands off the mouse while it runs, because the shortcut acts on the display
 under the pointer. It tests the installed app unless given a build's
 executable, which needs the `--where` mode this check reads. With
 `--interrupt` it checks quitting mid-trip instead: the window is parked two
-Spaces away, and one Space into the trip the jump is sent SIGTERM. It passes
+Spaces away, the jump walks (`GHOSTTY_NOTIFY_SPACE_TRAVEL=walk`: a switch
+straight there has no middle to stop in), and one Space into the trip it is
+sent SIGTERM. It passes
 when the display is back where the trip began, the pointer is back, the
 window has not moved, nothing was focused, and the process ended within its
 grace. Exit 3 means the trip arrived before the signal; run it again.

@@ -31,7 +31,7 @@ enum Whereabouts {
         var seen: [SeenWindow] = []
         if let pid = Ghostty.processID {
             ordered = WindowServer.orderedWindows(ownedBy: pid)
-            seen = WindowServer.seenWindows(ownedBy: pid) ?? []
+            seen = WindowServer.seenWindows(ownedBy: pid, alongWith: ordered) ?? []
         }
         for window in ordered {
             let bounds = WindowServer.bounds(of: window.number).map {

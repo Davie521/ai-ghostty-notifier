@@ -98,6 +98,103 @@ import Testing
         #expect(back == (hiddenInFront ? .showing : .hidden(candidates: [hiddenWindow])))
     }
 
+    // MARK: - Paired by title
+
+    /// As seen live: both windows out of view, and AppKit lists them the other
+    /// way round from the window server. Every title seen, the titles agree,
+    /// so the title pairs the window and the order is not trusted.
+    @Test func ordersThatDisagreeArePairedByTitle() {
+        let scripted = [
+            ScriptedWindow(id: "tab-group-ipad", title: "✳ iPad mini 7"),
+            ScriptedWindow(id: "tab-group-mac", title: "🔔 ✳ MacBook"),
+        ]
+        let ordered = [
+            OrderedWindow(number: 35035, spaces: [9]), OrderedWindow(number: 24253, spaces: [189]),
+        ]
+        let seen = [
+            SeenWindow(number: 35035, title: "🔔 ✳ MacBook"),
+            SeenWindow(number: 24253, title: "✳ iPad mini 7"),
+        ]
+        #expect(
+            WindowPlace.of(
+                "tab-group-ipad", scripted: scripted, ordered: ordered, seen: seen,
+                visibleSpaces: [179]) == .hidden(candidates: [ordered[1], ordered[0]]))
+        #expect(
+            WindowPlace.of(
+                "tab-group-mac", scripted: scripted, ordered: ordered, seen: seen,
+                visibleSpaces: [179]) == .hidden(candidates: [ordered[0], ordered[1]]))
+    }
+
+    /// The title says the window is the one in view, where the order says it
+    /// is the hidden one.
+    @Test func aTitleThatPutsTheWindowInViewIsShowing() {
+        let scripted = [
+            ScriptedWindow(id: "tab-group-a", title: "alpha"),
+            ScriptedWindow(id: "tab-group-b", title: "beta"),
+        ]
+        let ordered = [
+            OrderedWindow(number: 1, spaces: [8]), OrderedWindow(number: 2, spaces: [10]),
+        ]
+        let seen = [SeenWindow(number: 2, title: "alpha"), SeenWindow(number: 1, title: "beta")]
+        #expect(
+            WindowPlace.of(
+                "tab-group-a", scripted: scripted, ordered: ordered, seen: seen,
+                visibleSpaces: visible) == .showing)
+        #expect(
+            WindowPlace.of(
+                "tab-group-b", scripted: scripted, ordered: ordered, seen: seen,
+                visibleSpaces: visible) == .hidden(candidates: [ordered[0]]))
+    }
+
+    /// A title out of view changed between the reads: the titles no longer
+    /// agree, so nothing is paired by title, and the order decides as it
+    /// always did — checked against the window in view only.
+    @Test func titlesThatDoNotAgreeLeaveItToTheOrder() {
+        let scripted = [
+            ScriptedWindow(id: "tab-group-a", title: "✳ backend"),
+            ScriptedWindow(id: "tab-group-b", title: "◐ build"),
+            ScriptedWindow(id: "tab-group-c", title: "◐ tests"),
+        ]
+        let ordered = [
+            OrderedWindow(number: 1, spaces: [10]), OrderedWindow(number: 2, spaces: [8]),
+            OrderedWindow(number: 3, spaces: [1773]),
+        ]
+        let seen = [
+            SeenWindow(number: 1, title: "✳ backend"), SeenWindow(number: 2, title: "◓ tests"),
+            SeenWindow(number: 3, title: "◐ build"),
+        ]
+        #expect(
+            WindowPlace.of(
+                "tab-group-b", scripted: scripted, ordered: ordered, seen: seen,
+                visibleSpaces: visible) == .hidden(candidates: [ordered[1], ordered[2]]))
+    }
+
+    /// Windows titled alike, or one not seen: the title cannot say which.
+    @Test func aTitleThatIsNotOneOfAKindOrAWindowNotSeenLeavesItToTheOrder() {
+        let scripted = [
+            ScriptedWindow(id: "tab-group-a", title: "zsh"),
+            ScriptedWindow(id: "tab-group-b", title: "zsh"),
+        ]
+        let ordered = [
+            OrderedWindow(number: 1, spaces: [8]), OrderedWindow(number: 2, spaces: [1773]),
+        ]
+        let alike = [SeenWindow(number: 2, title: "zsh"), SeenWindow(number: 1, title: "zsh")]
+        #expect(
+            WindowPlace.of(
+                "tab-group-a", scripted: scripted, ordered: ordered, seen: alike,
+                visibleSpaces: visible) == .hidden(candidates: [ordered[0], ordered[1]]))
+
+        let distinct = [
+            ScriptedWindow(id: "tab-group-a", title: "alpha"),
+            ScriptedWindow(id: "tab-group-b", title: "beta"),
+        ]
+        let oneSeen = [SeenWindow(number: 2, title: "alpha")]
+        #expect(
+            WindowPlace.of(
+                "tab-group-a", scripted: distinct, ordered: ordered, seen: oneSeen,
+                visibleSpaces: visible) == .hidden(candidates: [ordered[0], ordered[1]]))
+    }
+
     /// A title Accessibility shows on another window than the order says
     /// means the order is off, or a title changed between the two reads.
     @Test func aPairingTheTitlesContradictIsUnsettled() {

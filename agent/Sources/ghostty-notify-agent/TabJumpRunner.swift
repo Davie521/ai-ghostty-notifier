@@ -91,7 +91,10 @@ enum TabJumpRunner {
                     visibleSpaces: topology.visibleSpaces)
                 return .untrusted(mayBeOutOfView: place.mayBeOutOfView)
             }
-            guard let seen = WindowServer.seenWindows(ownedBy: pid, within: seconds) else {
+            guard
+                let seen = WindowServer.seenWindows(
+                    ownedBy: pid, alongWith: ordered, within: seconds)
+            else {
                 return .cutShort
             }
             return .placed(

@@ -133,6 +133,55 @@ final class FakeJump: TabJumpDriver {
         #expect(fake.restored.isEmpty)
     }
 
+    /// A trip that switched straight there is logged as one, and its display
+    /// is put back like a walk's should the window not be there.
+    @Test func aStraightSwitchIsLoggedAndPutBackLikeAWalk() async {
+        let fake = FakeJump("t1")
+        fake.surveys = [hidden, .placed(.showing)]
+        fake.trips = [.switched(display: "A", from: 1)]
+        let report = await steps(fake)
+        #expect(report.outcome == .verified(reads: 0, focusAttempts: 1))
+        #expect(report.route == "switched straight to the Space on display A, window in view")
+        #expect(fake.restored.isEmpty)
+        #expect(report.plan.moved == [home])
+    }
+
+    /// A first trip to the wrong window stays in the log after the second:
+    /// it is what the user saw.
+    @Test func aSecondTripKeepsTheFirstInTheLog() async {
+        let fake = FakeJump("t1")
+        let both = TabJumpSurvey.placed(
+            .hidden(candidates: [
+                OrderedWindow(number: 7, spaces: [2]), OrderedWindow(number: 8, spaces: [3]),
+            ]))
+        fake.surveys = [both, both, .placed(.showing)]
+        fake.trips = [
+            .switched(display: "A", from: 1), .switched(display: "A", from: 1),
+        ]
+        let report = await steps(fake)
+        #expect(report.outcome == .verified(reads: 0, focusAttempts: 1))
+        #expect(
+            fake.calls == [
+                "locate", "survey", "travel", "locate", "survey", "restore", "travel", "locate",
+                "survey", "focus",
+            ])
+        #expect(
+            report.route
+                == "switched straight to the Space on display A, window still out of view; "
+                + "went back to where the jump began; "
+                + "then switched straight to the Space on display A, window in view")
+    }
+
+    @Test func aWindowBroughtOverIsFocusedWhereItIs() async {
+        let fake = FakeJump("t1")
+        fake.surveys = [hidden, .placed(.showing)]
+        fake.trips = [.broughtOver]
+        let report = await steps(fake)
+        #expect(report.outcome == .verified(reads: 0, focusAttempts: 1))
+        #expect(report.route == "no travel: the window came to the Space in view, window in view")
+        #expect(report.plan.moved.isEmpty)
+    }
+
     /// The first lookup does not answer: nothing has moved, and the focus
     /// answers for itself, as it does for a lookup with no answer.
     @Test func aFirstLookupWithNoAnswerInTimeFallsBackToTheFocus() async {

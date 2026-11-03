@@ -36,6 +36,26 @@ final class FakeSpaces: SpaceWalkDriver {
     /// test makes the app quit or a signal bring the end forward.
     var afterPress: ((FakeSpaces, Int) -> Void)?
 
+    /// What bringing a window forward does.
+    enum Raise {
+        /// Nothing is asked: the window's element was not found.
+        case unavailable
+        /// The window's Space comes into view on its display.
+        case switches
+        /// Asked, and nothing switches.
+        case nothing
+        /// The window comes to the Space in view on display A.
+        case bringsOver
+        /// This display switches to this Space instead, and the window's
+        /// Space comes into view as well when `alsoSwitches` holds.
+        case elsewhere(String, UInt64, alsoSwitches: Bool)
+    }
+
+    var raiseEffect = Raise.unavailable
+    /// The Space each window is on.
+    var windows: [UInt32: UInt64] = [:]
+    private(set) var raises: [UInt32] = []
+
     init(_ displays: [SpaceTopology.Display]) { self.displays = displays }
 
     func current(_ display: String) -> UInt64? {
@@ -83,6 +103,33 @@ final class FakeSpaces: SpaceWalkDriver {
     func pause(_ seconds: Double) async { clock += seconds }
     func stopRequested() -> Bool { stopping }
     func hardDeadline() -> Date { end }
+
+    func raise(_ window: UInt32) async -> Bool {
+        if case .unavailable = raiseEffect { return false }
+        raises.append(window)
+        switch raiseEffect {
+        case .unavailable, .nothing: break
+        case .switches: windows[window].map(show)
+        case .bringsOver: windows[window] = current("A")
+        case .elsewhere(let display, let space, let alsoSwitches):
+            if alsoSwitches { windows[window].map(show) }
+            set(display, to: space)
+        }
+        return true
+    }
+
+    func spaces(of window: UInt32) -> [UInt64]? { windows[window].map { [$0] } }
+
+    private func show(_ space: UInt64) {
+        guard let display = displays.first(where: { $0.spaces.contains(space) }) else { return }
+        set(display.identifier, to: space)
+    }
+
+    private func set(_ display: String, to space: UInt64) {
+        guard let index = displays.firstIndex(where: { $0.identifier == display }) else { return }
+        displays[index] = SpaceTopology.Display(
+            identifier: display, spaces: displays[index].spaces, current: space)
+    }
 
     private func move(_ display: String, _ direction: SpaceHop.Direction) {
         guard let index = displays.firstIndex(where: { $0.identifier == display }),
@@ -563,5 +610,160 @@ final class FakeSpaces: SpaceWalkDriver {
             puttingBack: [SpaceSpot(display: "A", space: 1)], now: fake.clock,
             hardDeadline: fake.end, topology: fake.topology())
         #expect((left ?? 0) > 1)
+    }
+
+    // MARK: - Straight there
+
+    /// A trip given the window brings it forward, and its Space shows without
+    /// a press: no Space between comes into view.
+    @Test func aTripGivenTheWindowSwitchesStraightThere() async {
+        let fake = spaces()
+        fake.windows = [7: 4]
+        fake.raiseEffect = .switches
+        let start = fake.clock
+        let outcome = await SpaceWalk.travel(
+            to: 4, window: 7, deadline: plenty(fake), driver: fake)
+        #expect(outcome == .switched(display: "A", from: 1))
+        #expect(fake.raises == [7])
+        #expect(fake.presses.isEmpty)
+        #expect(fake.current("A") == 4)
+        #expect(fake.current("B") == 10)
+        // Settled as after the last press of a walk.
+        let elapsed = fake.clock.timeIntervalSince(start)
+        #expect(abs(elapsed - (SpaceWalk.settleAfterPress + SpaceWalk.settleOnArrival)) < 1e-6)
+    }
+
+    /// No display switched in time: the walk takes over from where the user
+    /// was.
+    @Test func aSwitchThatSwitchesNothingLeavesItToTheWalk() async {
+        let fake = spaces()
+        fake.windows = [7: 4]
+        fake.raiseEffect = .nothing
+        let start = fake.clock
+        let outcome = await SpaceWalk.travel(
+            to: 4, window: 7, deadline: plenty(fake), driver: fake)
+        #expect(
+            outcome
+                == .arrived(display: "A", from: 1, direction: .right, presses: 3, strayRetries: 0))
+        #expect(fake.raises == [7])
+        #expect(fake.presses == ["right A", "right A", "right A"])
+        #expect(fake.clock.timeIntervalSince(start) >= SpaceWalk.switchSeconds)
+    }
+
+    /// The window's element was not found, so nothing was asked: the walk
+    /// starts at once, without waiting for a switch that will not come.
+    @Test func aWindowThatCannotBeBroughtForwardIsWalkedToAtOnce() async {
+        let fake = spaces()
+        fake.windows = [7: 2]
+        let start = fake.clock
+        let outcome = await SpaceWalk.travel(
+            to: 2, window: 7, deadline: plenty(fake), driver: fake)
+        #expect(
+            outcome
+                == .arrived(display: "A", from: 1, direction: .right, presses: 1, strayRetries: 0))
+        #expect(fake.raises.isEmpty)
+        let elapsed = fake.clock.timeIntervalSince(start)
+        let walk = fake.pressSeconds + SpaceWalk.settleAfterPress + SpaceWalk.settleOnArrival
+        #expect(abs(elapsed - walk) < 1e-6, "\(elapsed)")
+    }
+
+    /// The window came over instead of its Space: nothing is left to travel.
+    @Test func aWindowBroughtOverEndsTheTrip() async {
+        let fake = spaces()
+        fake.windows = [7: 4]
+        fake.raiseEffect = .bringsOver
+        let outcome = await SpaceWalk.travel(
+            to: 4, window: 7, deadline: plenty(fake), driver: fake)
+        #expect(outcome == .broughtOver)
+        #expect(fake.presses.isEmpty)
+        #expect(fake.current("A") == 1)
+    }
+
+    /// The request switched the display to some other Space: it goes back
+    /// first, so the walk starts from where the user was.
+    @Test func aSwitchToAnotherSpaceIsPutBackBeforeTheWalk() async {
+        let fake = spaces()
+        fake.windows = [7: 4]
+        fake.raiseEffect = .elsewhere("A", 2, alsoSwitches: false)
+        let outcome = await SpaceWalk.travel(
+            to: 4, window: 7, deadline: plenty(fake), driver: fake)
+        #expect(
+            outcome
+                == .arrived(display: "A", from: 1, direction: .right, presses: 3, strayRetries: 0))
+        #expect(fake.presses == ["left A", "right A", "right A", "right A"])
+        #expect(fake.current("A") == 4)
+    }
+
+    /// The window's Space came into view, and another display switched too:
+    /// that one goes back, and the trip has arrived.
+    @Test func anotherDisplaySwitchedAlongIsPutBack() async {
+        let fake = spaces()
+        fake.windows = [7: 4]
+        fake.raiseEffect = .elsewhere("B", 11, alsoSwitches: true)
+        let outcome = await SpaceWalk.travel(
+            to: 4, window: 7, deadline: plenty(fake), driver: fake)
+        #expect(outcome == .switched(display: "A", from: 1))
+        #expect(fake.presses == ["left B"])
+        #expect(fake.current("A") == 4)
+        #expect(fake.current("B") == 10)
+    }
+
+    @Test func aDisplaySwitchedElsewhereThatCannotBePutBackStrandsTheTrip() async {
+        let fake = spaces()
+        fake.windows = [7: 4]
+        fake.raiseEffect = .elsewhere("B", 11, alsoSwitches: false)
+        fake.switchedOff = [.left]
+        let outcome = await SpaceWalk.travel(
+            to: 4, window: 7, deadline: plenty(fake), driver: fake)
+        // Both shortcuts are needed before anything is asked.
+        #expect(outcome == .failed("a move-a-space shortcut is switched off"))
+        #expect(fake.raises.isEmpty)
+
+        fake.switchedOff = []
+        fake.leftEffects = [.nothing]
+        let stranded = await SpaceWalk.travel(
+            to: 4, window: 7, deadline: plenty(fake), driver: fake)
+        guard case .stranded(let why) = stranded else {
+            Issue.record("expected a stranded trip, got \(stranded)")
+            return
+        }
+        #expect(why.contains("could not be put back"))
+        #expect(fake.presses == ["left B"])
+    }
+
+    /// The request, the wait for the switch and the walk back from where it
+    /// may arrive all fit: it is asked.
+    @Test func aSwitchThatOnlyJustFitsIsAskedFor() async {
+        let fake = spaces()
+        fake.windows = [7: 4]
+        fake.raiseEffect = .switches
+        fake.end =
+            fake.clock + SpaceWalk.raiseSeconds + SpaceWalk.switchSeconds
+            + SpaceWalk.settleAfterPress + SpaceWalk.settleOnArrival
+            + SpaceWalk.walkBackSeconds(steps: 3) + 0.05
+        let outcome = await SpaceWalk.travel(
+            to: 4, window: 7, deadline: plenty(fake), driver: fake)
+        #expect(outcome == .switched(display: "A", from: 1))
+        #expect(fake.raises == [7])
+    }
+
+    /// Without the time to walk back from where it may arrive, nothing is
+    /// asked; and a jump being given up asks nothing either.
+    @Test func noSwitchIsAskedForWithoutTimeOrWhileStopping() async {
+        let fake = spaces()
+        fake.windows = [7: 4]
+        fake.raiseEffect = .switches
+        fake.end = fake.clock.addingTimeInterval(SpaceWalk.switchSeconds + 0.1)
+        _ = await SpaceWalk.travel(to: 4, window: 7, deadline: plenty(fake), driver: fake)
+        #expect(fake.raises.isEmpty)
+
+        let stopping = spaces()
+        stopping.windows = [7: 4]
+        stopping.raiseEffect = .switches
+        stopping.stopping = true
+        _ = await SpaceWalk.travel(
+            to: 4, window: 7, deadline: plenty(stopping), driver: stopping)
+        #expect(stopping.raises.isEmpty)
+        #expect(stopping.current("A") == 1)
     }
 }
