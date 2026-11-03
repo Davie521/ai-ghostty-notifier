@@ -81,6 +81,12 @@ jobs:
           bash scripts/build-agent.sh --build-only --hardened
           codesign --verify --deep --strict build/ClaudeGhosttyNotify.app
           codesign --display --verbose=2 build/ClaudeGhosttyNotify.app 2>&1 | grep -E 'flags=.*runtime'
+          # The app's own sounds (NotificationSound), as UNNotificationSound
+          # takes them: linear PCM in a WAV file.
+          for sound in ghostty-notify-done ghostty-notify-nudge; do
+            afinfo "build/ClaudeGhosttyNotify.app/Contents/Resources/$sound.wav" |
+              grep -E 'Data format: +2 ch, +48000 Hz, Int16'
+          done
 
       - name: Native launchers and real process regressions
         env:

@@ -170,11 +170,13 @@ hook 会读取完 stdin、写明诊断并返回成功，避免阻塞 CLI，但�
 | --- | --- |
 | 少于 3 分钟 | 不通知 |
 | 3–10 分钟 | 无声通知 |
-| 10 分钟及以上 | 通知 + Glass 提示音 |
+| 10 分钟及以上 | 通知 + 提示音 |
 
 <img src="assets/notification.png" alt="一条真实通知：Claude，200-second timer test — my-app，Finished after 3m 24s" width="344">
 
-阈值可以修改（[全部配置项](#配置)）。默认 20 分钟后通知过期；回到会话标签页或提交新提问时会提前清除。
+阈值可以修改（[全部配置项](#配置)）。提示音是 App 自带的柔和电钢琴和弦；下面说的「叫你」通知用的是另一段往下走的两个音，不用看屏幕也分得出是哪种。两段都由 [scripts/make-sounds.py](../scripts/make-sounds.py) 在构建时生成。App 没在运行、改由 terminal-notifier 发通知时，放的是 macOS 的 Glass 和 Ping。
+
+默认 20 分钟后通知过期；回到会话标签页或提交新提问时会提前清除。
 权限/输入提示默认静默，只有设置 `GHOSTTY_NOTIFY_ON_PROMPT=1` 才开启。
 
 <a id="claude-需要你的时候"></a>
@@ -222,7 +224,7 @@ Codex 首次安装会从 Claude 设置中复制公开通知偏好，不复制来
 | 变量 | 默认值 | 含义 |
 | --- | --- | --- |
 | `GHOSTTY_NOTIFY_MIN_ELAPSED` | `180` | 完成通知的最低耗时，秒 |
-| `GHOSTTY_NOTIFY_SOUND_ELAPSED` | `600` | 响 Glass 提示音的最低耗时 |
+| `GHOSTTY_NOTIFY_SOUND_ELAPSED` | `600` | 完成通知带提示音的最低耗时 |
 | `GHOSTTY_NOTIFY_TIMEOUT` | `1200` | 自动过期秒数；`0` 表示不自动过期 |
 | `GHOSTTY_NOTIFY_BACKEND` | `auto` | 先用就绪的常驻进程，否则用只显示的 terminal-notifier；明确选择 terminal-notifier 可跳过常驻投递。`agent` 等同 `auto`；退役的 `alerter` 和其他未知值按 `terminal-notifier` 处理 |
 | `GHOSTTY_NOTIFY_ON_PROMPT` | `0` | 只有 `1` 开启 Claude 权限/输入提示通知 |

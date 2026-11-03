@@ -27,8 +27,9 @@ set -euo pipefail
 #                       for an ad-hoc signature: the release configuration, tested
 #                       locally without a Developer ID.
 #   --no-system-sounds  leave Apple's /System/Library/Sounds out of the bundle. A
-#                       published archive must not redistribute them; the agent
-#                       falls back to the default notification sound instead.
+#                       published archive must not redistribute them. The app's
+#                       own two sounds are bundled either way; any other sound
+#                       name falls back to the default notification sound.
 usage() {
     echo "usage: build-agent.sh [--build-only] [--universal] [--sign IDENTITY] [--hardened] [--no-system-sounds]" >&2
     exit 2
@@ -129,10 +130,20 @@ else
     echo "  warning: $ICON_SRC missing; the agent will show a generic icon" >&2
 fi
 
+# The app's own two sounds, for a finished run and a nudge (NotificationSound in
+# NotifyCore). Made here from a readable recipe for the reason the icon is, but
+# not optional the way the icon is: without them the agent quietly falls back to
+# the system default sound, which is what a release played before they existed.
+# Python 3 comes with the Command Line Tools that swift itself needs.
+echo "==> Making the notification sounds"
+python3 -I "$REPO/scripts/make-sounds.py" "$CONTENTS/Resources" ||
+    { echo "FATAL: scripts/make-sounds.py failed" >&2; exit 2; }
+
 # UNNotificationSound resolves a named sound against the app bundle, not against
 # /System/Library/Sounds — unlike terminal-notifier, whose vocabulary
-# the hooks speak ("Glass", "Ping"). Copy those in so the time-tiered sounds
-# actually play; the agent falls back to the system default for anything missing.
+# the hooks speak ("Glass", "Ping"). A local build copies Apple's in as well,
+# for any other name a hook may ask for; the agent falls back to the system
+# default for anything missing.
 if [[ $SYSTEM_SOUNDS -eq 1 ]]; then
     for sound in /System/Library/Sounds/*.aiff; do
         [[ -f "$sound" ]] && install -m 644 "$sound" "$CONTENTS/Resources/"
