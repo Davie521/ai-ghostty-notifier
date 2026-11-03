@@ -3,6 +3,18 @@
 What changed in each release. The one-command installer always fetches the
 latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-notifier/releases).
 
+## Unreleased
+
+### Changed
+
+- The app has sounds of its own, a soft electric piano: a chord when a long
+  run finishes, and a falling two-note call when a session nudges you, so the
+  two are told apart by ear. The published app used to play the system default
+  sound for both, since a release may not carry Apple's Glass and Ping; these
+  are made at build time by `scripts/make-sounds.py`, so every build has them.
+  terminal-notifier, used when the app is not running, still plays Glass and
+  Ping.
+
 ## 0.9.1 — 2026-11-02
 
 ### Fixed

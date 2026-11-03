@@ -148,9 +148,10 @@ and is signed ad-hoc as before:
   the tab. `--hardened` gives the same with an ad-hoc signature, which is what
   CI builds, so every suite runs under the hardened runtime.
 - `--no-system-sounds`: Apple's `/System/Library/Sounds` are not bundled, since
-  a published archive must not redistribute them. The 10-minute tier then plays
-  the default notification sound rather than Glass. A local build still bundles
-  them.
+  a published archive must not redistribute them. The completion and nudge
+  sounds are the app's own, made by `scripts/make-sounds.py` in every build,
+  so a release still has them; only another sound name would fall back to the
+  default notification sound. A local build still bundles Apple's.
 
 macOS keeps notification and Automation permission against the code signature.
 A Developer ID signature stays the same from one release to the next, so

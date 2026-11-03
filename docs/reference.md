@@ -199,11 +199,15 @@ files may remain in upgraded directories but are not invoked or reinstalled.
 | --- | --- |
 | Under 3 minutes | None |
 | 3–10 minutes | Silent notification |
-| 10 minutes or more | Notification with Glass sound |
+| 10 minutes or more | Notification with a sound |
 
 <img src="assets/notification.png" alt="A real notification: Claude, 200-second timer test — my-app, Finished after 3m 24s" width="344">
 
 Defaults are configurable ([every setting](#configuration)).
+The sound is the app's own, a soft electric-piano chord; a nudge (below) has a
+falling two-note call instead, so you can tell the two apart without looking.
+Both are made at build time by [scripts/make-sounds.py](../scripts/make-sounds.py).
+Without the app, terminal-notifier plays macOS's Glass and Ping in their place.
 Resident notifications expire after 20 minutes unless cleared
 earlier. Focusing the session's tab or submitting another prompt withdraws its
 notification. Permission/input prompts are silent unless
@@ -267,7 +271,7 @@ paths and private helper controls are not copied.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `GHOSTTY_NOTIFY_MIN_ELAPSED` | `180` | Minimum duration for a completion alert, seconds |
-| `GHOSTTY_NOTIFY_SOUND_ELAPSED` | `600` | Minimum duration for Glass sound |
+| `GHOSTTY_NOTIFY_SOUND_ELAPSED` | `600` | Minimum duration for a completion sound |
 | `GHOSTTY_NOTIFY_TIMEOUT` | `1200` | Expiry in seconds; `0` disables automatic expiry |
 | `GHOSTTY_NOTIFY_BACKEND` | `auto` | Ready resident first, then display-only terminal-notifier; explicit `terminal-notifier` skips resident delivery. `agent` behaves like `auto`; the retired `alerter` and unknown values behave like `terminal-notifier` |
 | `GHOSTTY_NOTIFY_ON_PROMPT` | `0` | Only `1` enables immediate Claude permission/input alerts |

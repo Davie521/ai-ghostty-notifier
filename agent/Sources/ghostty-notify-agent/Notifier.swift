@@ -158,15 +158,14 @@ final class Notifier {
         }
     }
 
-    /// The shell backends speak `/System/Library/Sounds` vocabulary ("Glass",
-    /// "Ping"). UNNotificationSound resolves a custom name against the app
-    /// bundle instead, so scripts/build-agent.sh copies those .aiff files into
-    /// Contents/Resources and the extension is added back here. A name that did
-    /// not get bundled would resolve to nothing at all, so fall back to the
-    /// system default rather than posting silently.
+    /// The project's own sound for "Glass" and "Ping", else the bundled
+    /// system sound of that name, else the system default rather than posting
+    /// silently (NotificationSound has the details).
     private static func sound(named name: String) -> UNNotificationSound {
-        let file = name.hasSuffix(".aiff") ? name : name + ".aiff"
-        guard Bundle.main.url(forResource: file, withExtension: nil) != nil else {
+        let bundled = { (file: String) in
+            Bundle.main.url(forResource: file, withExtension: nil) != nil
+        }
+        guard let file = NotificationSound.file(named: name, bundled: bundled) else {
             return .default
         }
         return UNNotificationSound(named: UNNotificationSoundName(file))
