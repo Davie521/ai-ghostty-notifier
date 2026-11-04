@@ -182,6 +182,41 @@ final class FakeJump: TabJumpDriver {
         #expect(report.plan.moved.isEmpty)
     }
 
+    /// Lists that will not pair send the jump on a guess, and the log says
+    /// the trip was one.
+    @Test func aGuessIsLoggedAsOne() async {
+        let fake = FakeJump("t1")
+        let unsettled = TabJumpSurvey.placed(
+            .unsettled(likeliest: [OrderedWindow(number: 7, spaces: [2])]))
+        fake.surveys = [unsettled, unsettled, unsettled, .placed(.showing)]
+        fake.trips = [.switched(display: "A", from: 1)]
+        let report = await steps(fake)
+        #expect(report.outcome == .verified(reads: 0, focusAttempts: 1))
+        #expect(
+            report.route
+                == "window lists did not pair, read 3 time(s); a guess by the order: "
+                + "switched straight to the Space on display A, window in view")
+    }
+
+    /// The look after the guess cannot tell either, as with the screen
+    /// locked: no focus, Ghostty brought forward, the display left where the
+    /// guess took it.
+    @Test func aGuessThatCannotBeConfirmedFocusesNothing() async {
+        let fake = FakeJump("t1")
+        fake.surveys = [
+            .placed(.unsettled(likeliest: [OrderedWindow(number: 7, spaces: [2])]))
+        ]
+        fake.trips = [.switched(display: "A", from: 1)]
+        let report = await steps(fake)
+        #expect(report.outcome == .unplaced)
+        #expect(!fake.calls.contains("focus"))
+        #expect(fake.calls.last == "activate")
+        #expect(fake.restored.isEmpty)
+        #expect(
+            TabJumpRun.describe(report).hasPrefix("jump: t1 not placed (window lists did not pair"))
+        #expect(TabJumpRun.describe(report).hasSuffix("activated Ghostty only"))
+    }
+
     /// The first lookup does not answer: nothing has moved, and the focus
     /// answers for itself, as it does for a lookup with no answer.
     @Test func aFirstLookupWithNoAnswerInTimeFallsBackToTheFocus() async {

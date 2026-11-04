@@ -69,10 +69,12 @@ import Testing
         ]
         // Accessibility lists the one window in view, under its own number.
         let seen = [SeenWindow(number: 1, title: "✳ backend")]
+        // Nothing seen under the tab's title, lists of different lengths:
+        // the guess is the windows out of view, front to back.
         #expect(
             WindowPlace.of(
                 "tab-group-b", scripted: scripted, ordered: ordered, seen: seen,
-                visibleSpaces: visible) == .unsettled)
+                visibleSpaces: visible) == .unsettled(likeliest: [ordered[1], ordered[2]]))
     }
 
     /// Two windows titled alike, one in view: the order pairs them, so the
@@ -195,6 +197,29 @@ import Testing
                 visibleSpaces: visible) == .hidden(candidates: [ordered[0], ordered[1]]))
     }
 
+    /// Every title seen, but one changed between the reads, so the lists
+    /// stay unsettled. The tab's title, seen on one window out of view, is
+    /// the guess, whatever the order says.
+    @Test func theGuessFollowsTheTitleWhereOneIsSeen() {
+        let scripted = [
+            ScriptedWindow(id: "tab-group-a", title: "✳ backend"),
+            ScriptedWindow(id: "tab-group-b", title: "◐ build"),
+            ScriptedWindow(id: "tab-group-c", title: "◐ tests"),
+        ]
+        let ordered = [
+            OrderedWindow(number: 1, spaces: [10]), OrderedWindow(number: 2, spaces: [8]),
+            OrderedWindow(number: 3, spaces: [1773]),
+        ]
+        let seen = [
+            SeenWindow(number: 1, title: "◐ backend"), SeenWindow(number: 2, title: "◐ tests"),
+            SeenWindow(number: 3, title: "◐ build"),
+        ]
+        #expect(
+            WindowPlace.of(
+                "tab-group-b", scripted: scripted, ordered: ordered, seen: seen,
+                visibleSpaces: visible) == .unsettled(likeliest: [ordered[2], ordered[1]]))
+    }
+
     /// A title Accessibility shows on another window than the order says
     /// means the order is off, or a title changed between the two reads.
     @Test func aPairingTheTitlesContradictIsUnsettled() {
@@ -206,12 +231,16 @@ import Testing
             OrderedWindow(number: 1, spaces: [10]), OrderedWindow(number: 2, spaces: [8]),
         ]
         let seen = [SeenWindow(number: 1, title: "beta")]
-        for id in ["tab-group-a", "tab-group-b"] {
-            #expect(
-                WindowPlace.of(
-                    id, scripted: scripted, ordered: ordered, seen: seen, visibleSpaces: visible)
-                    == .unsettled)
-        }
+        // "alpha" is seen nowhere: the order's guess, the window out of view.
+        #expect(
+            WindowPlace.of(
+                "tab-group-a", scripted: scripted, ordered: ordered, seen: seen,
+                visibleSpaces: visible) == .unsettled(likeliest: [ordered[1]]))
+        // "beta" is seen in view: no guess takes the user anywhere.
+        #expect(
+            WindowPlace.of(
+                "tab-group-b", scripted: scripted, ordered: ordered, seen: seen,
+                visibleSpaces: visible) == .unsettled(likeliest: []))
     }
 
     /// The window in view retitled itself between the two reads, as a busy
@@ -222,7 +251,7 @@ import Testing
         #expect(
             WindowPlace.of(
                 "tab-group-a", scripted: scripted, ordered: ordered, seen: retitled,
-                visibleSpaces: visible) == .unsettled)
+                visibleSpaces: visible) == .unsettled(likeliest: [ordered[1]]))
     }
 
     /// Nothing of Ghostty's is on a hidden Space: whatever the titles say,
@@ -281,7 +310,7 @@ import Testing
         #expect(
             WindowPlace.of(
                 "tab-group-b", scripted: scripted, ordered: ordered, seen: nil,
-                visibleSpaces: visible) == .unsettled)
+                visibleSpaces: visible) == .unsettled(likeliest: [ordered[1], ordered[2]]))
     }
 
     /// A window or tab that could not be read on the way: the tab may be the
@@ -349,7 +378,7 @@ import Testing
         #expect(
             WindowPlace.of(
                 "tab-group-b", scripted: scripted, ordered: ordered, seen: seen,
-                visibleSpaces: visible) == .unsettled)
+                visibleSpaces: visible) == .unsettled(likeliest: [self.ordered[1], ordered[2]]))
     }
 
     /// Without Accessibility nothing can be set aside.
@@ -358,7 +387,7 @@ import Testing
         #expect(
             WindowPlace.of(
                 "tab-group-b", scripted: scripted, ordered: ordered, seen: nil,
-                visibleSpaces: visible) == .unsettled)
+                visibleSpaces: visible) == .unsettled(likeliest: [self.ordered[1]]))
     }
 
     /// A minimized window elsewhere: Ghostty lists it, the window server does
@@ -405,7 +434,7 @@ import Testing
         #expect(
             WindowPlace.of(
                 "tab-group-b", scripted: scripted, ordered: ordered, seen: seen,
-                visibleSpaces: visible) == .unsettled)
+                visibleSpaces: visible) == .unsettled())
     }
 
     /// Without Accessibility, a minimized window elsewhere keeps the lists
@@ -417,13 +446,13 @@ import Testing
         let place = WindowPlace.of(
             "tab-group-b", scripted: scripted, ordered: ordered, seen: nil,
             visibleSpaces: visible)
-        #expect(place == .unsettled)
+        #expect(place == .unsettled(likeliest: [ordered[1]]))
         #expect(place.mayBeOutOfView)
     }
 
     @Test func onlyAWindowThatMayBeOutOfViewLeadsToTheAsk() {
         #expect(WindowPlace.hidden(candidates: [ordered[1]]).mayBeOutOfView)
-        #expect(WindowPlace.unsettled.mayBeOutOfView)
+        #expect(WindowPlace.unsettled().mayBeOutOfView)
         #expect(!WindowPlace.showing.mayBeOutOfView)
         #expect(!WindowPlace.unknown.mayBeOutOfView)
     }

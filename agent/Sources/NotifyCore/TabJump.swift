@@ -33,6 +33,15 @@ public struct SpaceSpot: Equatable, Sendable {
 /// does the jump give up. Every count is bounded, so a Ghostty that never
 /// answers the way we hope cannot keep this going.
 ///
+/// Lists that will not pair are not a reason to focus either. Focusing a tab
+/// whose window is on a hidden Space pulls the window over (#63), and lists
+/// that stay unsettled say nothing about where it is: with the screen locked,
+/// Accessibility reads no window at all. So past its re-reads such a jump
+/// goes to the likeliest window out of view, as a guess, and looks again
+/// there; it focuses only once a look places the window in view. A look that
+/// still cannot tell, or anything else that goes wrong after a guess, ends
+/// the jump where it stands with Ghostty brought forward and nothing focused.
+///
 /// Pure bookkeeping, no Apple Events and no window server: the resident
 /// drives it and NotifyCore tests can walk every path.
 public struct TabJump: Equatable, Sendable {
@@ -78,6 +87,10 @@ public struct TabJump: Equatable, Sendable {
         /// longer than this one waits. Nothing was done: a focus now could
         /// bring a window across while the other jump is on its way.
         case busy
+        /// Where the window is could not be told, even after a guess: nothing
+        /// was focused, because a focus without knowing could pull the window
+        /// over from a hidden Space. The callers bring Ghostty forward.
+        case unplaced
     }
 
     public enum Step: Equatable, Sendable {
@@ -110,8 +123,9 @@ public struct TabJump: Equatable, Sendable {
     /// Trips per jump, in total. A second one happens only when a fresh
     /// look after the first still finds the window out of view.
     public static let maxHops = 2
-    /// Fresh reads per jump after a survey whose lists did not pair. Past
-    /// this the jump focuses without travelling, as it did before trips.
+    /// Fresh reads after a survey whose lists did not pair, before the jump
+    /// goes on a guess, and again in the look after that guess. Past them it
+    /// does not focus without knowing where the window is.
     public static let maxRereads = 2
 
     public let requested: String
@@ -122,6 +136,12 @@ public struct TabJump: Equatable, Sendable {
     public private(set) var hops = 0
     public private(set) var rereads = 0
     public private(set) var lastHop: HopResult?
+    /// The lists would not pair however often they were read, and the jump
+    /// went on a guess. From then on it focuses only a window placed in view.
+    public private(set) var guessed = false
+    /// The trip under way was chosen on that guess, not by a look that placed
+    /// the window.
+    public private(set) var guessedHop = false
     /// Windows the last survey placed out of view, most likely first.
     private var candidates: [OrderedWindow] = []
     /// Windows already travelled to; a later survey does not send the jump
@@ -158,8 +178,9 @@ public struct TabJump: Equatable, Sendable {
         case .notFound:
             return putBackFirst(then: .stop(.notFound))
         case .unknown:
-            // The focus command answers for itself, as it did before lookups.
-            return putBackFirst(then: .focus)
+            // The focus command answers for itself, as it did before lookups —
+            // unless the jump is on a guess, which never ends in a focus.
+            return guessed ? .stop(.unplaced) : putBackFirst(then: .focus)
         }
     }
 
@@ -170,9 +191,9 @@ public struct TabJump: Equatable, Sendable {
             // In view, after a trip or without one: focus it where it is.
             return .focus
         case .unknown:
-            return putBackFirst(then: .focus)
-        case .unsettled:
-            guard rereads < Self.maxRereads else { return putBackFirst(then: .focus) }
+            return guessed ? .stop(.unplaced) : putBackFirst(then: .focus)
+        case .unsettled(let likeliest):
+            guard rereads < Self.maxRereads else { return guess(likeliest) }
             rereads += 1
             return .locate
         case .hidden(let candidates):
@@ -180,7 +201,9 @@ public struct TabJump: Equatable, Sendable {
             // A display an earlier trip moved goes back before the next trip:
             // that trip arrived where the window turned out not to be, and the
             // next one may well be on another display.
-            guard let next = nextHop() else { return putBackFirst(then: .focus) }
+            guard let next = nextHop() else {
+                return putBackFirst(then: guessed ? .stop(.unplaced) : .focus)
+            }
             return putBackFirst(then: next)
         }
     }
@@ -197,7 +220,7 @@ public struct TabJump: Equatable, Sendable {
         case .failed:
             // This trip put its own display back; an earlier one that arrived
             // at the wrong window may still have moved one.
-            return putBackFirst(then: .focus)
+            return putBackFirst(then: guessed ? .stop(.unplaced) : .focus)
         case .stranded:
             return .stop(.strandedTrip)
         }
@@ -220,7 +243,22 @@ public struct TabJump: Equatable, Sendable {
         return .restore(moved)
     }
 
+    /// Past the re-reads the lists still do not say where the window is: go to
+    /// the likeliest window out of view and look again, the look getting its
+    /// own re-reads. A jump already on a guess stops where it stands: going on
+    /// guessing would only take the user further from where they were.
+    private mutating func guess(_ likeliest: [OrderedWindow]) -> Step {
+        guard !guessed else { return .stop(.unplaced) }
+        guessed = true
+        rereads = 0
+        candidates = likeliest
+        guard let next = nextHop() else { return putBackFirst(then: .stop(.unplaced)) }
+        guessedHop = true
+        return putBackFirst(then: next)
+    }
+
     private mutating func nextHop() -> Step? {
+        guessedHop = false
         guard hops < Self.maxHops,
             let next = candidates.first(where: { !visited.contains($0.number) })
         else { return nil }

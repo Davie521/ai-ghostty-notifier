@@ -3,6 +3,18 @@
 What changed in each release. The one-command installer always fetches the
 latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-notifier/releases).
 
+## Unreleased
+
+### Fixed
+
+- A click no longer pulls the session's window over when the app cannot tell
+  which window it is. With the screen locked, for one, Accessibility reads no
+  window at all, and the lists never paired; the jump then focused the tab
+  where its window was, which brings a window on another Space to yours. Now
+  it goes to the likeliest window out of view instead and looks again there,
+  and focuses the tab only once it sees the window in view. If it still cannot
+  tell, it brings Ghostty forward and selects nothing (`not placed` in the log).
+
 ## 0.10.1 — 2026-11-04
 
 ### Fixed

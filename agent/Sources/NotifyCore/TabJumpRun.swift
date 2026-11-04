@@ -230,7 +230,12 @@ public enum TabJumpRun {
                 case .placed(let place):
                     if let travelled {
                         // The look after a trip, with titles read after it.
-                        let seen = place == .showing ? "window in view" : "window still out of view"
+                        let seen: String
+                        switch place {
+                        case .showing: seen = "window in view"
+                        case .unsettled: seen = "window lists still did not pair"
+                        default: seen = "window still out of view"
+                        }
                         route = earlierTrips + "\(travelled), \(seen)"
                     } else if case .unknown = place {
                         route = "window not placed"
@@ -260,7 +265,11 @@ public enum TabJumpRun {
                     }
                 }
             case .hop(let window):
-                if plan.hops > 1 { earlierTrips = route + "; then " }
+                if plan.hops > 1 || plan.guessedHop {
+                    earlierTrips =
+                        route + "; " + (plan.hops > 1 ? "then " : "")
+                        + (plan.guessedHop ? "a guess by the order: " : "")
+                }
                 switch await driver.travel(to: window) {
                 case .arrived(let display, let from, let direction, let presses, let strayRetries):
                     let retried =
@@ -314,7 +323,7 @@ public enum TabJumpRun {
                 step = plan.observe(selected: selected)
             case .stop(let outcome):
                 switch outcome {
-                case .notFound, .unverified:
+                case .notFound, .unverified, .unplaced:
                     // Still inside the lease: this, too, can switch Spaces.
                     if !Task.isCancelled { await driver.activate() }
                 case .verified, .abandoned, .strandedTrip, .busy: break
@@ -355,6 +364,10 @@ public enum TabJumpRun {
             return "jump: \(tabID) left alone (\(report.route))"
         case .notFound:
             return "jump: \(tabID) not found, activated Ghostty only"
+        case .unplaced:
+            // Nothing focused on purpose: the focus could have pulled the
+            // window over. Worth its own line, to count how often it happens.
+            return "jump: \(tabID) not placed (\(report.route)), activated Ghostty only"
         case .verified(reads: 0, focusAttempts: 1):
             return "jump: focused \(tabID) (\(report.route)), verified selected"
         case .verified(let reads, let attempts):

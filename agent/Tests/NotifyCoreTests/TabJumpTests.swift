@@ -164,23 +164,101 @@ import Testing
         #expect(jump.observe(restored: true) == .stop(.notFound))
     }
 
-    /// Lists that do not pair are read again, twice at most; then the jump
-    /// focuses without travelling.
-    @Test func anUnsettledSurveyIsReadAgainThenGivesWay() {
-        var (jump, step) = located(.unsettled)
+    /// Lists that do not pair are read again, twice at most. With nothing to
+    /// go on after that, the jump focuses nothing: a focus without knowing
+    /// where the window is would pull it over from a hidden Space.
+    @Test func anUnsettledSurveyIsReadAgainThenFocusesNothing() {
+        var (jump, step) = located(.unsettled())
         #expect(step == .locate)
         #expect(jump.rereads == 1)
         _ = jump.observe(probe: .found(window: window))
-        #expect(jump.observe(place: .unsettled) == .locate)
+        #expect(jump.observe(place: .unsettled()) == .locate)
         _ = jump.observe(probe: .found(window: window))
-        #expect(jump.observe(place: .unsettled) == .focus)
-        #expect(jump.rereads == TabJump.maxRereads)
+        #expect(jump.observe(place: .unsettled()) == .stop(.unplaced))
         #expect(jump.hops == 0)
+        #expect(jump.focusAttempts == 0)
+    }
+
+    /// The lists, read again and again, still will not pair (Accessibility
+    /// reads no window while the screen is locked): the jump goes to the
+    /// likeliest window as a guess, and focuses once a look there places it.
+    private func guessedTrip() -> TabJump {
+        var (jump, _) = located(.unsettled(likeliest: [hiddenA, hiddenB]))
+        for _ in 1..<TabJump.maxRereads {
+            _ = jump.observe(probe: .found(window: window))
+            #expect(jump.observe(place: .unsettled(likeliest: [hiddenA, hiddenB])) == .locate)
+        }
+        _ = jump.observe(probe: .found(window: window))
+        #expect(jump.observe(place: .unsettled(likeliest: [hiddenA, hiddenB])) == .hop(hiddenA))
+        #expect(jump.guessed)
+        #expect(jump.guessedHop)
+        #expect(jump.observe(hopResult: .arrived(from: home)) == .locate)
+        #expect(jump.observe(probe: .found(window: window)) == .survey(window: window))
+        return jump
+    }
+
+    @Test func unsettledListsSendTheJumpOnAGuessThatALookConfirms() {
+        var jump = guessedTrip()
+        #expect(jump.observe(place: .showing) == .focus)
+    }
+
+    /// A look after the guess that still cannot tell, past its own re-reads:
+    /// the jump stops where the guess took it, focusing nothing.
+    @Test func aGuessALookCannotConfirmEndsWhereItStands() {
+        var jump = guessedTrip()
+        #expect(jump.rereads == 0)
+        for _ in 0..<TabJump.maxRereads {
+            #expect(jump.observe(place: .unsettled(likeliest: [hiddenB])) == .locate)
+            _ = jump.observe(probe: .found(window: window))
+        }
+        #expect(jump.observe(place: .unsettled(likeliest: [hiddenB])) == .stop(.unplaced))
+        #expect(jump.moved == [home])
+        #expect(jump.hops == 1)
+    }
+
+    /// The look after the guess places the window elsewhere: the display goes
+    /// back and the trip goes on there, as after any trip to a wrong window.
+    @Test func aGuessALookPlacesElsewhereGoesOnThere() {
+        var jump = guessedTrip()
+        #expect(jump.observe(place: .hidden(candidates: [hiddenB, hiddenA])) == .restore([home]))
+        #expect(jump.observe(restored: true) == .hop(hiddenB))
+        #expect(!jump.guessedHop)
+        #expect(jump.observe(hopResult: .arrived(from: home)) == .locate)
+        _ = jump.observe(probe: .found(window: window))
+        #expect(jump.observe(place: .showing) == .focus)
+    }
+
+    /// After a guess, no way out ends in a focus: not a failed trip, not a
+    /// look with no answer, not running out of trips.
+    @Test func onAGuessNothingEndsInAFocus() {
+        var (failing, _) = located(.unsettled(likeliest: [hiddenA]))
+        for _ in 0..<TabJump.maxRereads {
+            _ = failing.observe(probe: .found(window: window))
+            _ = failing.observe(place: .unsettled(likeliest: [hiddenA]))
+        }
+        #expect(failing.guessed)
+        #expect(failing.observe(hopResult: .failed(reason: "x")) == .stop(.unplaced))
+
+        var unanswered = guessedTrip()
+        #expect(unanswered.observe(place: .unknown) == .stop(.unplaced))
+
+        var lost = guessedTrip()
+        #expect(lost.observe(probe: .unknown) == .stop(.unplaced))
+
+        var outOfTrips = guessedTrip()
+        #expect(outOfTrips.observe(place: .hidden(candidates: [hiddenB])) == .restore([home]))
+        #expect(outOfTrips.observe(restored: true) == .hop(hiddenB))
+        #expect(outOfTrips.observe(hopResult: .arrived(from: otherHome)) == .locate)
+        _ = outOfTrips.observe(probe: .found(window: window))
+        #expect(
+            outOfTrips.observe(place: .hidden(candidates: [hiddenA, hiddenB]))
+                == .restore([otherHome]))
+        #expect(outOfTrips.observe(restored: true) == .stop(.unplaced))
     }
 
     /// A read again that pairs travels as usual.
     @Test func anUnsettledSurveyThatSettlesTravels() {
-        var (jump, step) = located(.unsettled)
+        var (jump, step) = located(.unsettled())
         #expect(step == .locate)
         _ = jump.observe(probe: .found(window: window))
         #expect(jump.observe(place: .hidden(candidates: [hiddenA])) == .hop(hiddenA))
@@ -276,7 +354,8 @@ import Testing
     @Test(
         arguments: [nil, "tab-c53c4c800", "tab-zzz"] as [String?],
         [
-            WindowPlace.showing, .unknown, .unsettled,
+            WindowPlace.showing, .unknown, .unsettled(),
+            .unsettled(likeliest: [OrderedWindow(number: 1, spaces: [8])]),
             .hidden(candidates: [
                 OrderedWindow(number: 1, spaces: [8]), OrderedWindow(number: 2, spaces: [5]),
                 OrderedWindow(number: 3, spaces: [4]),
