@@ -354,7 +354,14 @@ What the notification is able to say, and how it finds the tab:
   — which of Ghostty's windows is the session's it tells by title when the
   titles of all of them, on every Space, are the ones Ghostty lists, and by
   the order of the two lists otherwise, which can be off — and brings that
-  window forward the way window switchers do: the window
+  window forward the way window switchers do. When neither tells, read again
+  twice — with the screen locked, Accessibility reads no window at all — the
+  jump does not focus on a guess, since a focus is what pulls a window over:
+  it goes to the likeliest window out of view (the one seen under the tab's
+  title, else the one the order pairs with it) and looks again there. It
+  focuses the tab only once it sees the window in view; if it still cannot
+  tell, it stays there, brings Ghostty forward and selects nothing, which the
+  log calls `not placed`. Bringing the window forward: the window
   server makes Ghostty the front app with that window key, and Accessibility
   raises it. macOS then shows the window's Space in one slide, without the
   Spaces between and without moving the window; only then does the jump focus
@@ -472,8 +479,8 @@ without removing any of the macOS-specific integration.
   for instance when the mouse moves at that moment; it is undone and tried
   again, and after the third such press the jump falls back to focusing. The
   log's `jump:` line says which way it went: `switched straight to the Space`,
-  `travelled N left/right` for a walk, and every trip when there was more than
-  one.
+  `travelled N left/right` for a walk, `a guess by the order` for a trip made
+  without knowing, and every trip when there was more than one.
 - **Old notifications after an upgrade:** dismiss stale pre-upgrade notices and
   test a freshly posted one; macOS may no longer route the old sender identity.
 - macOS/Ghostty only. Terminal CLI ownership is required for Codex notifications,

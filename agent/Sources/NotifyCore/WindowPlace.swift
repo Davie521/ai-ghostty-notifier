@@ -78,7 +78,12 @@ public enum WindowPlace: Equatable, Sendable {
     /// contradicts the pairing. A window opening or closing, or a title that
     /// changed between the two reads — a busy session retitles its tab twice
     /// a second — both look like this, and both pass; a fresh read decides.
-    case unsettled
+    /// `likeliest` is where a jump that still cannot tell after its fresh
+    /// reads goes, as a guess, rather than focus the tab wherever its window
+    /// is and pull it over: the windows out of view, the one the order pairs
+    /// with the tab's first when the lists are as long as each other. Empty
+    /// when there is nothing to go on.
+    case unsettled(likeliest: [OrderedWindow] = [])
     /// The listing has no such window.
     case unknown
 
@@ -145,7 +150,7 @@ public enum WindowPlace: Equatable, Sendable {
         var scripted = scripted
         for minimized in seen ?? [] where minimized.minimized {
             let matching = scripted.indices.filter { scripted[$0].title == minimized.title }
-            guard matching.count == 1 else { return .unsettled }
+            guard matching.count == 1 else { return .unsettled(likeliest: []) }
             if scripted[matching[0]].id == windowID { return .unknown }
             scripted.remove(at: matching[0])
         }
@@ -178,16 +183,45 @@ public enum WindowPlace: Equatable, Sendable {
         }
         // The order's check reads only the windows in view, as it always has:
         // a title out of view that changed between the reads would leave the
-        // lists unsettled, and a jump whose lists stay unsettled focuses
-        // without travelling.
+        // lists unsettled, and send a jump that stays unsettled on a guess.
         let inViewNumbers = Set(placed.filter(inView).map(\.number))
         let seenInView = (seen ?? []).filter { inViewNumbers.contains($0.number) }
         guard placed.count == scripted.count, titlesAgree(scripted, placed, seenInView) else {
-            return .unsettled
+            return .unsettled(
+                likeliest: likeliest(
+                    scripted[targetIndex], scripted: scripted, placed: placed, hidden: hidden,
+                    titles: seenTitles,
+                    paired: placed.count == scripted.count ? placed[targetIndex] : nil,
+                    inView: inView))
         }
         let window = placed[targetIndex]
         if inView(window) { return .showing }
         return .hidden(candidates: [window] + hidden.filter { $0 != window })
+    }
+
+    /// Where a jump that cannot tell goes on a guess. The best clue is a window
+    /// seen under the title only `target` is listed under, and the only one
+    /// seen so: that one if out of view, and if in view nowhere — the window
+    /// is most likely in front of the user already. Failing that, the order:
+    /// the window it pairs with `target` first, when the lists are as long as
+    /// each other and it is out of view; then the rest out of view, front to
+    /// back.
+    private static func likeliest(
+        _ target: ScriptedWindow, scripted: [ScriptedWindow], placed: [OrderedWindow],
+        hidden: [OrderedWindow], titles: [UInt32: String]?, paired: OrderedWindow?,
+        inView: (OrderedWindow) -> Bool
+    ) -> [OrderedWindow] {
+        if let titles, !target.title.isEmpty,
+            scripted.filter({ $0.title == target.title }).count == 1
+        {
+            let titled = placed.filter { titles[$0.number] == target.title }
+            if titled.count == 1 {
+                let window = titled[0]
+                return inView(window) ? [] : [window] + hidden.filter { $0 != window }
+            }
+        }
+        if let paired, !inView(paired) { return [paired] + hidden.filter { $0 != paired } }
+        return hidden
     }
 
     /// The placed window titled as `target`: when every placed window has a

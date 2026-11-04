@@ -65,7 +65,10 @@ enum Whereabouts {
             switch place {
             case .showing: described = "showing"
             case .unknown: described = "unknown"
-            case .unsettled: described = "unsettled"
+            case .unsettled(let likeliest):
+                described =
+                    likeliest.isEmpty
+                    ? "unsettled" : "unsettled likeliest=\(list(likeliest.map(\.number)))"
             case .hidden(let candidates):
                 described = "hidden candidates=\(list(candidates.map(\.number)))"
             }
