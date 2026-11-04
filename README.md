@@ -100,6 +100,18 @@ notify. The installer ends with a test notification instead, and
 [one command](docs/reference.md#4-permissions-and-restart) sends another
 whenever you want to check.
 
+**Upgrading from 0.9.x or earlier:** since 0.10.0 the app has sounds of its
+own, but macOS remembers which notification sounds an app has from when it
+first saw it. After an upgrade in place it keeps playing its default sound
+instead, until Notification Center restarts. Log out and back in, or run once:
+
+```bash
+killall NotificationCenter
+```
+
+It relaunches by itself straight away, and no notification is lost. A new
+install is not affected.
+
 **Requirements:** macOS 13 or later, [Ghostty](https://ghostty.org) with
 AppleScript support, and Claude Code or Codex CLI. A Swift 6 toolchain is
 needed only to build from source.

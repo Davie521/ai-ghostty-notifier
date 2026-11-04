@@ -88,6 +88,15 @@ agent 会从 release 安装，装不了才从源码构建，并且每一步都�
 装完随手发一条短 prompt 是看不到通知的：3 分钟以内的任务本来就不通知。所以安装的最后会发一条测试通知；
 以后想再检查，[一条命令](docs/reference.zh-CN.md#4-授权并重启-cli)就能再发一次。
 
+**从 0.9.x 或更早的版本升级：** 0.10.0 起 App 自带提示音，但 macOS 会记住它第一次见到这个 App 时有哪些声音。
+原地升级之后，它会一直放系统默认音，直到通知中心重启。注销再登录一次，或者运行一次：
+
+```bash
+killall NotificationCenter
+```
+
+通知中心会马上自己重新启动，已有的通知不会丢。全新安装不受影响。
+
 **需要：** macOS 13 或更新、支持 AppleScript 的 [Ghostty](https://ghostty.org)，
 以及 Claude Code 或 Codex CLI。Swift 6 工具链只在从源码构建时才需要。
 
