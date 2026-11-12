@@ -188,8 +188,11 @@ enum NativeHookRuntime {
             await withCheckedContinuation { (taken: CheckedContinuation<Void, Never>) in
                 let config = NSWorkspace.OpenConfiguration()
                 config.activates = false
-                NSWorkspace.shared.openApplication(at: url, configuration: config) { _, _ in
-                    taken.resume()
+                // Explicitly Sendable: AppKit calls it on a queue of its own, and
+                // a toolchain older than Swift 6.2 would otherwise make it
+                // main-actor isolated and trap there.
+                NSWorkspace.shared.openApplication(at: url, configuration: config) {
+                    @Sendable _, _ in taken.resume()
                 }
             }
         }
