@@ -180,10 +180,23 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         terminationSource = source
     }
 
+    /// Set by Quit in the menu, the one way of stopping the agent that is meant
+    /// to last. Whatever else ends it (the quit macOS sends every app when a
+    /// logout or restart begins, SIGTERM from outside launchd) exits with
+    /// `restartExitStatus`, and the LaunchAgent, which restarts the agent on any
+    /// exit but a successful one, starts it again. A logout that goes through
+    /// takes launchd's session with it, so nothing restarts then; one that is
+    /// cancelled used to leave the agent quit until the next login, with every
+    /// notification of the day missing. A second agent that finds one running
+    /// still exits 0 before it gets this far (see Singleton), so this cannot spin.
+    private static var quitChosen = false
+    static let restartExitStatus: Int32 = 75  // EX_TEMPFAIL
+
     /// `terminateLater` runs a nested AppKit loop. Enter it from the run loop,
     /// not from a main-dispatch callback which would keep the queue occupied
     /// and prevent the MainActor cleanup task from ever running.
-    static func requestTermination() {
+    static func requestTermination(chosen: Bool = false) {
+        if chosen { quitChosen = true }
         NSApp.perform(
             #selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0,
             inModes: [.common])
@@ -226,6 +239,10 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Readiness is about a live agent, so it must not outlive the process:
         // a stale "authorized" would keep hooks routing into a dead spool.
         readiness.close()
+        guard Agent.quitChosen else {
+            log("agent down; not quit from the menu, so it exits to be restarted")
+            exit(Agent.restartExitStatus)
+        }
         log("agent down")
     }
 

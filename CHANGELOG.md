@@ -3,6 +3,16 @@
 What changed in each release. The one-command installer always fetches the
 latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-notifier/releases).
 
+## Unreleased
+
+### Fixed
+
+- The app no longer stays quit after a logout or restart that does not happen.
+  macOS asks every app to quit when one begins; the app took that as a request
+  to stop, and launchd, which only restarted it after a crash, left it so until
+  the next login, with every notification in between missing. Now only Quit in
+  its menu keeps it down; whatever else stops it, launchd starts it again.
+
 ## 0.11.0 — 2026-11-12
 
 ### Added

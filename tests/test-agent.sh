@@ -46,6 +46,7 @@ fi
 
 SANDBOX=$(mktemp -d)
 AGENT_PID=""
+LAST_EXIT=0
 STARTED=()
 stop_agent() {
     [[ -n "$AGENT_PID" ]] || return 0
@@ -60,7 +61,11 @@ stop_agent() {
         kill -KILL "$pid" 2>/dev/null || true
         result=1
     fi
-    wait "$pid" 2>/dev/null || result=1
+    # 75 is a completed shutdown too: anything but the menu's Quit exits with
+    # it, so that launchd starts the agent again (Agent.restartExitStatus).
+    LAST_EXIT=0
+    wait "$pid" 2>/dev/null || LAST_EXIT=$?
+    if (( LAST_EXIT != 0 && LAST_EXIT != 75 )); then result=1; fi
     AGENT_PID=""
     return "$result"
 }
@@ -503,6 +508,10 @@ check "both timed notifications are posted before the shutdown" \
     wait_for 10 state_is "$KEPT" "claude-$KEPT"
 check "SIGTERM completes asynchronous shutdown within 10 seconds" stop_agent
 check "shutdown calls the lifecycle cleanup" log_has "agent down"
+# The quit a logout begins with comes this way too. A logout that is then
+# cancelled must not leave the agent quit: launchd restarts it on this status.
+check "stopped by anything but the menu's Quit, it exits 75 to be restarted" \
+    test "$LAST_EXIT" = 75
 for marker in agent.pid ready capabilities native-hook-ready; do
     check "shutdown removes $marker" test ! -f "$ROOT/$marker"
 done
