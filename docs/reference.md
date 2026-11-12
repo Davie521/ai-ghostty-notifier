@@ -260,6 +260,38 @@ app a different language from the system, use System Settings › General ›
 Language & Region › Applications. A session title or a message from the CLI is
 shown as it came.
 
+<a id="jump-to-what-is-waiting"></a>
+
+### Jump to what's waiting, from a key or a pedal
+
+```bash
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --jump-waiting
+```
+
+goes where a click on the newest notification would: to the tab of the session
+that notified you last and is still waiting, the top row of the menu bar list.
+Its notification comes down, as it would for a click. Bind it to anything that
+can run a command (a keyboard shortcut, a mouse button, a foot pedal); the app
+does not care which, and without one nothing changes. It prints nothing when it
+works, and its exit status says whether anything moved:
+
+| Exit | Meaning |
+|---|---|
+| 0 | The app was asked to go there |
+| 1 | Nothing is waiting; nothing moved |
+| 2 | The app is not running or cannot be reached; nothing moved |
+
+So a binding can do something else when nothing is waiting. This one, as a
+Karabiner-Elements `shell_command` for example, goes to the waiting session,
+else to Ghostty's next tab:
+
+```sh
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --jump-waiting || osascript -e 'tell application "Ghostty" to perform action "next_tab" on focused terminal of selected tab of front window'
+```
+
+The first time the fallback runs, macOS asks whether the program running it
+may control Ghostty.
+
 ## Configuration
 
 Claude reads environment variables from its `settings.json` `env` block.

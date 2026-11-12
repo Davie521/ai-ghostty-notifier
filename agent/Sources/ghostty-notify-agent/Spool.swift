@@ -158,6 +158,14 @@ final class SpoolWatcher {
                 log("dropped stale notify \(candidate.name) (queued for too long)")
                 continue
             }
+            // A jump answers a press; one that waited is no longer what the
+            // user asked for.
+            if case .jumpWaiting = request,
+                candidate.modified < now() - AgentConstants.staleJumpAge
+            {
+                log("dropped stale jump request \(candidate.name)")
+                continue
+            }
             if case .hookEvent(let event) = request, event.kind != .prompt,
                 event.occurredAt < cutoff
             {

@@ -41,7 +41,9 @@ in one project.
 - **It can call you back.** When Claude Code or Codex CLI needs you part-way
   through, for Face ID, a code, a scan or a decision, it sends a notification
   with sound that leads to its tab ([how](docs/reference.md#when-claude-or-codex-needs-you)).
-- **A menu bar list** of the sessions waiting on you.
+- **A menu bar list** of the sessions waiting on you, and
+  [one command to jump to the newest](docs/reference.md#jump-to-what-is-waiting)
+  for a keyboard shortcut or a foot pedal.
 - **In your language.** Notifications and the menu bar in English or Simplified
   Chinese, following macOS.
 - **Nothing extra.** No Node, no telemetry, no network; the Accessibility

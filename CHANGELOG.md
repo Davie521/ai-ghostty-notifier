@@ -3,6 +3,15 @@
 What changed in each release. The one-command installer always fetches the
 latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-notifier/releases).
 
+## Unreleased
+
+### Added
+
+- `ghostty-notify-agent --jump-waiting` goes where a click on the newest
+  notification would, for a keyboard shortcut or a foot pedal to run. It exits
+  1 when nothing is waiting, so a binding can fall back to something else, such
+  as Ghostty's next tab. See [Jump to what's waiting](docs/reference.md#jump-to-what-is-waiting).
+
 ## 0.10.2 — 2026-11-04
 
 ### Fixed
