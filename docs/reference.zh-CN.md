@@ -214,6 +214,33 @@ App 没在运行、通知没授权）以 1 退出并说明原因，skill 会让 
 想让这个 App 用和系统不同的语言，去「系统设置 › 通用 › 语言与地区 › 应用程序」单独指定。
 会话标题和 CLI 传来的消息原样显示。
 
+<a id="一键跳到在等你的会话"></a>
+
+### 一键跳到在等你的会话（键盘快捷键或脚踏板）
+
+```bash
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --jump-waiting
+```
+
+效果和点最新那条通知一样：跳到最近一次通知你、还在等你的会话的标签页，也就是菜单栏列表的第一行，
+那条通知也跟着撤掉。能运行命令的东西都可以绑它（键盘快捷键、鼠标侧键、脚踏板），App 不管你用的是哪个；
+不绑，一切照旧。成功时什么都不输出，退出码告诉你有没有跳：
+
+| 退出码 | 意思 |
+|---|---|
+| 0 | 已经让 App 跳过去 |
+| 1 | 没有在等你的会话，没有跳 |
+| 2 | App 没在运行或联系不上，没有跳 |
+
+所以绑定可以在没有会话等你时改做别的。比如下面这条，作为 Karabiner-Elements 的 `shell_command`，
+有会话在等就跳过去，没有就切到 Ghostty 的下一个标签页：
+
+```sh
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --jump-waiting || osascript -e 'tell application "Ghostty" to perform action "next_tab" on focused terminal of selected tab of front window'
+```
+
+第一次走到后半句时，macOS 会问运行它的程序能不能控制 Ghostty。
+
 ## 配置
 
 Claude 使用 `settings.json` 的 `env` 环境变量。

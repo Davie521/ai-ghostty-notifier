@@ -14,6 +14,7 @@ import NotifyCore
 //   ghostty-notify-agent --test                      one notification via the resident
 //   ghostty-notify-agent --nudge <message>           call the user back to this Claude session
 //   ghostty-notify-agent --where <tab-id>            where a jump to that tab would go
+//   ghostty-notify-agent --jump-waiting              go to the newest waiting session
 
 let environment = ProcessInfo.processInfo.environment
 let arguments = CommandLine.arguments
@@ -120,6 +121,29 @@ if arguments.count == 3, arguments[1] == "--where" {
     }
     Task { @MainActor in exit(await Whereabouts.run(tabID: arguments[2])) }
     CFRunLoopRun()
+}
+if arguments.count == 2, arguments[1] == "--jump-waiting" {
+    // For a keyboard shortcut or a foot pedal: go where a click on the newest
+    // notification would. Quiet when it works; the exit status tells a caller
+    // whether anything moved, so it can fall back to something of its own.
+    func fail(_ message: String, _ status: Int32) -> Never {
+        FileHandle.standardError.write(Data("ghostty-notify: \(message)\n".utf8))
+        exit(status)
+    }
+    switch WaitingJump.plan(
+        residentRunning: HookTransport(paths: paths).runningPID != nil,
+        savedState: FileManager.default.contents(atPath: paths.state))
+    {
+    case .notRunning:
+        fail("the agent is not running, so there is nothing to jump to", 2)
+    case .nothingWaiting:
+        fail("nothing is waiting", 1)
+    case .jump:
+        guard let request = try? RequestCodec.encode(.jumpWaiting),
+            SpoolWriter.write(json: String(decoding: request, as: UTF8.self), to: paths.spool)
+        else { fail("cannot reach the agent", 2) }
+        exit(0)
+    }
 }
 if arguments.dropFirst().contains(where: { $0.hasPrefix("--") }) {
     NativeHookRuntime.diagnostic("unknown option")

@@ -186,6 +186,13 @@ selftest_says() { grep -qF "$1" "$SANDBOX/selftest.out"; }
 check "--test fails while no agent is running" not selftest
 check "and says the agent is not running" selftest_says "The agent is not running"
 check "and queues nothing" test ! -e "$ROOT/spool"
+# A shortcut or pedal runs --jump-waiting; with no agent it must say so, not hang.
+jump_waiting() { "$BIN" --jump-waiting 2>"$SANDBOX/jump.err"; }
+jump_status() { jump_waiting; echo $?; }
+jump_says() { grep -qF "$1" "$SANDBOX/jump.err"; }
+check "--jump-waiting exits 2 while no agent is running" test "$(jump_status)" = 2
+check "and says the agent is not running" jump_says "the agent is not running"
+check "and queues nothing either" test ! -e "$ROOT/spool"
 
 # ── 1. Three start together, one stays, and it claims its pidfile ──────────
 # launchd and `open -a` can start the agent at the same moment, and two of them
@@ -305,6 +312,21 @@ check "dismissed session has nothing outstanding" \
 # destroy a sibling session's still-unread notification.
 check "the other session's notification survives" \
     test "$(state_outstanding "$OTHER")" = "claude-$OTHER"
+
+# ── 5a. --jump-waiting goes where a click on the newest notification would ─
+# No tab is known here, so the jump itself only fronts Ghostty; what is asserted
+# is the choice of session, the withdrawal a click makes, and the exit status a
+# binding falls back on. $OTHER posted after the --test session, so it is newest.
+check "--jump-waiting exits 0 while a session is waiting" test "$(jump_status)" = 0
+check "the agent goes to the newest waiting session" \
+    wait_for 10 log_has "jump-waiting: jumping to $OTHER"
+check "and takes its notification down, as a click would" \
+    wait_for 10 state_is "$OTHER" ""
+agent_queue "$(jq -nc --arg s "$TEST_SID" '{type:"dismiss",session_id:$s}')"
+check "(the --test session is dealt with too)" wait_for 10 state_is "$TEST_SID" ""
+check "with nothing waiting it exits 1, for a binding to fall back on" \
+    test "$(jump_status)" = 1
+check "and says nothing is waiting" jump_says "nothing is waiting"
 
 # ── 5b. The nudge spool takes notifications and nothing else ───────────────
 # Codex CLI's sandbox refuses writes under ~/.claude, so a sandboxed --nudge

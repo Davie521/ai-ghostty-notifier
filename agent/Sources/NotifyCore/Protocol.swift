@@ -29,6 +29,9 @@ public enum AgentRequest: Equatable, Sendable {
     /// Sent by the install script when macOS has this app on Temporary style,
     /// which is the one thing the product needs that no code can set.
     case styleHint
+    /// Go to the session whose notification is newest, as a click on it would.
+    /// Sent by `--jump-waiting`, which a keyboard shortcut or a foot pedal runs.
+    case jumpWaiting
 }
 
 public struct NotifyRequest: Equatable, Sendable {
@@ -203,6 +206,8 @@ public enum RequestCodec {
             return .ping
         case "style_hint":
             return .styleHint
+        case "jump_waiting":
+            return .jumpWaiting
         default:
             throw RequestDecodeError.unknownType(type)
         }
@@ -244,6 +249,8 @@ public enum RequestCodec {
             object = ["type": "ping"]
         case .styleHint:
             object = ["type": "style_hint"]
+        case .jumpWaiting:
+            object = ["type": "jump_waiting"]
         }
         return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     }

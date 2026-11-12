@@ -302,7 +302,33 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
         case .styleHint:
             offerStyleGuidance(force: true)
+
+        case .jumpWaiting:
+            // Decided again here: `--jump-waiting` read a saved snapshot that
+            // can be a moment old.
+            guard let newest = state.waitingSessions().first else {
+                log("jump-waiting: nothing is waiting")
+                return
+            }
+            goToWaiting(sessionID: newest.sessionID, origin: "jump-waiting")
         }
+    }
+
+    /// Go to a waiting session on the user's say-so: a menu row, or a shortcut
+    /// or pedal running `--jump-waiting`.
+    ///
+    /// Taking the notification down here rather than leaving it to the
+    /// activation observer: the request was the click, so the alert has done
+    /// its job whether or not Ghostty ends up frontmost — and a session with no
+    /// resolved tab would otherwise keep its notification after the user has
+    /// plainly dealt with it.
+    private func goToWaiting(sessionID: String, origin: String) {
+        let identifiers = state.takeNotifications(sessionID: sessionID)
+        cancelExpiry(identifiers)
+        notifier.withdraw(identifiers)
+        stateChanged()
+        log("\(origin): jumping to \(sessionID)")
+        jump(sessionID: sessionID)
     }
 
     /// Restores the shell watcher's "already staring at it" clear.
@@ -986,18 +1012,7 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                 )
             },
             onJump: { [weak self] sessionID in
-                guard let self else { return }
-                // Taking the notification down here rather than leaving it to
-                // the activation observer: the row was the click, so the alert
-                // has done its job whether or not Ghostty ends up frontmost —
-                // and a session with no resolved tab would otherwise keep its
-                // notification after the user has plainly dealt with it.
-                let identifiers = self.state.takeNotifications(sessionID: sessionID)
-                self.cancelExpiry(identifiers)
-                self.notifier.withdraw(identifiers)
-                self.stateChanged()
-                self.log("menu: jumping to \(sessionID)")
-                self.jump(sessionID: sessionID)
+                self?.goToWaiting(sessionID: sessionID, origin: "menu")
             },
             onShowGuidance: { [weak self] in self?.offerStyleGuidance(force: true) },
             onOpenSettings: { [weak self] in
