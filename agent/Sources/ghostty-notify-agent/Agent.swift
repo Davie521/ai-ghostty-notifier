@@ -310,7 +310,10 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                 log("jump-waiting: nothing is waiting")
                 return
             }
-            goToWaiting(sessionID: newest.sessionID, origin: "jump-waiting")
+            // This arrives with the app in the background, unlike a click or
+            // a menu row, and a background process may not bring Ghostty
+            // forward without coming forward first.
+            goToWaiting(sessionID: newest.sessionID, origin: "jump-waiting", activatesItself: true)
         }
     }
 
@@ -322,13 +325,13 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     /// its job whether or not Ghostty ends up frontmost — and a session with no
     /// resolved tab would otherwise keep its notification after the user has
     /// plainly dealt with it.
-    private func goToWaiting(sessionID: String, origin: String) {
+    private func goToWaiting(sessionID: String, origin: String, activatesItself: Bool = false) {
         let identifiers = state.takeNotifications(sessionID: sessionID)
         cancelExpiry(identifiers)
         notifier.withdraw(identifiers)
         stateChanged()
         log("\(origin): jumping to \(sessionID)")
-        jump(sessionID: sessionID)
+        jump(sessionID: sessionID, activatesItself: activatesItself)
     }
 
     /// Restores the shell watcher's "already staring at it" clear.
@@ -747,7 +750,9 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         completionHandler([.banner, .sound])
     }
 
-    private func jump(sessionID: String?, fallbackTabID: String? = nil) {
+    private func jump(
+        sessionID: String?, fallbackTabID: String? = nil, activatesItself: Bool = false
+    ) {
         // Prefer live bookkeeping, then the id ghostty-tab-save.sh persisted —
         // which survives an agent that lost its state file.
         var tabID = sessionID.flatMap { state.sessions[$0]?.tabID }
@@ -791,7 +796,9 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // forward when it could not select the tab, still in its turn; this
         // only logs the outcome.
         enqueueJump { agent in
-            agent.finishJump(await TabJumpRunner.run(tabID: tabID, waitUntil: giveUpAt))
+            agent.finishJump(
+                await TabJumpRunner.run(
+                    tabID: tabID, waitUntil: giveUpAt, activatesItself: activatesItself))
         }
     }
 
