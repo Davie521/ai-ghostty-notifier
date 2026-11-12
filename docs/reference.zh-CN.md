@@ -381,6 +381,9 @@ JSON 解析、状态文件、锁、进程看守和终端恢复逻辑。只把常
   运行时诊断写到 hook stderr；常驻状态与日志在
   `~/.claude/notifications/ghostty-agent/`。Claude 会话记录在
   `~/.claude/notifications/ghostty-sessions/`，Codex 使用自己的 `notifications/` 目录。
+- **App 会一直开着，直到你在它的菜单里点退出。** launchd 在登录时启动它，之后不管因为什么停下，
+  包括注销、重启开始时 macOS 让所有 App 退出的那一下，都会马上把它再启动起来：开始注销又取消了，
+  它不会再一整天都停着。在菜单栏里点退出，它就一直停到下次登录。
 - **常驻进程停了：** 默认会尝试启动 App，并由临时 Swift worker 处理当前事件。
   外部投递仍需要已安装、已授权的后端；空的 `AGENT_APP` 会禁用启动尝试。
 - **菜单栏里没有图标：** 有刘海的 Mac 上，放不下的菜单栏图标会被 macOS 悄悄藏起来。

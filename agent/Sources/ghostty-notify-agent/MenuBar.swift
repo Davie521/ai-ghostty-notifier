@@ -327,5 +327,5 @@ final class MenuBar: NSObject, NSMenuDelegate {
     @objc private func openSettings() { onOpenSettings() }
     @objc private func openAccessibilitySettings() { onOpenAccessibilitySettings() }
     @objc private func openLog() { onOpenLog() }
-    @objc private func quit() { Agent.requestTermination() }
+    @objc private func quit() { Agent.requestTermination(chosen: true) }
 }

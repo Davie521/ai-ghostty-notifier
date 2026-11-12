@@ -107,9 +107,11 @@ cat <<PLIST_EOF
     </array>
     <key>RunAtLoad</key>
     <true/>
-    <!-- Restart on a crash, but NOT on a clean exit. A second agent exits 0 on
+    <!-- Restart on any exit but a successful one. A second agent exits 0 on
          purpose when one is already running (see Singleton.swift); with
-         KeepAlive=true launchd would restart it immediately and spin. -->
+         KeepAlive=true launchd would restart it immediately and spin. The
+         agent itself exits 0 only after Quit in its menu; stopped any other
+         way, a logout's quit included, it exits 75 to be started again. -->
     <key>KeepAlive</key>
     <dict>
         <key>SuccessfulExit</key>

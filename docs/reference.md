@@ -478,6 +478,11 @@ without removing any of the macOS-specific integration.
   `~/.claude/notifications/ghostty-agent/`. Claude session records are under
   `~/.claude/notifications/ghostty-sessions/`; Codex uses its own
   `notifications/` directory.
+- **The app stays up until you quit it from its menu.** launchd starts it at
+  login and starts it again whenever it stops for any other reason, the quit
+  macOS sends every app when a logout or restart begins included: a logout you
+  cancel no longer leaves it quit for the rest of the day. Quit in the menu bar
+  keeps it down until the next login.
 - **Resident stopped:** normally the hook attempts an app launch and handles the
   current event in a native worker. External delivery still needs an installed,
   authorized backend. Explicit empty `AGENT_APP` disables the launch attempt.
