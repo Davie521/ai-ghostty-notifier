@@ -3,6 +3,16 @@
 What changed in each release. The one-command installer always fetches the
 latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-notifier/releases).
 
+## Unreleased
+
+### Fixed
+
+- A hook that finds the app stopped starts it again, as the reference always
+  said it would. It asked macOS to start the app and exited at once, before the
+  request had gone out, so the app was never started; on one day every hook for
+  fourteen hours asked and the app stayed down. The hook now waits, up to three
+  seconds, for macOS to take the request.
+
 ## 0.11.1 — 2026-11-12
 
 ### Fixed

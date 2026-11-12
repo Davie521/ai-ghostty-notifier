@@ -80,9 +80,15 @@ enum NativeHookRuntime {
                 return
             }
             // Do not claim delivery while a cold/denied agent cannot post.
-            // Starting it is best-effort for the NEXT event, not an ack.
-            if let app, transport.runningPID == nil { launch(application: app) }
-            try spawnWorker(event)
+            // Starting it is best-effort for the NEXT event, not an ack, and
+            // the worker handles this one meanwhile.
+            var launching: Task<Void, Never>?
+            if let app, transport.runningPID == nil {
+                launching = Task { await launch(application: app) }
+            }
+            let spawned = Result { try spawnWorker(event) }
+            await launching?.value
+            try spawned.get()
         } catch {
             diagnostic("native hook failed: \(error)")
             AgentLog.append("native hook failed: \(error)", to: paths.log)
@@ -168,11 +174,25 @@ enum NativeHookRuntime {
         // payload now is safe. No named spool containing prompts is left over.
     }
 
-    private static func launch(application: String) {
-        let config = NSWorkspace.OpenConfiguration()
-        config.activates = false
-        NSWorkspace.shared.openApplication(
-            at: URL(fileURLWithPath: application), configuration: config)
+    /// How long a hook waits for macOS to take its request to start the app.
+    static let launchWaitSeconds = 3.0
+
+    /// Ask macOS to start the app, and wait, bounded, until it has taken the
+    /// request. The request goes out asynchronously, and a hook that exits
+    /// straight after asking loses it: on 2026-11-12 every hook for fourteen
+    /// hours asked, and none of them started the app. Asking the same way and
+    /// waiting for the answer started it within a second.
+    private static func launch(application: String) async {
+        let url = URL(fileURLWithPath: application)
+        _ = try? await QueryDeadline.run(seconds: launchWaitSeconds) { @MainActor in
+            await withCheckedContinuation { (taken: CheckedContinuation<Void, Never>) in
+                let config = NSWorkspace.OpenConfiguration()
+                config.activates = false
+                NSWorkspace.shared.openApplication(at: url, configuration: config) { _, _ in
+                    taken.resume()
+                }
+            }
+        }
     }
 
     static func utility(
