@@ -482,6 +482,17 @@ touch -t 200001010000 "$STALE"
 mv "$STALE" "$ROOT/spool/0000000000000001-stale.json"
 check "a stale notify is dropped, not replayed" wait_for 10 log_has "dropped stale notify"
 
+# A jump answers a press. One left in the spool, queued while an agent was
+# shutting down, must not switch tabs at the next launch.
+JUMPS_BEFORE=$(grep -cF "jump-waiting:" "$LOG")
+STALE="$SANDBOX/stale-jump.json"
+jq -nc '{type:"jump_waiting"}' > "$STALE"
+touch -t 200001010000 "$STALE"
+mv "$STALE" "$ROOT/spool/0000000000000002-stale-jump.json"
+check "a jump request that waited in the spool is dropped" \
+    wait_for 10 log_has "dropped stale jump request"
+check "and nothing jumps" test "$(grep -cF "jump-waiting:" "$LOG")" = "$JUMPS_BEFORE"
+
 # ── 10. Shutdown completes, then state survives a restart ─────────────────
 # Two timeouts are left running across the restart: one that runs out while no
 # agent is up, and one that has not. A timer dies with the process; the

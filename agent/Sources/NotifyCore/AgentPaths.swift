@@ -21,6 +21,12 @@ public enum AgentConstants {
     /// Dismiss and anchor requests are exempt: replaying them late is harmless
     /// and still useful.
     public static let staleNotifyAge: Double = 300
+    /// A `--jump-waiting` request older than this is dropped, not acted on. It
+    /// answers a key or pedal press, and a running agent takes it within
+    /// moments; one left in the spool (queued while the agent was shutting
+    /// down, then replayed at the next launch) would switch tabs long after
+    /// the press, wherever the user is by then.
+    public static let staleJumpAge: Double = 5
     /// Written by the agent once the notification authorization answer is
     /// known. The hooks read it to decide whether routing through the agent
     /// would actually display anything; they match only `readyAuthorized`, so
