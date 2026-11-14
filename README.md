@@ -39,8 +39,8 @@ in one project.
 - **Gets out of the way.** Return to the tab or send another prompt and the
   notification disappears; one nobody answers expires after 20 minutes.
 - **It can call you back.** When Claude Code or Codex CLI needs you part-way
-  through, for Face ID, a code, a scan or a decision, it sends a notification
-  with sound that leads to its tab ([how](docs/reference.md#when-claude-or-codex-needs-you)).
+  through, for Face ID, a code, a scan or a decision, it sends a silent
+  notification that leads to its tab ([how](docs/reference.md#when-claude-or-codex-needs-you)).
 - **A menu bar list** of the sessions waiting on you, and
   [one command to jump to the newest](docs/reference.md#jump-to-what-is-waiting)
   for a keyboard shortcut or a foot pedal.

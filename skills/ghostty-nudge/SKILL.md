@@ -17,7 +17,7 @@ Run this once, with one line saying what you need from them:
 - **Then carry on** with whatever you were doing, polling the screen or the
   state for the user's step to land. Do not end your turn to wait, and do not
   send it again while you wait: one nudge per thing you need.
-- It plays a sound, appears under this session's title, and clears itself when
+- It is silent (unless the user set `GHOSTTY_NOTIFY_NUDGE_SOUND=1`), appears under this session's title, and clears itself when
   the user returns to this tab or sends a prompt. A newer nudge, or this run's
   own completion notification, replaces it.
 - **Exit 0** prints where Go to tab leads. **Any other exit** means it was not

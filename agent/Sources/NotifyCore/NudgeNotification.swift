@@ -80,8 +80,9 @@ public enum NudgeNotification {
         return NotifyRequest(
             sessionID: sessionID, title: app,
             subtitle: NotificationPolicy.clean(subtitle), body: message,
-            // Sent because the user is wanted now, so never silent.
-            sound: "Ping", tabID: tabID?.isEmpty == false ? tabID : nil,
+            // Silent by default: a nudge comes while the user is usually still
+            // around, and a sound is kept for long runs they walked away from.
+            sound: options.nudgeSound ? "Ping" : nil, tabID: tabID?.isEmpty == false ? tabID : nil,
             timeout: options.timeout, clearOnFocus: options.clearOnFocus,
             roundID: roundID?.isEmpty == false ? roundID : nil, source: source)
     }

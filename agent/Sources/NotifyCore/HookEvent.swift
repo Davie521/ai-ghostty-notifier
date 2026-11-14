@@ -132,6 +132,7 @@ public struct HookOptions: Equatable, Sendable {
     public var timeout: Double?
     public var onPrompt: Bool
     public var clearOnFocus: Bool
+    public var nudgeSound: Bool
     public var settle: Double
     public var backend: String
     public var prefersResident: Bool { ["auto", "agent"].contains(backend) }
@@ -154,6 +155,8 @@ public struct HookOptions: Equatable, Sendable {
         onPrompt = settings["GHOSTTY_NOTIFY_ON_PROMPT"] == "1"
         clearOnFocus = !["0", "false", "no", "off"].contains(
             (settings["GHOSTTY_NOTIFY_CLEAR_ON_FOCUS"] ?? "1").lowercased())
+        nudgeSound = ["1", "true", "yes", "on"].contains(
+            (settings["GHOSTTY_NOTIFY_NUDGE_SOUND"] ?? "0").lowercased())
         if let text = settings["GHOSTTY_NOTIFY_CODEX_SETTLE"],
             text.range(of: #"^[0-9]+(\.[0-9]+)?$"#, options: .regularExpression) != nil,
             let value = Double(text), value.isFinite
