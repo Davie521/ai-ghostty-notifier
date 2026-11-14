@@ -3,6 +3,14 @@
 What changed in each release. The one-command installer always fetches the
 latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-notifier/releases).
 
+## Unreleased
+
+### Changed
+
+- A nudge is silent by default. It comes while the user is usually still
+  nearby, so the sound is kept for long runs they walked away from;
+  `GHOSTTY_NOTIFY_NUDGE_SOUND=1` brings it back.
+
 ## 0.11.2 — 2026-11-12
 
 ### Fixed

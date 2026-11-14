@@ -79,9 +79,12 @@ import Testing
         #expect(try RequestCodec.decode(RequestCodec.encode(.notify(request))) == .notify(request))
     }
 
-    @Test func itAlwaysMakesASound() {
-        #expect(Self.request().sound != nil)
-        #expect(Self.request(settings: ["GHOSTTY_NOTIFY_SOUND_ELAPSED": "99999"]).sound != nil)
+    @Test func itIsSilentUnlessNudgeSoundIsOn() {
+        #expect(Self.request().sound == nil)
+        #expect(Self.request(settings: ["GHOSTTY_NOTIFY_SOUND_ELAPSED": "0"]).sound == nil)
+        #expect(Self.request(settings: ["GHOSTTY_NOTIFY_NUDGE_SOUND": "0"]).sound == nil)
+        #expect(Self.request(settings: ["GHOSTTY_NOTIFY_NUDGE_SOUND": "1"]).sound == "Ping")
+        #expect(Self.request(settings: ["GHOSTTY_NOTIFY_NUDGE_SOUND": "On"]).sound == "Ping")
     }
 
     @Test func anUntitledSessionSaysItNeedsYou() {
