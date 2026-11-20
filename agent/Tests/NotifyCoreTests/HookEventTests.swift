@@ -289,11 +289,15 @@ struct BackgroundWaitTests {
         let sandbox = try await firstRound()
         let housekeeping =
             ["dream", "auto-mode scan", "memory save", "teammate", "MCP task", "code"]
-            .map { BackgroundTask(id: $0, type: $0) } + [BackgroundTask(id: "untyped")]
+            .map { BackgroundTask(id: $0, type: $0) }
+        let untyped = BackgroundTask(id: "untyped")
         #expect(
-            try await capture(sandbox, .stop, typed: housekeeping).awaitingBackground == false)
+            try await capture(sandbox, .stop, typed: housekeeping + [untyped]).awaitingBackground
+                == false)
         // A later round: in a session's first one, every monitor counts as
-        // already running.
+        // already running. (An untyped task still running would excuse the
+        // shells and monitors below, as it may have started them.)
+        _ = try await capture(sandbox, .stop, typed: housekeeping)
         _ = try await capture(sandbox, .prompt, source: "user")
         for type in ["shell", "subagent", "monitor", "workflow"] {
             let waiting = try await capture(
@@ -728,6 +732,23 @@ struct BackgroundWaitTests {
         _ = try await capture(sandbox, .stop, typed: [BackgroundTask(id: "agent")])
         _ = try await capture(sandbox, .prompt, source: "user")
         let listed = [BackgroundTask(id: "agent"), BackgroundTask(id: "sh", type: "shell")]
+        #expect(try await capture(sandbox, .stop, typed: listed).awaitingBackground == false)
+    }
+
+    @Test func aStopWithoutItsIdIsMatchedToTheTurnItsPromptRecorded() async throws {
+        let sandbox = try fresh()
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        _ = try await capture(sandbox, .preTool, turn: "turn-a")
+        // A is interrupted; B stops before it uses a tool, its id left out.
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-b")
+        #expect(try await capture(sandbox, .stop, tasks: ["server"]).awaitingBackground == false)
+    }
+
+    @Test func anEarlierTaskOfUnknownKindMayHaveStartedTheShell() async throws {
+        let sandbox = try await firstRound()
+        _ = try await capture(sandbox, .stop, typed: [BackgroundTask(id: "wf")])
+        _ = try await capture(sandbox, .prompt, source: "user")
+        let listed = [BackgroundTask(id: "wf"), BackgroundTask(id: "sh", type: "shell")]
         #expect(try await capture(sandbox, .stop, typed: listed).awaitingBackground == false)
     }
 

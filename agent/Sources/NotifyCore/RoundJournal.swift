@@ -95,11 +95,13 @@ public actor DiskRoundJournal: RoundJournalProviding {
             // round's: it may be a server. The round's baseline no longer tells
             // its work apart, for this Stop or any later one of the round.
             // Two turns are proof enough without this Stop's own id.
+            // The stopping turn, or the one its prompt recorded; with neither,
+            // the turns cannot be matched to it.
+            let stopping = event.payload.promptID ?? record(path(event, "turn"))
             let interrupted =
                 turns.map { turns in
                     Set(turns).count > 1 || turns.contains("?")
-                        || (event.payload.promptID.map { id in turns.contains { $0 != id } }
-                            ?? false)
+                        || (stopping.map { id in turns.contains { $0 != id } } ?? !turns.isEmpty)
                 } ?? true
             if interrupted { discard(path(event, "background-earlier")) }
             var paused = false
@@ -132,8 +134,10 @@ public actor DiskRoundJournal: RoundJournalProviding {
                     // rest of the round, even after that launcher ends.
                     if !judged.excused.isEmpty {
                         baseline?.tasks += judged.excused.map { ($0.id, $0.type ?? "") }
+                        // Unrecorded, the round cannot be held on it.
                         if baseline.map({ write($0.text, earlierPath) }) != true {
                             discard(earlierPath)
+                            newWork = []
                         }
                     }
                 }
@@ -508,8 +512,12 @@ struct Snapshot: Equatable {
             if task.id == "*" { everyOf.insert(task.type) } else { known[task.id] = task.type }
         }
         let launchers: Set<String> = ["subagent", "workflow"]
+        // One whose kind was never given may be one too.
         let launcherBefore = running.contains { task in
-            known[task.id].map { launchers.contains(task.type ?? $0) } ?? false
+            known[task.id].map { recorded in
+                let kind = task.type ?? recorded
+                return kind.isEmpty || launchers.contains(kind)
+            } ?? false
         }
         var new: [BackgroundTask] = []
         var excused: [BackgroundTask] = []

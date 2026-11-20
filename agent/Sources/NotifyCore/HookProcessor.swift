@@ -109,7 +109,9 @@ public final class HookProcessor {
             log("handled UserPromptSubmit \(event.key) round=\(event.roundID)")
             return
         }
-        let key = event.key + ":" + event.kind.rawValue
+        // A round can carry Stops of more than one clock (another task's
+        // report went on with it): those are different completions.
+        let key = event.key + ":" + event.kind.rawValue + ":" + (event.startToken ?? "")
         if let item = pending[key], item.round == event.roundID { return }
         pending.removeValue(forKey: key)?.task.cancel()
         let token = UUID()
