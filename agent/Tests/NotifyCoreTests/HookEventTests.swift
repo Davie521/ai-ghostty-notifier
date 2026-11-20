@@ -716,13 +716,18 @@ struct BackgroundWaitTests {
         let old = BackgroundTask(id: "agent-old", type: "subagent")
         _ = try await capture(sandbox, .stop, typed: [old])
         _ = try await capture(sandbox, .prompt, source: "user")
+        try sandbox.write("abc-123.start", "1000\n")
         let shell = BackgroundTask(id: "sh", type: "shell")
         let mine = BackgroundTask(id: "agent-new", type: "subagent")
         #expect(
             try await capture(sandbox, .stop, typed: [old, shell, mine]).awaitingBackground == true)
-        _ = try await capture(sandbox, .prompt, source: "system", turn: "w", prompt: report)
+        let handBack = "<agent-message from=\"agent-new\">\n[Subagent hand-back]\n</agent-message>"
+        _ = try await capture(sandbox, .prompt, turn: "w", prompt: handBack)
+        #expect(started(sandbox) == "1000")  // the same round goes on
         // Both subagents are done; the old one's shell runs on.
-        #expect(try await capture(sandbox, .stop, typed: [shell]).awaitingBackground == false)
+        #expect(
+            try await capture(sandbox, .stop, turn: "w", typed: [shell]).awaitingBackground == false
+        )
     }
 
     @Test func aLaunchersKindIsKeptWhileItIsListedWithout() async throws {
@@ -811,6 +816,50 @@ struct BackgroundWaitTests {
         // As if the latest snapshot could be neither written nor removed.
         try sandbox.write(
             "abc-123.background", Snapshot(owner: "process-1", mark: "older", tasks: []).text)
+        _ = try await capture(sandbox, .prompt, source: "user")
+        #expect(try await capture(sandbox, .stop, tasks: ["server"]).awaitingBackground == false)
+    }
+
+    @Test func aReportStillToComeKeepsTheRoundThroughAnotherOne() async throws {
+        let sandbox = try await firstRound()
+        func from(_ id: String) -> String {
+            "<task-notification>\n<task-id>\(id)</task-id>\n</task-notification>"
+        }
+        #expect(
+            try await capture(sandbox, .stop, tasks: ["a", "b", "c"]).awaitingBackground == true)
+        _ = try await capture(sandbox, .prompt, turn: "w1", prompt: from("a"))
+        // b has ended too, its report not yet in; c runs on.
+        #expect(
+            try await capture(sandbox, .stop, turn: "w1", tasks: ["c"]).awaitingBackground == true)
+        _ = try await capture(sandbox, .prompt, turn: "w2", prompt: from("b"))
+        #expect(started(sandbox) == "1000")
+        #expect(
+            try await capture(sandbox, .stop, turn: "w2", tasks: ["c"]).awaitingBackground == true)
+        _ = try await capture(sandbox, .prompt, turn: "w3", prompt: from("c"))
+        #expect(try await capture(sandbox, .stop, turn: "w3", tasks: []).startedAt == 1000)
+    }
+
+    @Test func aStopOfAPromptWhoseHookDidNotRunIsNotHeld() async throws {
+        let sandbox = try fresh()
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        _ = try await capture(sandbox, .stop, turn: "turn-a", tasks: ["server"])
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-b")
+        _ = try await capture(sandbox, .stop, turn: "turn-b", tasks: ["server"])
+        // C's prompt hook never ran: the turn on record is still B's.
+        _ = try await capture(sandbox, .preTool, turn: "turn-c")
+        #expect(
+            try await capture(sandbox, .stop, turn: "turn-c", tasks: ["server", "x"])
+                .awaitingBackground == false)
+    }
+
+    @Test func aSnapshotThatCouldNotBeRemovedIsNotTheLatest() async throws {
+        let sandbox = try await firstRound()
+        _ = try await capture(sandbox, .stop, tasks: [])
+        let file = sandbox.root.appendingPathComponent("abc-123.background").path
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: file)
+        defer { try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: file) }
+        // What runs is unknown now, and the old snapshot cannot go.
+        _ = try await capture(sandbox, .stop, tasks: [], unidentified: true)
         _ = try await capture(sandbox, .prompt, source: "user")
         #expect(try await capture(sandbox, .stop, tasks: ["server"]).awaitingBackground == false)
     }

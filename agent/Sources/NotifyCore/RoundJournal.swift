@@ -70,6 +70,11 @@ public actor DiskRoundJournal: RoundJournalProviding {
         if event.roundID != old, !write(event.roundID, path(event, "round")) {
             throw CocoaError(.fileWriteUnknown)
         }
+        if resumes, let pause, let task = event.reportedTask {
+            // This report is in; the others the round waits on still come.
+            let left = PauseRecord(owner: owner, tasks: pause.tasks.filter { $0 != task })
+            if !write(left.text, path(event, "paused")) { discard(path(event, "paused")) }
+        }
         if event.kind == .prompt {
             var logical = resumes ? turn?.round : nil
             if !(resumes || joinsTurn) { logical = try startRound(event, firstSeen: old.isEmpty) }
@@ -132,6 +137,13 @@ public actor DiskRoundJournal: RoundJournalProviding {
                     : own(record(earlierPath).flatMap(Snapshot.init)).flatMap {
                         !$0.mark.isEmpty && $0.mark == turn?.round ? $0 : nil
                     }
+                // A Stop of another prompt than the turn on record (that
+                // prompt's hook did not run): the baseline is not its round's.
+                if let id = event.payload.promptID, let recorded = turn?.prompt,
+                    !recorded.isEmpty, recorded != id
+                {
+                    baseline = nil
+                }
                 // A kind left out now is the one on record: in the round's
                 // baseline, or in this process's last snapshot.
                 let kinds = (lastSnapshot(event, owner: owner)?.kinds ?? [:]).merging(
@@ -147,7 +159,7 @@ public actor DiskRoundJournal: RoundJournalProviding {
                 if owner.isEmpty || !write(snapshot.mark, path(event, "background-mark"))
                     || !write(snapshot.text, path(event, "background"))
                 {
-                    discard(path(event, "background"))
+                    dropSnapshot(event)
                 }
                 var newWork: [BackgroundTask] = []
                 if waits, let before = baseline {
@@ -174,7 +186,11 @@ public actor DiskRoundJournal: RoundJournalProviding {
                     // or clear its start. Otherwise the round keeps its id,
                     // which its prompt, maybe not yet consumed, still needs.
                     // Unrecorded, it is not held.
-                    let marker = PauseRecord(owner: owner, tasks: newWork.map(\.id)).text
+                    // With the work whose reports have yet to come, though it
+                    // may have ended already.
+                    var awaited = pause?.tasks ?? []
+                    for task in newWork where !awaited.contains(task.id) { awaited.append(task.id) }
+                    let marker = PauseRecord(owner: owner, tasks: awaited).text
                     if stoppedRound(event).map({ $0 == nil || $0 == event.roundID }) ?? false {
                         let generation = UUID().uuidString
                         if write(generation, path(event, "round")) {
@@ -188,7 +204,7 @@ public actor DiskRoundJournal: RoundJournalProviding {
                 if waits { event.awaitingBackground = paused }
             } else {
                 // Nothing is known about what runs now.
-                discard(path(event, "background"))
+                dropSnapshot(event)
                 if waits, event.payload.backgroundTasks != nil { event.awaitingBackground = false }
             }
             // Retired only now that the snapshot is settled: a hook stopped
@@ -275,6 +291,15 @@ public actor DiskRoundJournal: RoundJournalProviding {
         }
         discard(baseline)
         return round
+    }
+
+    /// No snapshot is the latest: its mark is retired with it, so one that
+    /// could not be removed is not taken for current either.
+    private func dropSnapshot(_ event: HookEvent) {
+        discard(path(event, "background"))
+        if !write(UUID().uuidString, path(event, "background-mark")) {
+            discard(path(event, "background-mark"))
+        }
     }
 
     /// This process's latest snapshot: the one the record of the latest
