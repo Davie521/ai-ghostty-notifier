@@ -120,6 +120,8 @@ public enum NudgeNotification {
         /// The running app predates `--no-return` and `--nudge-done`: it
         /// would drop the request and the CLI could not tell.
         case outdated
+        /// `--nudge-done` queued, not taken, and taken back: the nudge stays.
+        case doneNotCollected
         /// `--nudge-done` queued, not taken, and not taken back either.
         case doneStuck(String)
     }
@@ -154,6 +156,13 @@ public enum NudgeNotification {
                 A sandbox kept it out of the usual queue, and the queue it went to instead \
                 is read only by \(AgentConstants.displayName) 0.9.0 or later: update the \
                 app if it is older.
+                """
+        case .doneNotCollected:
+            return """
+                The agent did not pick up --nudge-done within five seconds, so the request was \
+                taken back. The nudge, if the session shows one, is still on screen; a \
+                --no-return nudge goes by itself within five minutes.
+                Its log may say why: ~/.claude/notifications/ghostty-agent/agent.log
                 """
         case .doneStuck(let reason):
             return """

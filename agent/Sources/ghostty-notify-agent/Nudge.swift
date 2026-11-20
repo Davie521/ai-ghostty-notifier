@@ -142,16 +142,19 @@ enum Nudge {
             // Not taken: take it back, or an agent that recovers later acts on
             // a request the coding agent was told had not been sent, and the
             // user hears about the same thing twice.
+            let done: Bool
+            if case .dismissNudge = request { done = true } else { done = false }
             switch AtomicSpool.withdraw(file) {
             case .withdrawn:
-                SelfTest.fail(
-                    NudgeNotification.explain(
-                        sandboxed ? .notCollectedFromSandbox : .agent(.notCollected), app: app))
+                let problem: NudgeNotification.Problem =
+                    done
+                    ? .doneNotCollected
+                    : sandboxed ? .notCollectedFromSandbox : .agent(.notCollected)
+                SelfTest.fail(NudgeNotification.explain(problem, app: app))
                 return false
             case .stuck(let reason):
-                let problem: NudgeNotification.Problem =
-                    if case .dismissNudge = request { .doneStuck(reason) } else { .stuck(reason) }
-                SelfTest.fail(NudgeNotification.explain(problem, app: app))
+                SelfTest.fail(
+                    NudgeNotification.explain(done ? .doneStuck(reason) : .stuck(reason), app: app))
                 return false
             case .taken: break  // The agent took it after all.
             }

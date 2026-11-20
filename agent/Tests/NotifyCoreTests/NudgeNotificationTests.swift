@@ -230,6 +230,14 @@ import Testing
         #expect(plain?.nudge == false && plain?.noReturn == false && plain?.timeout == 3600)
     }
 
+    /// A failed --nudge-done says the nudge is still there, not that it went.
+    @Test func aFailedTakeBackSaysTheNudgeStays() {
+        let app = "/Applications/X.app"
+        #expect(NudgeNotification.explain(.doneNotCollected, app: app).contains("still on screen"))
+        #expect(NudgeNotification.explain(.doneStuck("busy"), app: app).contains("(busy)"))
+        #expect(NudgeNotification.explain(.outdated, app: app).contains("nothing was sent"))
+    }
+
     @Test func takingANudgeBackSurvivesTheSpool() throws {
         let claude = AgentRequest.dismissNudge(sessionID: Self.session)
         let codex = AgentRequest.dismissNudge(sessionID: Self.thread, source: .codex)
