@@ -109,7 +109,8 @@ public struct BackgroundTask: Codable, Equatable, Sendable {
 
     /// An identifier fit for a one-per-line state file.
     static func usable(_ id: String) -> String? {
-        !id.isEmpty && id.count <= 200 && !id.contains(where: \.isNewline) ? id : nil
+        !id.isEmpty && id.count <= 200 && id != "*"
+            && !id.contains(where: { $0.isNewline || $0 == "\t" }) ? id : nil
     }
 
     /// Never throws: an entry without a usable id is dropped, not fatal, and
@@ -125,7 +126,8 @@ public struct BackgroundTask: Codable, Equatable, Sendable {
                 unidentified = type.map(BackgroundTask.wakingTypes.contains) ?? true
                 return
             }
-            task = BackgroundTask(id: id, type: type.map { String($0.prefix(40)) })
+            task = BackgroundTask(
+                id: id, type: type.map { String(NotificationPolicy.clean($0).prefix(40)) })
         }
     }
 }

@@ -16,7 +16,8 @@ latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-n
   clock, so the real completion was often too short to notify at all.
   A message sent while the turn runs joins that run. Background work left
   running from earlier rounds, such as a dev server, does not hold a round
-  back, nor does Claude's own housekeeping; whenever what already ran at a
+  back, nor does Claude's own housekeeping, nor, while an earlier subagent or
+  workflow runs, the commands it may have started; whenever what already ran at a
   round's start is not on record (after an interrupted turn, in a resumed
   session's first round, after a failed write) the round notifies as before.
   A paused stop never leaves the hook, so an app older than the hook cannot

@@ -224,7 +224,10 @@ the turn is running joins that run too. Work still running from before your
 last prompt, such as a dev server, does not count, and neither do Claude's own
 housekeeping tasks, which do not wake the session; a turn that itself leaves a
 long-lived process running, such as a dev server it just started, is taken as
-waiting on it and does not notify. A round is only held when what already ran
+waiting on it and does not notify. In a session's first round every monitor
+counts as already running, since a plugin may start one; and while a subagent
+or workflow from an earlier round is still running, new background commands
+and monitors do not count either, as they may be its own. A round is only held when what already ran
 at its start is on record, so whenever that is not known it notifies as
 before: after a turn you interrupted, in the first round of a session that was
 resumed or already open when this version was installed, and with an older

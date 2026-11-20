@@ -35,12 +35,11 @@ public actor DiskRoundJournal: RoundJournalProviding {
             }
         let claude = event.source == .claude
         let waits = claude && event.options.waitBackground
-        // A message sent while a turn runs carries that turn's prompt id, under
-        // which the turn has used tools: it joins the turn, and the turn keeps
-        // its start and what was running before it began.
+        // A message sent while a turn runs carries that turn's prompt id: it
+        // joins the turn, which keeps its start and its baseline.
         let joinsTurn =
             event.kind == .prompt && waits && !event.isInjectedPrompt
-            && event.payload.promptID.map { (entries("turns", event) ?? []).contains($0) } ?? false
+            && event.payload.promptID.map { record(path(event, "turn")) == $0 } ?? false
         // The work a paused round waits on reports back: the round goes on,
         // and keeping its start makes its completion count the wait.
         let resumes =
@@ -51,6 +50,11 @@ public actor DiskRoundJournal: RoundJournalProviding {
         }
         if event.kind == .prompt {
             if !(resumes || joinsTurn) { try startRound(event, firstSeen: old.isEmpty) }
+            if claude, !joinsTurn {
+                if event.payload.promptID.map({ write($0, path(event, "turn")) }) != true {
+                    discard(path(event, "turn"))
+                }
+            }
         } else if event.kind == .preTool, claude,
             !FileManager.default.fileExists(atPath: path(event, "start"))
         {
@@ -76,53 +80,50 @@ public actor DiskRoundJournal: RoundJournalProviding {
         if event.kind == .stop, claude {
             let turns = entries("turns", event)
             discard(path(event, "turns"))
-            // Whether this round already had a Stop (another hook made Claude
-            // go on); recorded for the next one.
-            let stoppedBefore = record(path(event, "stopped")) == event.roundID
+            // A turn that used tools and never reached its Stop was
+            // interrupted, and what it left running is not known to be this
+            // round's: it may be a server. The round's baseline no longer tells
+            // its work apart, for this Stop or any later one of the round.
+            // Two turns are proof enough without this Stop's own id.
+            let interrupted =
+                turns.map { turns in
+                    Set(turns).count > 1 || turns.contains("?")
+                        || (event.payload.promptID.map { id in turns.contains { $0 != id } }
+                            ?? false)
+                } ?? true
+            if interrupted { discard(path(event, "background-earlier")) }
             var paused = false
             if let tasks = event.payload.backgroundTasks,
                 event.payload.backgroundUnidentified != true
             {
-                let running = tasks.filter(\.wakesSession).map(\.id)
                 // The next round's baseline, kept even when empty and whether
-                // or not waiting is on.
-                let snapshot = tasks.filter(\.mayWakeSession).map(\.id)
-                if !write(snapshot.joined(separator: "\n"), path(event, "background")) {
+                // or not waiting is on, for this process only.
+                let snapshot = Snapshot(
+                    owner: event.owner ?? "",
+                    tasks: tasks.filter(\.mayWakeSession).map { ($0.id, $0.type ?? "") })
+                if !write(snapshot.text, path(event, "background")) {
                     discard(path(event, "background"))
                 }
-                // A turn that used tools and never reached its Stop was
-                // interrupted, and what it left running is not known to be
-                // this round's: it may be a server. Notify as before. Two
-                // turns are proof enough without this Stop's own id.
-                let interrupted =
-                    turns.map { turns in
-                        Set(turns).count > 1 || turns.contains("?")
-                            || (event.payload.promptID.map { id in turns.contains { $0 != id } }
-                                ?? false)
-                    } ?? true
-                // The round's baseline no longer tells its work apart, for
-                // any later Stop of it either.
-                if interrupted { discard(path(event, "background-earlier")) }
-                if waits, !interrupted, let baseline = record(path(event, "background-earlier")) {
-                    let earlier = Set(baseline.split(separator: "\n").map(String.init))
-                    if running.contains(where: { !earlier.contains($0) }) {
-                        // Recorded here, under the lock, and not by whoever
-                        // consumes the event later: a report that wakes the
-                        // session may come first. After an earlier Stop of
-                        // this round, a new generation, so that Stop, maybe
-                        // not yet consumed, cannot announce the round or clear
-                        // its start. Otherwise the round keeps its id, which
-                        // its prompt, maybe not yet consumed, still needs.
-                        // Unrecorded, it is not held.
-                        if stoppedBefore {
-                            let generation = UUID().uuidString
-                            if write(generation, path(event, "round")) {
-                                event.roundID = generation
-                                paused = write("1", path(event, "paused"))
-                            }
-                        } else {
+                if waits, !interrupted,
+                    let baseline = record(path(event, "background-earlier")).flatMap(Snapshot.init),
+                    !baseline.newWork(in: tasks).isEmpty
+                {
+                    // Recorded here, under the lock, and not by whoever
+                    // consumes the event later: a report that wakes the
+                    // session may come first. After a Stop of this round that
+                    // went out, a new generation, so that Stop, maybe not yet
+                    // consumed, cannot announce the round or clear its start.
+                    // Otherwise the round keeps its id, which its prompt,
+                    // maybe not yet consumed, still needs. Unrecorded, it is
+                    // not held.
+                    if record(path(event, "stopped")) == event.roundID {
+                        let generation = UUID().uuidString
+                        if write(generation, path(event, "round")) {
+                            event.roundID = generation
                             paused = write("1", path(event, "paused"))
                         }
+                    } else {
+                        paused = write("1", path(event, "paused"))
                     }
                 }
                 if waits { event.awaitingBackground = paused }
@@ -131,8 +132,15 @@ public actor DiskRoundJournal: RoundJournalProviding {
                 discard(path(event, "background"))
                 if waits, event.payload.backgroundTasks != nil { event.awaitingBackground = false }
             }
-            if !paused { discard(path(event, "paused")) }
-            if !write(event.roundID, path(event, "stopped")) { discard(path(event, "stopped")) }
+            if !paused {
+                discard(path(event, "paused"))
+                // This Stop goes out. Unless that is on record, a later one of
+                // the round could not make it stale, so none may be held.
+                if !write(event.roundID, path(event, "stopped")) {
+                    discard(path(event, "stopped"))
+                    discard(path(event, "background-earlier"))
+                }
+            }
             // Decided; the list need not travel to the app.
             event.payload.backgroundTasks = nil
             event.payload.backgroundUnidentified = nil
@@ -150,9 +158,10 @@ public actor DiskRoundJournal: RoundJournalProviding {
 
     /// A prompt that begins a round: its clock starts over, and for Claude its
     /// baseline is what already ran when it began (a dev server left up),
-    /// which is not its work. Without a baseline on record (a session open
-    /// before this version or resumed, a failed write, a CLI that did not say)
-    /// the round is never held, and notifies as before.
+    /// which is not its work. Without a baseline on record from this very
+    /// process (a resumed session, one open before this version, a failed
+    /// write, a CLI that did not say) the round is never held, and notifies
+    /// as before.
     private func startRound(_ event: HookEvent, firstSeen: Bool) throws {
         remove(path(event, "start"))
         if event.source == .codex, !write(String(Int(event.occurredAt)), path(event, "start")) {
@@ -160,17 +169,33 @@ public actor DiskRoundJournal: RoundJournalProviding {
         }
         guard event.source == .claude else { return }
         discard(path(event, "paused"))
-        // A session's first prompt comes before its transcript exists: then
-        // nothing can be running yet. Only for a session not seen before: a
-        // transcript gone later says nothing about what runs.
+        let owner = event.owner ?? ""
+        // A session's first prompt comes before its transcript exists: no
+        // work of its own can be running yet. Monitors can (a plugin arms
+        // them at start), so all of them count as already running. Only for
+        // a session not seen before, and only on a confirmed absence: a
+        // transcript gone later, or one that cannot be looked at, says
+        // nothing about what runs.
         let last = path(event, "background")
-        if firstSeen, let transcript = event.payload.transcriptPath, !transcript.isEmpty,
-            !FileManager.default.fileExists(atPath: transcript), !write("", last)
+        if firstSeen, !owner.isEmpty, let transcript = event.payload.transcriptPath,
+            Self.confirmedAbsent(transcript),
+            !write(Snapshot(owner: owner, tasks: [("*", "monitor")]).text, last)
         {
             discard(last)
         }
         let baseline = path(event, "background-earlier")
-        if record(last).map({ write($0, baseline) }) != true { discard(baseline) }
+        if let snapshot = record(last).flatMap(Snapshot.init), !owner.isEmpty,
+            snapshot.owner == owner, write(snapshot.text, baseline)
+        {
+            return
+        }
+        discard(baseline)
+    }
+
+    static func confirmedAbsent(_ path: String) -> Bool {
+        guard !path.isEmpty else { return false }
+        var status = stat()
+        return lstat(path, &status) != 0 && errno == ENOENT
     }
 
     public func isCurrent(_ event: HookEvent) -> Bool {
@@ -314,6 +339,7 @@ public actor DiskRoundJournal: RoundJournalProviding {
             "json", "start", "attempts", "alerter-pid", "watch-pid", "callback-lock", "codex-owner",
             "claude-owner",
             "title", "round", "background", "background-earlier", "paused", "turns", "stopped",
+            "turn",
             "native-notice.json",
             "legacy-cleared", "marker.json",
             "lock.flock", "round-lock.flock", "delivery-lock.flock",
@@ -352,6 +378,58 @@ public actor DiskRoundJournal: RoundJournalProviding {
                     remove(file)
                 }
             }
+        }
+    }
+}
+
+/// What ran when a Claude round began or a Stop came: the process it was seen
+/// by, then one `id<TAB>type` line per task that may wake the session. An id
+/// of `*` stands for every task of its type.
+struct Snapshot: Equatable {
+    var owner: String
+    var tasks: [(id: String, type: String)]
+
+    init(owner: String, tasks: [(id: String, type: String)]) {
+        self.owner = owner
+        self.tasks = tasks
+    }
+
+    init?(_ text: String) {
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        guard let first = lines.first, first.hasPrefix("owner\t") else { return nil }
+        owner = String(first.dropFirst("owner\t".count))
+        lines.removeFirst()
+        var tasks: [(id: String, type: String)] = []
+        for line in lines where !line.isEmpty {
+            let parts = line.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+            guard parts.count == 2, !parts[0].isEmpty else { return nil }
+            tasks.append((String(parts[0]), String(parts[1])))
+        }
+        self.tasks = tasks
+    }
+
+    var text: String {
+        (["owner\t" + owner] + tasks.map { $0.id + "\t" + $0.type }).joined(separator: "\n")
+    }
+
+    static func == (lhs: Snapshot, rhs: Snapshot) -> Bool { lhs.text == rhs.text }
+
+    private func covers(_ task: BackgroundTask) -> Bool {
+        tasks.contains { $0.id == task.id || ($0.id == "*" && $0.type == (task.type ?? "")) }
+    }
+
+    /// The work in `running` that this round started and that will wake the
+    /// session. A subagent or workflow from before may itself start shells
+    /// and monitors, which show in the same list with no sign of whose they
+    /// are: while one runs, those do not count.
+    func newWork(in running: [BackgroundTask]) -> [BackgroundTask] {
+        let launchers: Set<String> = ["subagent", "workflow"]
+        let launcherBefore = running.contains { task in
+            launchers.contains(task.type ?? "") && tasks.contains { $0.id == task.id }
+        }
+        return running.filter { task in
+            task.wakesSession && !covers(task)
+                && !(launcherBefore && !launchers.contains(task.type ?? ""))
         }
     }
 }
