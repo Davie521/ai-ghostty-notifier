@@ -866,6 +866,71 @@ struct BackgroundWaitTests {
         #expect(try await capture(sandbox, .stop, tasks: ["server"]).awaitingBackground == false)
     }
 
+    @Test func whatAnEarlierWorkflowLeftAfterItEndedDoesNotHoldTheRound() async throws {
+        let sandbox = try await firstRound()
+        _ = try await capture(sandbox, .stop, typed: [BackgroundTask(id: "wf", type: "workflow")])
+        _ = try await capture(sandbox, .prompt, source: "user")
+        // Between two Stops it started a server and ended.
+        let server = BackgroundTask(id: "server", type: "shell")
+        #expect(try await capture(sandbox, .stop, typed: [server]).awaitingBackground == false)
+    }
+
+    @Test func aReportPastedMidTurnJoinsTheTurn() async throws {
+        let sandbox = try fresh()
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        _ = try await capture(sandbox, .preTool, turn: "turn-a")
+        try sandbox.write("abc-123.start", "1000\n")
+        let pasted = "<task-notification>\n<task-id>other</task-id>\n</task-notification>"
+        _ = try await capture(sandbox, .prompt, turn: "turn-a", prompt: pasted)
+        #expect(started(sandbox) == "1000")
+    }
+
+    @Test func aPauseLeftFromAnEarlierRoundResumesNothing() async throws {
+        let sandbox = try await firstRound()
+        #expect(try await capture(sandbox, .stop, tasks: ["lock"]).awaitingBackground == true)
+        let file = sandbox.root.appendingPathComponent("abc-123.paused").path
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: file)
+        defer { try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: file) }
+        _ = try await capture(sandbox, .prompt, source: "user")  // cannot remove the pause
+        try sandbox.write("abc-123.start", "1500\n")
+        _ = try await capture(sandbox, .prompt, source: "system", prompt: report)
+        #expect(started(sandbox).isEmpty)
+    }
+
+    @Test func anInterruptionHoldsNothingEvenIfTheBaselineCannotGo() async throws {
+        let sandbox = try fresh()
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        _ = try await capture(sandbox, .preTool, turn: "turn-a")
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-b")
+        _ = try await capture(sandbox, .preTool, turn: "turn-b")
+        let file = sandbox.root.appendingPathComponent("abc-123.background-earlier").path
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: file)
+        defer { try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: file) }
+        _ = try await capture(sandbox, .stop, turn: "turn-b", tasks: [])
+        let again = try await capture(sandbox, .stop, turn: "turn-b", tasks: ["server"])
+        #expect(again.awaitingBackground == false)
+    }
+
+    @Test func anotherProcessDoesNotKeepThisOnesCompletionCurrent() async throws {
+        let sandbox = try await firstRound()
+        let out = try await capture(sandbox, .stop, tasks: [])
+        _ = try await capture(
+            sandbox, .prompt, source: "system", prompt: report, owner: "process-2")
+        #expect(!(await DiskRoundJournal().isCurrent(out)))
+    }
+
+    @Test func manyNewTasksAreAwaitedQuickly() async throws {
+        let sandbox = try await firstRound()
+        let clock = ContinuousClock()
+        var held: Bool?
+        let took = try await clock.measure {
+            held = try await capture(sandbox, .stop, tasks: (0..<3_000).map { "n\($0)" })
+                .awaitingBackground
+        }
+        #expect(held == true)
+        #expect(took < .seconds(1))
+    }
+
     @Test func anOlderClaudeOrTheSettingOffKeepsTheOldBehavior() async throws {
         let sandbox = try HookSandbox()
         _ = try sandbox.event()
