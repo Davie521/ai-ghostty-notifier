@@ -22,9 +22,10 @@ public enum NudgeNotification {
     /// The longest a `--no-return` nudge stays. The user does its step
     /// somewhere else, a phone usually, and never comes back to the tab to
     /// clear it; the coding agent takes it back with `--nudge-done` once the
-    /// step lands, and this is for when it never does. Five minutes is about
-    /// how long a coding agent should wait on one step before moving on.
-    public static let noReturnSeconds: Double = 300
+    /// step lands, and this is for when it does not do so first. Short: the
+    /// user takes it in as it comes up, the step itself is on their phone,
+    /// and a banner left on the Mac only gets in the way (the user's choice).
+    public static let noReturnSeconds: Double = 15
 
     public struct Session: Equatable, Sendable {
         public var id: String
@@ -161,7 +162,7 @@ public enum NudgeNotification {
             return """
                 The agent did not pick up --nudge-done within five seconds, so the request was \
                 taken back. The nudge, if the session shows one, is still on screen; a \
-                --no-return nudge goes by itself within five minutes.
+                --no-return nudge goes by itself within \(Int(noReturnSeconds)) seconds.
                 Its log may say why: ~/.claude/notifications/ghostty-agent/agent.log
                 """
         case .doneStuck(let reason):
@@ -192,7 +193,7 @@ public enum NudgeNotification {
     {
         if noReturn {
             return "Sent, without Go to tab. Run --nudge-done once the user has done it; "
-                + "otherwise it goes by itself within five minutes."
+                + "otherwise it goes by itself within \(Int(noReturnSeconds)) seconds."
         }
         if tabKnown { return "Sent. Go to tab brings the user back to this session's tab." }
         if lookedUp {

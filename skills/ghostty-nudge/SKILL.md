@@ -57,9 +57,9 @@ Once your polling sees the step land, take it back:
 "$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge-done
 ```
 
-- It has no Go to tab button, and goes by itself after five minutes if you
-  never run `--nudge-done`, about as long as you should wait on one step
-  before turning to something else.
+- It has no Go to tab button, and goes by itself after fifteen seconds: the
+  user takes it in as it comes up. Run `--nudge-done` anyway once the step
+  lands; it takes the nudge back sooner if it is still there.
 - `--nudge-done` takes back only a nudge: if this run's completion
   notification has replaced it, that stays. A newer nudge is a nudge too, so
   run `--nudge-done` for one step before you nudge for the next.

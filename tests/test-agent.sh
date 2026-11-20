@@ -369,9 +369,9 @@ check "on screen" test "$(state_outstanding "$NUDGE_SID")" = "claude-$NUDGE_SID"
 nudge_queue "$(jq -nc --arg s "$NUDGE_SID" \
     '{type:"notify",session_id:$s,title:"nudge",no_return:true}')"
 check "a no-return nudge is remembered as a nudge" wait_for 10 state_nudge "$NUDGE_SID"
-check "and runs out within five minutes even when queued without a timeout" test \
+check "and runs out in fifteen seconds even when queued without a timeout" test \
     "$(jq -r --arg s "$NUDGE_SID" \
-        '.sessions[$s] | .expiresAt - .postedAt | . > 299 and . < 301' "$STATE")" = true
+        '.sessions[$s] | .expiresAt - .postedAt | . > 14 and . < 16' "$STATE")" = true
 nudge_queue "$(jq -nc --arg s "$NUDGE_SID" '{type:"dismiss_nudge",session_id:$s}')"
 check "and taken back from the nudge spool" wait_for 10 state_is "$NUDGE_SID" ""
 nudge_queue "$(jq -nc --arg s "$NUDGE_SID" '{type:"notify",session_id:$s,title:"nudge"}')"

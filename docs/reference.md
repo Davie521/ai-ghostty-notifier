@@ -256,8 +256,9 @@ it lands it takes the nudge back:
 "$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge-done
 ```
 
-If it never does, the nudge goes by itself after five minutes (sooner if
-`GHOSTTY_NOTIFY_TIMEOUT` is shorter). `--nudge-done` takes back only a nudge:
+Either way the nudge goes by itself after fifteen seconds (sooner if
+`GHOSTTY_NOTIFY_TIMEOUT` is shorter): you take it in as it comes up, and the
+step itself is on your phone. `--nudge-done` takes back only a nudge:
 should the run's completion notification have replaced it already, that one
 stays. Both need an app at least as new as the command; an older one still
 running is reported, not sent to, so restart it after an update. The app

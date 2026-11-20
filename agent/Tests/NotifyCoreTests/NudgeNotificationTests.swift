@@ -204,7 +204,7 @@ import Testing
         let plain = request([:])
         #expect(plain.noReturn && plain.nudge)
         #expect(plain.timeout == NudgeNotification.noReturnSeconds)
-        #expect(request(["GHOSTTY_NOTIFY_TIMEOUT": "60"]).timeout == 60)
+        #expect(request(["GHOSTTY_NOTIFY_TIMEOUT": "10"]).timeout == 10)
         #expect(
             request(["GHOSTTY_NOTIFY_TIMEOUT": "3600"]).timeout
                 == NudgeNotification.noReturnSeconds)
@@ -223,8 +223,10 @@ import Testing
         let bare = try decoded(#","no_return":true"#)
         #expect(bare?.nudge == true)
         #expect(bare?.timeout == NudgeNotification.noReturnSeconds)
-        #expect(try decoded(#","no_return":true,"timeout":3600"#)?.timeout == 300)
-        #expect(try decoded(#","no_return":true,"timeout":60"#)?.timeout == 60)
+        #expect(
+            try decoded(#","no_return":true,"timeout":3600"#)?.timeout
+                == NudgeNotification.noReturnSeconds)
+        #expect(try decoded(#","no_return":true,"timeout":10"#)?.timeout == 10)
         // Not one: as before.
         let plain = try decoded(#","timeout":3600"#)
         #expect(plain?.nudge == false && plain?.noReturn == false && plain?.timeout == 3600)
