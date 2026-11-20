@@ -169,5 +169,79 @@ import Testing
     @Test func theReportSaysWhereGoToTabLeads() {
         #expect(NudgeNotification.sent(tabKnown: true).contains("this session's tab"))
         #expect(NudgeNotification.sent(tabKnown: false).contains("only brings Ghostty forward"))
+        #expect(
+            NudgeNotification.sent(tabKnown: true, noReturn: true).contains("--nudge-done"))
+    }
+
+    /// The flag only counts in front; a message mentioning it is said in full.
+    @Test func noReturnIsAFlagInFrontOfTheMessage() {
+        #expect(
+            NudgeNotification.parse(["--no-return", "Slide", "it"]) == (true, ["Slide", "it"]))
+        #expect(
+            NudgeNotification.parse(["Slide", "--no-return"]) == (false, ["Slide", "--no-return"]))
+        #expect(NudgeNotification.parse([]) == (false, []))
+        #expect(NudgeNotification.parse(["--no-return"]) == (true, []))
+    }
+
+    @Test func aNudgeIsMarkedAsOneAndKeepsGoToTabByDefault() throws {
+        let request = Self.request()
+        #expect(request.nudge)
+        #expect(!request.noReturn)
+        #expect(request.timeout == 1200)  // GHOSTTY_NOTIFY_TIMEOUT's default
+        let decoded = try RequestCodec.decode(RequestCodec.encode(.notify(request)))
+        #expect(decoded == .notify(request))
+    }
+
+    /// Nobody comes back to the tab to clear it, so it goes by itself, sooner
+    /// still when the user set a shorter timeout.
+    @Test func aNoReturnNudgeGoesByItself() throws {
+        func request(_ settings: [String: String]) -> NotifyRequest {
+            NudgeNotification.request(
+                sessionID: Self.session, message: "Slide the captcha on the 12 mini", title: "",
+                project: "repo", tabID: "tab-1", roundID: nil, settings: settings,
+                noReturn: true)
+        }
+        let plain = request([:])
+        #expect(plain.noReturn && plain.nudge)
+        #expect(plain.timeout == NudgeNotification.noReturnSeconds)
+        #expect(request(["GHOSTTY_NOTIFY_TIMEOUT": "60"]).timeout == 60)
+        #expect(
+            request(["GHOSTTY_NOTIFY_TIMEOUT": "3600"]).timeout
+                == NudgeNotification.noReturnSeconds)
+        #expect(try RequestCodec.decode(RequestCodec.encode(.notify(plain))) == .notify(plain))
+    }
+
+    @Test func takingANudgeBackSurvivesTheSpool() throws {
+        let claude = AgentRequest.dismissNudge(sessionID: Self.session)
+        let codex = AgentRequest.dismissNudge(sessionID: Self.thread, source: .codex)
+        #expect(try RequestCodec.decode(RequestCodec.encode(claude)) == claude)
+        #expect(try RequestCodec.decode(RequestCodec.encode(codex)) == codex)
+    }
+
+    /// `--nudge-done` must not take back the run's completion notification,
+    /// which replaces the nudge under the same identifier.
+    @Test func onlyANudgeIsTakenBack() {
+        var state = SessionState()
+        let id = state.newNotification(sessionID: Self.session, now: 1, nudge: true)
+        #expect(state.takeNudge(sessionID: Self.session) == [id])
+        #expect(state.takeNudge(sessionID: Self.session) == [])
+
+        _ = state.newNotification(sessionID: Self.session, now: 2, nudge: true)
+        _ = state.newNotification(sessionID: Self.session, now: 3)
+        #expect(state.takeNudge(sessionID: Self.session) == [])
+        #expect(state.sessions[Self.session]?.notificationIDs == [id])
+    }
+
+    @Test func whetherItIsANudgeOutlivesARestart() throws {
+        var state = SessionState()
+        _ = state.newNotification(sessionID: Self.session, now: 1, nudge: true)
+        _ = state.newNotification(sessionID: Self.thread, now: 1)
+        let restored = StateCodec.decode(try StateCodec.encode(state))
+        #expect(restored.sessions[Self.session]?.nudge == true)
+        #expect(restored.sessions[Self.thread]?.nudge == false)
+        // State an older agent wrote has no such field.
+        let old = Data(
+            #"{"sessions":{"\#(Self.session)":{"notificationIDs":["x"],"updatedAt":1}}}"#.utf8)
+        #expect(StateCodec.decode(old).sessions[Self.session]?.nudge == false)
     }
 }

@@ -14,6 +14,11 @@ public enum AgentRequest: Equatable, Sendable {
     /// Withdraw every notification belonging to a session. Sent by the
     /// UserPromptSubmit hook: submitting a prompt proves the user is back.
     case dismiss(sessionID: String, source: HookSource = .claude)
+    /// Withdraw the session's notification only if it is a nudge. Sent by
+    /// `--nudge-done` once the step the nudge asked for has happened: by then
+    /// the session may already show its run's completion notification, which
+    /// is not the coding agent's to take back.
+    case dismissNudge(sessionID: String, source: HookSource = .claude)
     /// Record which Ghostty tab a session lives in.
     ///
     /// `tabID` comes from the hook, which reads the id that
@@ -61,6 +66,11 @@ public struct NotifyRequest: Equatable, Sendable {
     /// `TabTitleMatch`): a Codex session gets its tab only at the end of a
     /// run long enough to notify, and a nudge often comes before that.
     public var tabTitle: String?
+    /// Posted by `--nudge`, so `--nudge-done` may withdraw it.
+    public var nudge: Bool
+    /// A nudge for something the user does elsewhere, on a phone say: it has
+    /// no Go to tab button, since there is nothing to go back for.
+    public var noReturn: Bool
 
     public init(
         sessionID: String,
@@ -74,7 +84,9 @@ public struct NotifyRequest: Equatable, Sendable {
         roundID: String? = nil,
         source: HookSource = .claude,
         owner: String? = nil,
-        tabTitle: String? = nil
+        tabTitle: String? = nil,
+        nudge: Bool = false,
+        noReturn: Bool = false
     ) {
         self.sessionID = sessionID
         self.title = title
@@ -88,6 +100,8 @@ public struct NotifyRequest: Equatable, Sendable {
         self.source = source
         self.owner = owner
         self.tabTitle = tabTitle
+        self.nudge = nudge
+        self.noReturn = noReturn
     }
 }
 
@@ -194,11 +208,15 @@ public enum RequestCodec {
                     roundID: optional("round_id"),
                     source: try source(),
                     owner: optional("owner"),
-                    tabTitle: optional("tab_title")
+                    tabTitle: optional("tab_title"),
+                    nudge: object["nudge"] as? Bool ?? false,
+                    noReturn: object["no_return"] as? Bool ?? false
                 )
             )
         case "dismiss":
             return .dismiss(sessionID: try session(), source: try source())
+        case "dismiss_nudge":
+            return .dismissNudge(sessionID: try session(), source: try source())
         case "anchor":
             return .anchor(
                 sessionID: try session(), tabID: optional("tab_id"), source: try source())
@@ -238,8 +256,13 @@ public enum RequestCodec {
             if let owner = n.owner { object["owner"] = owner }
             if let tabTitle = n.tabTitle { object["tab_title"] = tabTitle }
             if n.source != .claude { object["source"] = n.source.rawValue }
+            if n.nudge { object["nudge"] = true }
+            if n.noReturn { object["no_return"] = true }
         case .dismiss(let sessionID, let source):
             object = ["type": "dismiss", "session_id": sessionID]
+            if source != .claude { object["source"] = source.rawValue }
+        case .dismissNudge(let sessionID, let source):
+            object = ["type": "dismiss_nudge", "session_id": sessionID]
             if source != .claude { object["source"] = source.rawValue }
         case .anchor(let sessionID, let tabID, let source):
             object = ["type": "anchor", "session_id": sessionID]

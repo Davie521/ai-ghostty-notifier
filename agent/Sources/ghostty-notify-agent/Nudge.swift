@@ -14,9 +14,10 @@ import NotifyCore
 enum Nudge {
     static let titleSeconds = 4.0
 
-    static func run(words: [String], environment: [String: String], paths: AgentPaths) async
+    static func run(arguments: [String], environment: [String: String], paths: AgentPaths) async
         -> Int32
     {
+        let (noReturn, words) = NudgeNotification.parse(arguments)
         guard let message = NudgeNotification.message(words) else {
             SelfTest.fail(NudgeNotification.usage)
             return 2
@@ -72,45 +73,82 @@ enum Nudge {
         var request = NudgeNotification.request(
             sessionID: session.id, source: session.source, message: message, title: title,
             project: project(event), tabID: tab, roundID: event.roundID,
-            settings: event.settings)
+            settings: event.settings, noReturn: noReturn)
         // No tab bound yet (a Codex session before its first long run): the
         // agent looks for the tab titled after the session instead.
         if tab == nil, !title.isEmpty { request.tabTitle = title }
+        guard await hand(.notify(request), transport: transport, paths: paths, app: app) else {
+            return 1
+        }
+        print(
+            NudgeNotification.sent(
+                tabKnown: tab != nil, lookedUp: request.tabTitle != nil, noReturn: noReturn))
+        return 0
+    }
+
+    /// `--nudge-done`: the step the nudge asked for has happened, so take the
+    /// nudge back. Only a nudge: should the run's completion notification have
+    /// replaced it already, that one stays.
+    static func done(environment: [String: String], paths: AgentPaths) async -> Int32 {
+        let app = Bundle.main.bundlePath
+        let nearest = HookProcessContext.nearest(among: [.claude, .codex])
+        guard let session = NudgeNotification.session(environment: environment, nearest: nearest)
+        else {
+            SelfTest.fail(NudgeNotification.explain(.noSession, app: app))
+            return 1
+        }
+        let transport = HookTransport(paths: paths)
+        if let problem = TestNotification.problem(
+            running: transport.runningPID != nil,
+            readiness: DiskRoundJournal.read(paths.readyFile))
+        {
+            SelfTest.fail(NudgeNotification.explain(.agent(problem), app: app))
+            return 1
+        }
+        let request = AgentRequest.dismissNudge(sessionID: session.id, source: session.source)
+        guard await hand(request, transport: transport, paths: paths, app: app) else { return 1 }
+        print("Done. The session's nudge, if it still showed one, is gone.")
+        return 0
+    }
+
+    /// Queue `request` for the resident agent and wait for it to be taken;
+    /// false, with the reason on stderr, when it was not.
+    private static func hand(
+        _ request: AgentRequest, transport: HookTransport, paths: AgentPaths, app: String
+    ) async -> Bool {
         let file: String
         var sandboxed = false
         do {
-            file = try transport.queue(.notify(request))
+            file = try transport.queue(request)
         } catch {
             // Codex CLI's sandbox refuses writes under ~/.claude. The agent
-            // also reads notifications from a place the sandbox leaves open.
+            // also reads nudges from a place the sandbox leaves open.
             guard let nudges = Self.nudgeSpool(paths),
-                let queued = try? AtomicSpool.write(
-                    RequestCodec.encode(.notify(request)), to: nudges)
+                let queued = try? AtomicSpool.write(RequestCodec.encode(request), to: nudges)
             else {
-                SelfTest.fail("Could not queue the nudge: \(error)")
-                return 1
+                SelfTest.fail("Could not queue the request: \(error)")
+                return false
             }
             file = queued
             sandboxed = true
         }
         if await !SelfTest.collected(file) {
-            // Not taken: take it back, or an agent that recovers later posts a
-            // nudge the coding agent was told had not been sent, and the user
-            // hears about the same thing twice.
+            // Not taken: take it back, or an agent that recovers later acts on
+            // a request the coding agent was told had not been sent, and the
+            // user hears about the same thing twice.
             switch AtomicSpool.withdraw(file) {
             case .withdrawn:
                 SelfTest.fail(
                     NudgeNotification.explain(
                         sandboxed ? .notCollectedFromSandbox : .agent(.notCollected), app: app))
-                return 1
+                return false
             case .stuck(let reason):
                 SelfTest.fail(NudgeNotification.explain(.stuck(reason), app: app))
-                return 1
+                return false
             case .taken: break  // The agent took it after all.
             }
         }
-        print(NudgeNotification.sent(tabKnown: tab != nil, lookedUp: request.tabTitle != nil))
-        return 0
+        return true
     }
 
     /// CODEX_HOME resolved as the hooks resolve it; ~/.codex when unset.

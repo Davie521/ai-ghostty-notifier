@@ -3,6 +3,16 @@
 What changed in each release. The one-command installer always fetches the
 latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-notifier/releases).
 
+## Unreleased
+
+### Added
+
+- `--nudge --no-return` for a step the user does somewhere else, such as a
+  captcha on their phone. It has no Go to tab button and does not wait for the
+  user to come back: `--nudge-done` takes it back once the step lands, and it
+  goes by itself after five minutes if nothing does. `--nudge-done` takes back
+  only a nudge, never the run's completion notification.
+
 ## 0.11.3 — 2026-11-15
 
 ### Changed

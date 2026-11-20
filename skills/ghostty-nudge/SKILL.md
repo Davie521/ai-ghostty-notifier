@@ -1,6 +1,6 @@
 ---
 name: ghostty-nudge
-description: Call the user back to this session with a macOS notification whose Go to tab button returns to this Ghostty tab. Use when you need them to do something before you can go on and they may not be watching — Face ID, a verification code, a QR scan, a tap to confirm on their phone, a decision that blocks you. Not for progress, and not for the end of a task: long runs already notify when they end.
+description: Call the user back to this session with a macOS notification whose Go to tab button returns to this Ghostty tab, or, for a step they do somewhere else (a captcha, Face ID or a tap on their phone), one without the button that goes away once the step is done. Use when you need them to do something before you can go on and they may not be watching — Face ID, a verification code, a QR scan, a tap to confirm on their phone, a decision that blocks you. Not for progress, and not for the end of a task: long runs already notify when they end.
 ---
 
 # Nudge the user
@@ -29,3 +29,28 @@ Run this once, with one line saying what you need from them:
   its session through `CLAUDE_CODE_SESSION_ID` or `CODEX_THREAD_ID`, which they
   set for the commands they run. Run it as it is, inside Codex's sandbox too;
   it needs no escalation.
+
+## When they need not come back: `--no-return`
+
+Some steps the user does somewhere else and is done: slide a captcha, Face ID
+or a tap to confirm on their phone, scan a code with it. They never come back
+to the tab for those, so a Go to tab button is no use and the nudge would sit
+on screen. Add `--no-return` in front of the message:
+
+```bash
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge --no-return "Slide the captcha in Taobao on the iPhone"
+```
+
+Once your polling sees the step land, take it back:
+
+```bash
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge-done
+```
+
+- It has no Go to tab button, and goes by itself after five minutes if you
+  never run `--nudge-done`, about as long as you should wait on one step
+  before turning to something else.
+- `--nudge-done` takes back only a nudge, so running it after the step is
+  harmless even if something else replaced it.
+- Leave out `--no-return` when the user has to come back: a decision, a
+  question, a code to type here, anything done in this terminal.
