@@ -699,7 +699,9 @@ struct BackgroundWaitTests {
 
     @Test func aLongListIsComparedQuickly() async throws {
         let sandbox = try await firstRound()
-        let many = (0..<20_000).map { "t\($0)" }
+        // Small enough not to crowd the timing tests that run alongside, large
+        // enough that comparing every pair would take far longer than this.
+        let many = (0..<3_000).map { "t\($0)" }
         _ = try await capture(sandbox, .stop, tasks: many)
         _ = try await capture(sandbox, .prompt, source: "user")
         let clock = ContinuousClock()
@@ -708,7 +710,7 @@ struct BackgroundWaitTests {
             held = try await capture(sandbox, .stop, tasks: many + ["new"]).awaitingBackground
         }
         #expect(held == true)
-        #expect(took < .seconds(2))
+        #expect(took < .seconds(1))
     }
 
     @Test func aShellExcusedForAnEarlierSubagentStaysExcusedAfterIt() async throws {
