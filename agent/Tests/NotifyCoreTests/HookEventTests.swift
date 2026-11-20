@@ -786,6 +786,15 @@ struct RoundJournalTests {
         #expect(DiskRoundJournal.read(sandbox.root.path + "/abc-123.start") == "1500")
     }
 
+    @Test func aStartTooLargeForAnIntegerIsNoCrash() async throws {
+        let sandbox = try HookSandbox()
+        var event = try sandbox.event()
+        try sandbox.write("abc-123.start", "99999999999999999999\n")
+        event.startedAt = try #require(Double("99999999999999999999"))
+        await DiskRoundJournal().finish(event)
+        #expect(!FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.start"))
+    }
+
     @Test func completionRemovesOnlyItsStart() async throws {
         let sandbox = try HookSandbox()
         let journal = DiskRoundJournal()

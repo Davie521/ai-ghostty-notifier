@@ -90,7 +90,6 @@ public actor DiskRoundJournal: RoundJournalProviding {
         }
         if event.kind == .stop, claude {
             let turns = entries("turns", event)
-            discard(path(event, "turns"))
             // A turn that used tools and never reached its Stop was
             // interrupted, and what it left running is not known to be this
             // round's: it may be a server. The round's baseline no longer tells
@@ -163,6 +162,10 @@ public actor DiskRoundJournal: RoundJournalProviding {
                 discard(path(event, "background"))
                 if waits, event.payload.backgroundTasks != nil { event.awaitingBackground = false }
             }
+            // Retired only now that the snapshot is settled: a hook stopped
+            // before this leaves the turns, not an old snapshot that looks
+            // current without them.
+            discard(path(event, "turns"))
             if !paused {
                 discard(path(event, "paused"))
                 // This Stop goes out. Unless that is on record, a later one of
@@ -275,8 +278,9 @@ public actor DiskRoundJournal: RoundJournalProviding {
             guard Self.read(path(event, "round")) == event.roundID else { return false }
             // Only the start this Stop measured from: a turn the round goes on
             // with (another task's report) may have begun a clock since.
+            // Compared as read, never converted: a corrupt start may not fit.
             if event.startedAt > 0,
-                Self.read(path(event, "start")) == String(Int(event.startedAt))
+                Double(Self.read(path(event, "start"))) == event.startedAt
             {
                 remove(path(event, "start"))
             }
