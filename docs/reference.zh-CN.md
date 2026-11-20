@@ -187,7 +187,7 @@ hook 会读取完 stdin、写明诊断并返回成功，避免阻塞 CLI，但�
 报验证码、扫二维码、替它拍板）时，可以自己叫你：
 
 ```bash
-"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge "在 iPhone 上刷 Face ID，完成登录"
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge "在这里输入银行短信里的验证码，完成登录"
 ```
 
 安装器会放一个 `ghostty-nudge` skill：Claude Code 的放在 `<config>/skills/`，Codex 的放在
@@ -202,13 +202,19 @@ hook 会读取完 stdin、写明诊断并返回成功，避免阻塞 CLI，但�
 有些事你在别处做完就行，比如在手机上把滑块划过去，用不着回到标签页。这种 agent 会加上 `--no-return`：
 
 ```bash
-ghostty-notify-agent --nudge --no-return "在 iPhone 的淘宝里把滑块划过去"
-ghostty-notify-agent --nudge-done
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge --no-return "在 iPhone 的淘宝里把滑块划过去"
 ```
 
 这种通知没有 Go to tab 按钮。你不会回来撤它，所以它也不等你：agent 本来就在看你那一步做完没有，
-做完就跑 `--nudge-done` 把它撤掉；一直没撤的话，五分钟后自己消失（`GHOSTTY_NOTIFY_TIMEOUT`
-更短就按它）。`--nudge-done` 只撤「叫你」通知：要是这一轮跑完的通知已经替换了它，那条会留着。
+做完就把它撤掉：
+
+```bash
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge-done
+```
+
+一直没撤的话，五分钟后自己消失（`GHOSTTY_NOTIFY_TIMEOUT` 更短就按它）。`--nudge-done`
+只撤「叫你」通知：要是这一轮跑完的通知已经替换了它，那条会留着。这两个都要求正在运行的 App
+不比命令旧；还在跑的旧版 App 会直接报错、不发给它，所以更新后要重开一次。
 
 它靠 Claude Code 和 Codex 给自己跑的命令设置的 `CLAUDE_CODE_SESSION_ID` 或 `CODEX_THREAD_ID`
 认出会话（两个都有时，比如在 Claude Code 里起的 Codex，以离命令最近的那个 CLI 为准），靠这个

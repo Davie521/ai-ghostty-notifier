@@ -507,7 +507,9 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         guard let seconds, lasting, let owner, let postedAt = state.sessions[owner]?.postedAt
         else { return }
         let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + seconds, leeway: .seconds(1))
+        // Wall time: uptime stands still while the Mac sleeps, which kept a
+        // notification on screen for the rest of its time after waking.
+        timer.schedule(wallDeadline: .now() + seconds, leeway: .seconds(1))
         timer.setEventHandler { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }

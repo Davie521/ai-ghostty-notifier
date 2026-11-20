@@ -117,6 +117,9 @@ public enum NudgeNotification {
         /// Like `.agent(.notCollected)`, from the queue a sandboxed CLI can
         /// write to (`AgentPaths.nudgeSpool`), which an older agent never reads.
         case notCollectedFromSandbox
+        /// The running app predates `--no-return` and `--nudge-done`: it
+        /// would drop the request and the CLI could not tell.
+        case outdated
     }
 
     public static func explain(_ problem: Problem, app: String) -> String {
@@ -149,6 +152,12 @@ public enum NudgeNotification {
                 A sandbox kept it out of the usual queue, and the queue it went to instead \
                 is read only by \(AgentConstants.displayName) 0.9.0 or later: update the \
                 app if it is older.
+                """
+        case .outdated:
+            return """
+                The running \(AgentConstants.displayName) is older than this command and does \
+                not know --no-return or --nudge-done, so nothing was sent.
+                Quit it from the menu bar and open it again, or run the installer again.
                 """
         }
     }

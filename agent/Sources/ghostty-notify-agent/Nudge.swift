@@ -47,6 +47,10 @@ enum Nudge {
             SelfTest.fail(NudgeNotification.explain(.agent(problem), app: app))
             return 1
         }
+        if noReturn, !transport.acceptsNoReturnNudges {
+            SelfTest.fail(NudgeNotification.explain(.outdated, app: app))
+            return 1
+        }
         let (binding, _) = NativeHookRuntime.dependencies(paths: paths)
         let tab = await binding.existing(event)
         switch session.source {
@@ -97,12 +101,14 @@ enum Nudge {
             SelfTest.fail(NudgeNotification.explain(.noSession, app: app))
             return 1
         }
+        // Taking a notification back needs the app running, not allowed to post.
         let transport = HookTransport(paths: paths)
-        if let problem = TestNotification.problem(
-            running: transport.runningPID != nil,
-            readiness: DiskRoundJournal.read(paths.readyFile))
-        {
-            SelfTest.fail(NudgeNotification.explain(.agent(problem), app: app))
+        guard transport.runningPID != nil else {
+            SelfTest.fail(NudgeNotification.explain(.agent(.notRunning), app: app))
+            return 1
+        }
+        guard transport.acceptsNoReturnNudges else {
+            SelfTest.fail(NudgeNotification.explain(.outdated, app: app))
             return 1
         }
         let request = AgentRequest.dismissNudge(sessionID: session.id, source: session.source)

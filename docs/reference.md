@@ -223,7 +223,7 @@ needs you part-way through (Face ID on your phone, a verification code, a QR sca
 decision it cannot make for you), it can call you itself:
 
 ```bash
-"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge "Face ID on your iPhone to finish the login"
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge "Type the code from the bank's SMS here to finish the login"
 ```
 
 The installers put a `ghostty-nudge` skill in `<config>/skills/` for Claude
@@ -245,16 +245,22 @@ there is nothing to come back to the tab for. For those the agent adds
 `--no-return`:
 
 ```bash
-ghostty-notify-agent --nudge --no-return "Slide the captcha in Taobao on the iPhone"
-ghostty-notify-agent --nudge-done
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge --no-return "Slide the captcha in Taobao on the iPhone"
 ```
 
 Such a nudge has no Go to tab button, and since you never come back to clear
-it, it does not wait for you: the agent, which watches for your step anyway,
-runs `--nudge-done` once it lands, and the nudge goes by itself after five
-minutes (sooner if `GHOSTTY_NOTIFY_TIMEOUT` is shorter) if it never does.
-`--nudge-done` takes back only a nudge: should the run's completion
-notification have replaced it already, that one stays.
+it, it does not wait for you. The agent watches for your step anyway, and once
+it lands it takes the nudge back:
+
+```bash
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge-done
+```
+
+If it never does, the nudge goes by itself after five minutes (sooner if
+`GHOSTTY_NOTIFY_TIMEOUT` is shorter). `--nudge-done` takes back only a nudge:
+should the run's completion notification have replaced it already, that one
+stays. Both need an app at least as new as the command; an older one still
+running is reported, not sent to, so restart it after an update.
 
 It finds its session through `CLAUDE_CODE_SESSION_ID` or `CODEX_THREAD_ID`,
 which Claude Code and Codex set for the commands they run (with both set, as
