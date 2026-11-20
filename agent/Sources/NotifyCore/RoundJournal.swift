@@ -44,7 +44,13 @@ public actor DiskRoundJournal: RoundJournalProviding {
         // and keeping its start makes its completion count the wait.
         let resumes =
             event.kind == .prompt && waits && event.isTaskReport && isFile(path(event, "paused"))
-        event.roundID = event.kind == .prompt || !valid ? UUID().uuidString : old
+        // Another task's report right after a Stop that went out continues the
+        // same run: it keeps the round, so that completion, perhaps not yet
+        // delivered, stays current rather than being cancelled by it.
+        let continuesRun =
+            event.kind == .prompt && waits && event.isTaskReport && !resumes && valid
+            && stoppedRound(event) == old
+        event.roundID = (event.kind == .prompt && !continuesRun) || !valid ? UUID().uuidString : old
         if event.roundID != old, !write(event.roundID, path(event, "round")) {
             throw CocoaError(.fileWriteUnknown)
         }
@@ -116,7 +122,7 @@ public actor DiskRoundJournal: RoundJournalProviding {
                     // Otherwise the round keeps its id, which its prompt,
                     // maybe not yet consumed, still needs. Unrecorded, it is
                     // not held.
-                    if record(path(event, "stopped")) == event.roundID {
+                    if stoppedRound(event).map({ $0 == nil || $0 == event.roundID }) ?? false {
                         let generation = UUID().uuidString
                         if write(generation, path(event, "round")) {
                             event.roundID = generation
@@ -190,6 +196,14 @@ public actor DiskRoundJournal: RoundJournalProviding {
             return
         }
         discard(baseline)
+    }
+
+    /// The round whose last Stop went out: none when there is no record, and
+    /// `.some(nil)` when there is one that cannot be read.
+    private func stoppedRound(_ event: HookEvent) -> String?? {
+        let file = path(event, "stopped")
+        guard FileManager.default.fileExists(atPath: file) else { return nil }
+        return .some(record(file))
     }
 
     static func confirmedAbsent(_ path: String) -> Bool {
@@ -338,11 +352,15 @@ public actor DiskRoundJournal: RoundJournalProviding {
         let suffixes: Set<String> = [
             "json", "start", "attempts", "alerter-pid", "watch-pid", "callback-lock", "codex-owner",
             "claude-owner",
-            "title", "round", "background", "background-earlier", "paused", "turns", "stopped",
-            "turn",
+            "title", "round",
             "native-notice.json",
             "legacy-cleared", "marker.json",
             "lock.flock", "round-lock.flock", "delivery-lock.flock",
+        ]
+        // The background-wait records are only ever written to the session
+        // directory, which may not be the only thing in the rate directory.
+        let sessionOnly: Set<String> = [
+            "background", "background-earlier", "paused", "turns", "stopped", "turn",
         ]
         for directory in Set([event.sessionDirectory, event.rateDirectory]) {
             let stamp = directory + "/.pruned"
@@ -360,7 +378,9 @@ public actor DiskRoundJournal: RoundJournalProviding {
             }
             for name in names {
                 let file = directory + "/" + name
-                let ownSessionFile = suffixes.contains { suffix in
+                let candidates =
+                    directory == event.sessionDirectory ? suffixes.union(sessionOnly) : suffixes
+                let ownSessionFile = candidates.contains { suffix in
                     name.hasSuffix("." + suffix)
                         && RequestCodec.isValidSessionID(String(name.dropLast(suffix.count + 1)))
                 }
@@ -414,21 +434,23 @@ struct Snapshot: Equatable {
 
     static func == (lhs: Snapshot, rhs: Snapshot) -> Bool { lhs.text == rhs.text }
 
-    private func covers(_ task: BackgroundTask) -> Bool {
-        tasks.contains { $0.id == task.id || ($0.id == "*" && $0.type == (task.type ?? "")) }
-    }
-
     /// The work in `running` that this round started and that will wake the
     /// session. A subagent or workflow from before may itself start shells
     /// and monitors, which show in the same list with no sign of whose they
-    /// are: while one runs, those do not count.
+    /// are: while one runs, those do not count. Linear in both lists.
     func newWork(in running: [BackgroundTask]) -> [BackgroundTask] {
+        var known: [String: String] = [:]
+        var everyOf: Set<String> = []
+        for task in tasks {
+            if task.id == "*" { everyOf.insert(task.type) } else { known[task.id] = task.type }
+        }
         let launchers: Set<String> = ["subagent", "workflow"]
+        // A kind left out now is the one recorded before.
         let launcherBefore = running.contains { task in
-            launchers.contains(task.type ?? "") && tasks.contains { $0.id == task.id }
+            known[task.id].map { launchers.contains(task.type ?? $0) } ?? false
         }
         return running.filter { task in
-            task.wakesSession && !covers(task)
+            task.wakesSession && known[task.id] == nil && !everyOf.contains(task.type ?? "")
                 && !(launcherBefore && !launchers.contains(task.type ?? ""))
         }
     }

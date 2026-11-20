@@ -661,6 +661,51 @@ struct BackgroundWaitTests {
         #expect(await DiskRoundJournal().isCurrent(prompt))
     }
 
+    @Test func aSecondReportDoesNotCancelTheCompletionThatWentOut() async throws {
+        let sandbox = try await firstRound()
+        #expect(try await capture(sandbox, .stop, tasks: ["a", "b"]).awaitingBackground == true)
+        _ = try await capture(sandbox, .prompt, source: "system", turn: "w1", prompt: report)
+        // Both have ended by the time this turn stops: the completion goes out.
+        let done = try await capture(sandbox, .stop, turn: "w1", tasks: [])
+        #expect(done.awaitingBackground == false)
+        #expect(done.startedAt == 1000)
+        let other = "<task-notification>\n<task-id>b</task-id>\n</task-notification>"
+        _ = try await capture(sandbox, .prompt, source: "system", turn: "w2", prompt: other)
+        #expect(await DiskRoundJournal().isCurrent(done))
+    }
+
+    @Test func anUnreadableRecordOfAStopThatWentOutStillMakesItStale() async throws {
+        let sandbox = try await firstRound()
+        let out = try await capture(sandbox, .stop, tasks: [])
+        try Data([0xFF, 0xFE]).write(to: sandbox.root.appendingPathComponent("abc-123.stopped"))
+        let paused = try await capture(sandbox, .stop, tasks: ["lock"])
+        #expect(paused.awaitingBackground == true)
+        #expect(!(await DiskRoundJournal().isCurrent(out)))
+    }
+
+    @Test func anEarlierSubagentListedWithoutItsKindIsStillOne() async throws {
+        let sandbox = try await firstRound()
+        _ = try await capture(
+            sandbox, .stop, typed: [BackgroundTask(id: "agent", type: "subagent")])
+        _ = try await capture(sandbox, .prompt, source: "user")
+        let listed = [BackgroundTask(id: "agent"), BackgroundTask(id: "sh", type: "shell")]
+        #expect(try await capture(sandbox, .stop, typed: listed).awaitingBackground == false)
+    }
+
+    @Test func aLongListIsComparedQuickly() async throws {
+        let sandbox = try await firstRound()
+        let many = (0..<20_000).map { "t\($0)" }
+        _ = try await capture(sandbox, .stop, tasks: many)
+        _ = try await capture(sandbox, .prompt, source: "user")
+        let clock = ContinuousClock()
+        var held: Bool?
+        let took = try await clock.measure {
+            held = try await capture(sandbox, .stop, tasks: many + ["new"]).awaitingBackground
+        }
+        #expect(held == true)
+        #expect(took < .seconds(2))
+    }
+
     @Test func anOlderClaudeOrTheSettingOffKeepsTheOldBehavior() async throws {
         let sandbox = try HookSandbox()
         _ = try sandbox.event()
@@ -754,6 +799,25 @@ struct RoundJournalTests {
             toFile: DiskRoundJournal.rateFile(event), atomically: true, encoding: .utf8)
         #expect(!(await journal.claimRate(event, now: 2000)))
         #expect(await journal.claimRate(event, now: 2000))
+    }
+
+    @Test func backgroundRecordsArePrunedOnlyFromTheSessionDirectory() async throws {
+        let sandbox = try HookSandbox()
+        var event = try sandbox.event()
+        event.occurredAt = Date().timeIntervalSince1970
+        let rates = URL(fileURLWithPath: event.rateDirectory)
+        try FileManager.default.createDirectory(at: rates, withIntermediateDirectories: true)
+        let shared = rates.appendingPathComponent("feed.background")
+        let ours = sandbox.root.appendingPathComponent("abc-123.background")
+        let month = Date(timeIntervalSinceNow: -30 * 86400)
+        for file in [shared, ours] {
+            try "x".write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes(
+                [.modificationDate: month], ofItemAtPath: file.path)
+        }
+        await DiskRoundJournal().prepare(event)
+        #expect(FileManager.default.fileExists(atPath: shared.path))
+        #expect(!FileManager.default.fileExists(atPath: ours.path))
     }
 
     @Test func codexOwnerChangeInvalidatesBindingAndStoresFirstPrompt() async throws {
