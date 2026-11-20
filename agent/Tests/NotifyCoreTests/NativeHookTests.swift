@@ -147,6 +147,33 @@ struct NativeHookTests {
         #expect(event.tty == "/dev/ttys007")
     }
 
+    @Test func aTaskReportKeepsItsIdThroughTheCut() throws {
+        let id = String(repeating: "t", count: 200)
+        let report = "<task-notification>\n<task-id>\(id)</task-id>\n<status>completed</status>"
+        let json = try JSONSerialization.data(withJSONObject: [
+            "session_id": "abc", "prompt": report, "hook_event_name": "UserPromptSubmit",
+        ])
+        let event = try #require(
+            try parse(
+                String(decoding: json, as: UTF8.self), source: .claude,
+                environment: ["GHOSTTY_NOTIFY_TTY": "/dev/ttys007"]))
+        #expect(event.payload.prompt?.hasSuffix("</task-id>") == true)
+        #expect(event.isInjectedPrompt)
+    }
+
+    @Test(arguments: [HookSource.claude, .codex])
+    func onlyAClaudeTaskReportIsKeptPastTheUsualCut(source: HookSource) throws {
+        let quoting = String(repeating: "x", count: 300) + "</task-id>"
+        let json = try JSONSerialization.data(withJSONObject: [
+            "session_id": "abc", "prompt": quoting, "hook_event_name": "UserPromptSubmit",
+        ])
+        let event = try #require(
+            try parse(
+                String(decoding: json, as: UTF8.self), source: source,
+                environment: ["GHOSTTY_NOTIFY_TTY": "/dev/ttys007"]))
+        #expect(event.payload.prompt?.unicodeScalars.count == 200)
+    }
+
     @Test func backendPathsResolveBeforeLeavingTheSendersWorkingDirectory() throws {
         let event = try #require(
             try parse(

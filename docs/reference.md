@@ -214,6 +214,23 @@ earlier. Focusing the session's tab or submitting another prompt withdraws its
 notification. Permission/input prompts are silent unless
 `GHOSTTY_NOTIFY_ON_PROMPT=1`.
 
+A Claude turn that ends while background work it started is still running (a
+command sent to the background, a background subagent, a workflow, a monitor)
+is paused, not finished: Claude wakes the session when that work ends. Such a
+stop does not notify. The report that wakes the session continues the same
+run, so when the session is really done the notification counts the whole
+wait, from the first tool call after your prompt. A message you send while
+the turn is running joins that run too. Work still running from before your
+last prompt, such as a dev server, does not count, and neither do Claude's own
+housekeeping tasks, which do not wake the session; a turn that itself leaves a
+long-lived process running, such as a dev server it just started, is taken as
+waiting on it and does not notify. A round is only held when what already ran
+at its start is on record, so whenever that is not known it notifies as
+before: after a turn you interrupted, in the first round of a session that was
+resumed or already open when this version was installed, and with an older
+Claude Code that does not say what is running.
+`GHOSTTY_NOTIFY_WAIT_BACKGROUND=0` turns this off.
+
 <a id="when-claude-needs-you"></a>
 
 ### When Claude or Codex needs you
@@ -308,6 +325,7 @@ paths and private helper controls are not copied.
 | `GHOSTTY_NOTIFY_MIN_ELAPSED` | `180` | Minimum duration for a completion alert, seconds |
 | `GHOSTTY_NOTIFY_SOUND_ELAPSED` | `600` | Minimum duration for a completion sound |
 | `GHOSTTY_NOTIFY_NUDGE_SOUND` | `0` | `1`, `true`, `yes`, `on` give a nudge its sound |
+| `GHOSTTY_NOTIFY_WAIT_BACKGROUND` | `1` | `0`, `false`, `no`, `off` notify when a Claude turn stops even if its background work is still running |
 | `GHOSTTY_NOTIFY_TIMEOUT` | `1200` | Expiry in seconds; `0` disables automatic expiry |
 | `GHOSTTY_NOTIFY_BACKEND` | `auto` | Ready resident first, then display-only terminal-notifier; explicit `terminal-notifier` skips resident delivery. `agent` behaves like `auto`; the retired `alerter` and unknown values behave like `terminal-notifier` |
 | `GHOSTTY_NOTIFY_ON_PROMPT` | `0` | Only `1` enables immediate Claude permission/input alerts |

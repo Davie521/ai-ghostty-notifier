@@ -253,6 +253,43 @@ struct HookProcessorTests {
         #expect(await binding.resolved == 0)
     }
 
+    @Test func aStopWaitingOnBackgroundWorkKeepsTheRoundOpen() async {
+        let journal = JournalSpy()
+        let binding = BindingSpy()
+        let content = ContentGate()
+        var notices: [NotifyRequest] = []
+        var logged: [String] = []
+        let processor = HookProcessor(
+            journal: journal, content: content, binding: binding, clock: FixedClock(),
+            onPrompt: { _, _ in }, onNotify: { _, notice in notices.append(notice) },
+            log: { logged.append($0) })
+        var event = sampleEvent()
+        event.awaitingBackground = true
+        await processor.receive(event).value
+        #expect(notices.isEmpty)
+        #expect(await journal.finished.isEmpty)
+        #expect(await journal.claims == 0)
+        #expect(await binding.resolved == 0)
+        #expect(await content.entered == false)
+        #expect(logged.contains { $0.hasPrefix("waiting on background work") })
+        event.awaitingBackground = false
+        await processor.receive(event).value
+        #expect(notices.count == 1)
+        #expect(notices.first?.sound == "Glass")
+    }
+
+    @Test func evenAnExpiredPausedStopKeepsTheRoundOpen() async {
+        let journal = JournalSpy()
+        let processor = HookProcessor(
+            journal: journal, content: ContentGate(), binding: BindingSpy(),
+            clock: FixedClock(instant: 2301), onPrompt: { _, _ in },
+            onNotify: { _, _ in Issue.record("a paused round notified") })
+        var event = sampleEvent()
+        event.awaitingBackground = true
+        await processor.receive(event).value
+        #expect(await journal.finished.isEmpty)
+    }
+
     @Test func expiredEventDoesNoTitleOrTerminalWork() async {
         let journal = JournalSpy()
         let binding = BindingSpy()

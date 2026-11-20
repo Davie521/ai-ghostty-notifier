@@ -33,21 +33,109 @@ public actor DiskRoundJournal: RoundJournalProviding {
                 (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0)
                     || $0 == 45
             }
+        let claude = event.source == .claude
+        let waits = claude && event.options.waitBackground
+        // A message sent while a turn runs carries that turn's prompt id, under
+        // which the turn has used tools: it joins the turn, and the turn keeps
+        // its start and what was running before it began.
+        let joinsTurn =
+            event.kind == .prompt && waits && !event.isInjectedPrompt
+            && event.payload.promptID.map { (entries("turns", event) ?? []).contains($0) } ?? false
+        // The work a paused round waits on reports back: the round goes on,
+        // and keeping its start makes its completion count the wait.
+        let resumes =
+            event.kind == .prompt && waits && event.isTaskReport && isFile(path(event, "paused"))
         event.roundID = event.kind == .prompt || !valid ? UUID().uuidString : old
         if event.roundID != old, !write(event.roundID, path(event, "round")) {
             throw CocoaError(.fileWriteUnknown)
         }
         if event.kind == .prompt {
-            remove(path(event, "start"))
-            if event.source == .codex, !write(String(Int(event.occurredAt)), path(event, "start")) {
-                throw CocoaError(.fileWriteUnknown)
-            }
-        } else if event.kind == .preTool, event.source == .claude,
+            if !(resumes || joinsTurn) { try startRound(event, firstSeen: old.isEmpty) }
+        } else if event.kind == .preTool, claude,
             !FileManager.default.fileExists(atPath: path(event, "start"))
         {
             guard write(String(Int(event.occurredAt)), path(event, "start")) else {
                 throw CocoaError(.fileWriteUnknown)
             }
+        }
+        if event.kind == .preTool, claude {
+            // A tool used under no known turn stands for one that may never
+            // reach its Stop. Lost track of the turns, nothing running can be
+            // told apart.
+            let turn = event.payload.promptID ?? "?"
+            if let turns = entries("turns", event) {
+                if !turns.contains(turn),
+                    !write((turns + [turn]).joined(separator: "\n"), path(event, "turns"))
+                {
+                    forget(event)
+                }
+            } else {
+                forget(event)
+            }
+        }
+        if event.kind == .stop, claude {
+            let turns = entries("turns", event)
+            discard(path(event, "turns"))
+            // Whether this round already had a Stop (another hook made Claude
+            // go on); recorded for the next one.
+            let stoppedBefore = record(path(event, "stopped")) == event.roundID
+            var paused = false
+            if let tasks = event.payload.backgroundTasks,
+                event.payload.backgroundUnidentified != true
+            {
+                let running = tasks.filter(\.wakesSession).map(\.id)
+                // The next round's baseline, kept even when empty and whether
+                // or not waiting is on.
+                let snapshot = tasks.filter(\.mayWakeSession).map(\.id)
+                if !write(snapshot.joined(separator: "\n"), path(event, "background")) {
+                    discard(path(event, "background"))
+                }
+                // A turn that used tools and never reached its Stop was
+                // interrupted, and what it left running is not known to be
+                // this round's: it may be a server. Notify as before. Two
+                // turns are proof enough without this Stop's own id.
+                let interrupted =
+                    turns.map { turns in
+                        Set(turns).count > 1 || turns.contains("?")
+                            || (event.payload.promptID.map { id in turns.contains { $0 != id } }
+                                ?? false)
+                    } ?? true
+                // The round's baseline no longer tells its work apart, for
+                // any later Stop of it either.
+                if interrupted { discard(path(event, "background-earlier")) }
+                if waits, !interrupted, let baseline = record(path(event, "background-earlier")) {
+                    let earlier = Set(baseline.split(separator: "\n").map(String.init))
+                    if running.contains(where: { !earlier.contains($0) }) {
+                        // Recorded here, under the lock, and not by whoever
+                        // consumes the event later: a report that wakes the
+                        // session may come first. After an earlier Stop of
+                        // this round, a new generation, so that Stop, maybe
+                        // not yet consumed, cannot announce the round or clear
+                        // its start. Otherwise the round keeps its id, which
+                        // its prompt, maybe not yet consumed, still needs.
+                        // Unrecorded, it is not held.
+                        if stoppedBefore {
+                            let generation = UUID().uuidString
+                            if write(generation, path(event, "round")) {
+                                event.roundID = generation
+                                paused = write("1", path(event, "paused"))
+                            }
+                        } else {
+                            paused = write("1", path(event, "paused"))
+                        }
+                    }
+                }
+                if waits { event.awaitingBackground = paused }
+            } else {
+                // Nothing is known about what runs now.
+                discard(path(event, "background"))
+                if waits, event.payload.backgroundTasks != nil { event.awaitingBackground = false }
+            }
+            if !paused { discard(path(event, "paused")) }
+            if !write(event.roundID, path(event, "stopped")) { discard(path(event, "stopped")) }
+            // Decided; the list need not travel to the app.
+            event.payload.backgroundTasks = nil
+            event.payload.backgroundUnidentified = nil
         }
         let start = Self.read(path(event, "start"))
         if !start.isEmpty, start.utf8.allSatisfy({ (48...57).contains($0) }),
@@ -58,6 +146,31 @@ public actor DiskRoundJournal: RoundJournalProviding {
             event.startedAt = 0
         }
         return event
+    }
+
+    /// A prompt that begins a round: its clock starts over, and for Claude its
+    /// baseline is what already ran when it began (a dev server left up),
+    /// which is not its work. Without a baseline on record (a session open
+    /// before this version or resumed, a failed write, a CLI that did not say)
+    /// the round is never held, and notifies as before.
+    private func startRound(_ event: HookEvent, firstSeen: Bool) throws {
+        remove(path(event, "start"))
+        if event.source == .codex, !write(String(Int(event.occurredAt)), path(event, "start")) {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        guard event.source == .claude else { return }
+        discard(path(event, "paused"))
+        // A session's first prompt comes before its transcript exists: then
+        // nothing can be running yet. Only for a session not seen before: a
+        // transcript gone later says nothing about what runs.
+        let last = path(event, "background")
+        if firstSeen, let transcript = event.payload.transcriptPath, !transcript.isEmpty,
+            !FileManager.default.fileExists(atPath: transcript), !write("", last)
+        {
+            discard(last)
+        }
+        let baseline = path(event, "background-earlier")
+        if record(last).map({ write($0, baseline) }) != true { discard(baseline) }
     }
 
     public func isCurrent(_ event: HookEvent) -> Bool {
@@ -140,6 +253,29 @@ public actor DiskRoundJournal: RoundJournalProviding {
         event.sessionDirectory + "/" + event.sessionID + "." + suffix
     }
 
+    /// A record's text, or nil when there is no such file or it cannot be
+    /// read: never an empty stand-in for a failure.
+    private func record(_ path: String) -> String? {
+        guard isFile(path), let data = FileManager.default.contents(atPath: path),
+            let text = String(data: data, encoding: .utf8)
+        else { return nil }
+        return text.trimmingCharacters(in: .newlines)
+    }
+
+    /// A record's lines: none when it does not exist, nil when unreadable.
+    private func entries(_ suffix: String, _ event: HookEvent) -> [String]? {
+        let file = path(event, suffix)
+        guard FileManager.default.fileExists(atPath: file) else { return [] }
+        return record(file)?.split(separator: "\n").map(String.init)
+    }
+
+    /// What runs can no longer be told apart: no round is held until a Stop
+    /// records it again.
+    private func forget(_ event: HookEvent) {
+        discard(path(event, "background"))
+        discard(path(event, "background-earlier"))
+    }
+
     public static func read(_ path: String) -> String {
         (try? String(contentsOfFile: path, encoding: .utf8))?
             .trimmingCharacters(in: .newlines) ?? ""
@@ -153,6 +289,15 @@ public actor DiskRoundJournal: RoundJournalProviding {
     }
 
     private func remove(_ path: String) { try? FileManager.default.removeItem(atPath: path) }
+
+    /// For the background-wait state: files only, as `unlink` never takes a
+    /// directory, let alone what is in it.
+    private func discard(_ path: String) { _ = unlink(path) }
+
+    private func isFile(_ path: String) -> Bool {
+        (try? FileManager.default.attributesOfItem(atPath: path))?[.type] as? FileAttributeType
+            == .typeRegular
+    }
 
     private func withLock(_ directory: String, _ body: () -> Bool) -> Bool {
         guard let lease = FileLease.acquire(directory) else { return false }
@@ -168,7 +313,9 @@ public actor DiskRoundJournal: RoundJournalProviding {
         let suffixes: Set<String> = [
             "json", "start", "attempts", "alerter-pid", "watch-pid", "callback-lock", "codex-owner",
             "claude-owner",
-            "title", "round", "native-notice.json", "legacy-cleared", "marker.json",
+            "title", "round", "background", "background-earlier", "paused", "turns", "stopped",
+            "native-notice.json",
+            "legacy-cleared", "marker.json",
             "lock.flock", "round-lock.flock", "delivery-lock.flock",
         ]
         for directory in Set([event.sessionDirectory, event.rateDirectory]) {

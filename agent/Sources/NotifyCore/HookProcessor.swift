@@ -129,6 +129,13 @@ public final class HookProcessor {
     }
 
     private func perform(_ event: HookEvent) async {
+        if event.source == .claude, event.kind == .stop, event.awaitingBackground == true {
+            // Not finished: Claude wakes the session when that work ends. Not
+            // even expiry may finish it, or the completion loses the wait.
+            // The hook keeps such a Stop to itself; this covers a direct caller.
+            log("waiting on background work \(event.key); kept round start")
+            return
+        }
         guard await valid(event) else {
             await journal.finish(event)
             return
