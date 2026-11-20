@@ -108,6 +108,12 @@ public struct HookTransport: Sendable {
         return DiskRoundJournal.read(paths.root + "/capabilities")
             .split(whereSeparator: \.isNewline).contains("hook-event-v1:\(pid)")
     }
+    /// The resident knows `--nudge --no-return` and `--nudge-done`.
+    public var acceptsNoReturnNudges: Bool {
+        guard let pid = runningPID else { return false }
+        return DiskRoundJournal.read(paths.root + "/capabilities")
+            .split(whereSeparator: \.isNewline).contains("nudge-v2:\(pid)")
+    }
     /// An app that clears only the clock a Stop measured. One older than that
     /// clears whatever start the round has, which may belong to a turn the
     /// round went on with: a Claude Stop goes to a worker of this version.

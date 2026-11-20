@@ -222,14 +222,21 @@ struct NativeHookTests {
         processes.argv[400] = ["/app/ghostty-notify-agent"]
         #expect(HookTransport(paths: paths, inspector: processes).acceptsHookEvents)
         #expect(HookTransport(paths: paths, inspector: processes).authorized)
+        // A resident from before --no-return and --nudge-done.
+        #expect(!HookTransport(paths: paths, inspector: processes).acceptsNoReturnNudges)
+        try "hook-event-v1:400\nnudge-v2:400\n".write(
+            toFile: paths.root + "/capabilities", atomically: true, encoding: .utf8)
+        #expect(HookTransport(paths: paths, inspector: processes).acceptsHookEvents)
+        #expect(HookTransport(paths: paths, inspector: processes).acceptsNoReturnNudges)
         processes.argv[400] = ["/app/ghostty-notify-agent", "--worker"]
         #expect(HookTransport(paths: paths, inspector: processes).runningPID == nil)
         processes.argv[400] = ["/app/ghostty-notify-agent"]
         try "denied\n".write(toFile: paths.readyFile, atomically: true, encoding: .utf8)
         #expect(!HookTransport(paths: paths, inspector: processes).authorized)
-        try "hook-event-v1:401\n".write(
+        try "hook-event-v1:401\nnudge-v2:401\n".write(
             toFile: paths.root + "/capabilities", atomically: true, encoding: .utf8)
         #expect(!HookTransport(paths: paths, inspector: processes).acceptsHookEvents)
+        #expect(!HookTransport(paths: paths, inspector: processes).acceptsNoReturnNudges)
     }
     @Test func spoolUpgradeMakesAnExistingDirectoryPrivate() throws {
         let sandbox = try HookSandbox()
@@ -268,11 +275,13 @@ struct NativeHookTests {
         try readiness.publishCapabilities(pid: 400)
         try readiness.publishAuthorization("authorized")
         #expect(transport.acceptsNativeHooks && transport.authorized)
+        #expect(transport.acceptsNoReturnNudges)
         // This version clears only the clock a Stop measured.
         #expect(transport.acceptsClockIDs)
         readiness.close()
         #expect(transport.runningPID == 400)
         #expect(!transport.acceptsNativeHooks && !transport.authorized)
+        #expect(!transport.acceptsNoReturnNudges)
         #expect(!transport.acceptsClockIDs)
         try readiness.publishAuthorization("authorized")
         try readiness.publishCapabilities(pid: 400)

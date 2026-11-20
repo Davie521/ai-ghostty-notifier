@@ -137,15 +137,18 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         spool = watcher
 
         // Codex CLI's sandbox leaves this writable and nothing under ~/.claude.
-        // Anything other than a notification here was not written by --nudge.
+        // Anything other than a notification, or a nudge taken back, was not
+        // written by --nudge or --nudge-done.
         if let directory = paths.nudgeSpool {
             let nudges = SpoolWatcher(
                 directory: directory,
                 log: { [weak self] in self?.log($0) },
                 onRequest: { [weak self] request in
                     guard let self else { return }
-                    guard case .notify = request else {
-                        self.log("dropped a request other than a notification from the nudge spool")
+                    switch request {
+                    case .notify, .dismissNudge: break
+                    default:
+                        self.log("dropped a request other than a nudge from the nudge spool")
                         return
                     }
                     self.handle(request)
@@ -286,6 +289,18 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             let identifiers = state.takeNotifications(sessionID: key)
             cancelExpiry(identifiers)
             notifier.withdraw(identifiers)
+            stateChanged()
+
+        case .dismissNudge(let sessionID, let source):
+            let key = source == .claude ? sessionID : "codex-" + sessionID
+            let identifiers = state.takeNudge(sessionID: key)
+            guard !identifiers.isEmpty else {
+                log("nudge for \(key) already gone")
+                return
+            }
+            cancelExpiry(identifiers)
+            notifier.withdraw(identifiers)
+            log("nudge for \(key) answered")
             stateChanged()
 
         case .anchor(let rawSessionID, let tabID, let source):
@@ -465,7 +480,7 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             title: notify.title,
             subtitle: notify.subtitle,
             body: notify.body,
-            now: Agent.now(), roundID: notify.roundID)
+            now: Agent.now(), roundID: notify.roundID, nudge: notify.nudge)
         notifier.post(identifier: identifier, sessionID: notify.stateKey, request: notify)
         log("posted \(identifier)")
         scheduleExpiry(identifier: identifier, after: notify.timeout)
@@ -492,7 +507,9 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         guard let seconds, lasting, let owner, let postedAt = state.sessions[owner]?.postedAt
         else { return }
         let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + seconds, leeway: .seconds(1))
+        // Wall time: uptime stands still while the Mac sleeps, which kept a
+        // notification on screen for the rest of its time after waking.
+        timer.schedule(wallDeadline: .now() + seconds, leeway: .seconds(1))
         timer.setEventHandler { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }

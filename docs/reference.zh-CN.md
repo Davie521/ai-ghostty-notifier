@@ -189,7 +189,7 @@ Claude 这一轮结束时，如果它这一轮开的后台任务（放到后台�
 报验证码、扫二维码、替它拍板）时，可以自己叫你：
 
 ```bash
-"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge "在 iPhone 上刷 Face ID，完成登录"
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge "两个数据库迁移先跑哪个，请你定"
 ```
 
 安装器会放一个 `ghostty-nudge` skill：Claude Code 的放在 `<config>/skills/`，Codex 的放在
@@ -201,13 +201,31 @@ Claude 这一轮结束时，如果它这一轮开的后台任务（放到后台�
 回到那个标签页、提交新提问，或者过了 `GHOSTTY_NOTIFY_TIMEOUT`。之后再叫一次，
 或者这一轮跑完的通知，会替换掉它。
 
+有些事你在别处做完就行，比如在手机上把滑块划过去，用不着回到标签页。这种 agent 会加上 `--no-return`：
+
+```bash
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge --no-return "在 iPhone 的淘宝里把滑块划过去"
+```
+
+这种通知没有 Go to tab 按钮。你不会回来撤它，所以它也不等你：agent 本来就在看你那一步做完没有，
+做完就把它撤掉：
+
+```bash
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge-done
+```
+
+不管撤没撤，它十五秒后都会自己消失（`GHOSTTY_NOTIFY_TIMEOUT` 更短就按它）：弹出来时你看一眼就够了，要做的事本来就在手机上。`--nudge-done`
+只撤「叫你」通知：要是这一轮跑完的通知已经替换了它，那条会留着。这两个都要求正在运行的 App
+不比命令旧；还在跑的旧版 App 会直接报错、不发给它，所以更新后要重开一次。从支持它们的版本起，App 包里带着
+`Contents/Resources/nudge-v2`，skill 会先查它：插件更新可能先把 skill 带来，App 还是旧的。
+
 它靠 Claude Code 和 Codex 给自己跑的命令设置的 `CLAUDE_CODE_SESSION_ID` 或 `CODEX_THREAD_ID`
 认出会话（两个都有时，比如在 Claude Code 里起的 Codex，以离命令最近的那个 CLI 为准），靠这个
 会话的 hook 记下的信息找到标签页，所以完全不碰终端。Codex 会话的 hook 只在一轮长到要弹通知的任务结束时
 才记下标签页，因为 Codex 运行时每秒要改十次标签页标题；在那之前，App 会去找唯一一个以这个会话命名的
 标签页（Codex 把会话名显示在标签页标题里），找不到或有好几个时，点 Go to tab 只会把 Ghostty 调到前面。只走常驻 App。Codex 的沙箱不让写
 `~/.claude` 下的任何东西，所以在那里，通知改放进你这个用户的临时目录里的第二个队列：沙箱允许
-写这里，App 从这里只收通知、别的一概不收，也不用 Codex 申请越过沙箱。发不出去时（没有会话、
+写这里，App 从这里只收「叫你」通知和 `--nudge-done`、别的一概不收，也不用 Codex 申请越过沙箱。发不出去时（没有会话、
 App 没在运行、通知没授权）以 1 退出并说明原因，skill 会让 agent 改在回复里说清楚要你
 做什么。App 5 秒内没取走的通知会被撤回，免得 agent 已经在回复里说过了，它过一会儿又
 弹出来。

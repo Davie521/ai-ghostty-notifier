@@ -50,7 +50,11 @@ final class Notifier {
             // UNNotificationDismissActionIdentifier; this is what makes it fire.
             options: [.customDismissAction]
         )
-        center.setNotificationCategories([category])
+        // No Go to tab: the user answers this one somewhere else.
+        let elsewhere = UNNotificationCategory(
+            identifier: AgentConstants.noReturnCategoryID, actions: [],
+            intentIdentifiers: [], options: [.customDismissAction])
+        center.setNotificationCategories([category, elsewhere])
     }
 
     /// Identifiers macOS still has on screen.
@@ -133,7 +137,8 @@ final class Notifier {
         content.title = request.title
         content.subtitle = request.subtitle
         content.body = request.body
-        content.categoryIdentifier = AgentConstants.categoryID
+        content.categoryIdentifier =
+            request.noReturn ? AgentConstants.noReturnCategoryID : AgentConstants.categoryID
         // Groups a session's notifications together in Notification Center, the
         // way `-group ghostty-notify-<session>` did. Replacement itself comes
         // from reusing the identifier, not from this.

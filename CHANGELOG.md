@@ -16,8 +16,9 @@ latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-n
   clock, so the real completion was often too short to notify at all.
   A message sent while the turn runs joins that run. Background work left
   running from earlier rounds, such as a dev server, does not hold a round
-  back, nor does Claude's own housekeeping, nor, while an earlier subagent or
-  workflow runs, the commands it may have started; whenever what already ran at a
+  back, nor does Claude's own housekeeping, nor, while a subagent or workflow
+  from before the round may have started them, new commands and monitors;
+  whenever what already ran at a
   round's start is not on record (after an interrupted turn, in a resumed
   session's first round, after a failed write) the round notifies as before.
   A paused stop never leaves the hook, so an app older than the hook cannot
@@ -28,6 +29,16 @@ latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-n
   `<task-notification>` or a subagent's `<agent-message>` hand-back), in the
   same Claude process, resumes a held round.
   `GHOSTTY_NOTIFY_WAIT_BACKGROUND=0` restores the old behavior.
+
+## 0.12.0 — 2026-11-21
+
+### Added
+
+- `--nudge --no-return` for a step the user does somewhere else, such as a
+  captcha on their phone. It has no Go to tab button and does not wait for the
+  user to come back: it goes by itself after fifteen seconds, and
+  `--nudge-done` takes it back sooner once the step lands. `--nudge-done` takes back
+  only a nudge, never the run's completion notification.
 
 ## 0.11.3 — 2026-11-15
 

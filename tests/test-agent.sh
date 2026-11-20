@@ -168,6 +168,9 @@ state_outstanding() {
         "$STATE" 2>/dev/null
 }
 state_is() { [[ "$(state_outstanding "$1")" == "$2" ]]; }
+state_nudge() {
+    [[ "$(jq -r --arg s "$1" '.sessions[$s].nudge // false' "$STATE" 2>/dev/null)" == true ]]
+}
 pongs_increased() { [[ "$(grep -cF pong "$LOG")" -gt "$1" ]]; }
 spool_drained() {
     local remaining
@@ -333,7 +336,7 @@ check "with nothing waiting it exits 1, for a binding to fall back on" \
     test "$(jump_status)" = 1
 check "and says nothing is waiting" jump_says "nothing is waiting"
 
-# ── 5b. The nudge spool takes notifications and nothing else ───────────────
+# ── 5b. The nudge spool takes nudges and taking them back, nothing else ────
 # Codex CLI's sandbox refuses writes under ~/.claude, so a sandboxed --nudge
 # publishes here instead, the way AtomicSpool does: a temporary name, renamed.
 nudge_queue() {
@@ -343,6 +346,8 @@ nudge_queue() {
 nudge_spool_drained() {
     [[ "$(find "$NUDGES" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')" == "0" ]]
 }
+check "the bundle carries the marker the skill checks before --no-return" \
+    test -f "$APP/Contents/Resources/nudge-v2"
 check "the agent prepares the nudge spool, private to the user" \
     test "$(stat -f %Lp "$NUDGES" 2>/dev/null)" = "700"
 check "and says where it is, for a CLI that may not ask macOS" \
@@ -352,9 +357,25 @@ check "a notification in the nudge spool is posted" \
     wait_for 10 state_is "$NUDGE_SID" "claude-$NUDGE_SID"
 nudge_queue "$(jq -nc --arg s "$NUDGE_SID" '{type:"dismiss",session_id:$s}')"
 check "any other request in it is dropped" \
-    wait_for 10 log_has "dropped a request other than a notification from the nudge spool"
+    wait_for 10 log_has "dropped a request other than a nudge from the nudge spool"
 check "and not acted on" test "$(state_outstanding "$NUDGE_SID")" = "claude-$NUDGE_SID"
 check "both were consumed" wait_for 10 nudge_spool_drained
+# --nudge-done takes back only a nudge: the run's completion notification, which
+# replaces it under the same identifier, is not the coding agent's to withdraw.
+nudge_queue "$(jq -nc --arg s "$NUDGE_SID" '{type:"dismiss_nudge",session_id:$s}')"
+check "taking back what is not a nudge leaves it" \
+    wait_for 10 log_has "nudge for $NUDGE_SID already gone"
+check "on screen" test "$(state_outstanding "$NUDGE_SID")" = "claude-$NUDGE_SID"
+nudge_queue "$(jq -nc --arg s "$NUDGE_SID" \
+    '{type:"notify",session_id:$s,title:"nudge",no_return:true}')"
+check "a no-return nudge is remembered as a nudge" wait_for 10 state_nudge "$NUDGE_SID"
+check "and runs out in fifteen seconds even when queued without a timeout" test \
+    "$(jq -r --arg s "$NUDGE_SID" \
+        '.sessions[$s] | .expiresAt - .postedAt | . > 14 and . < 16' "$STATE")" = true
+nudge_queue "$(jq -nc --arg s "$NUDGE_SID" '{type:"dismiss_nudge",session_id:$s}')"
+check "and taken back from the nudge spool" wait_for 10 state_is "$NUDGE_SID" ""
+nudge_queue "$(jq -nc --arg s "$NUDGE_SID" '{type:"notify",session_id:$s,title:"nudge"}')"
+check "posted again" wait_for 10 state_is "$NUDGE_SID" "claude-$NUDGE_SID"
 agent_queue "$(jq -nc --arg s "$NUDGE_SID" '{type:"dismiss",session_id:$s}')"
 check "the usual spool still withdraws it" wait_for 10 state_is "$NUDGE_SID" ""
 

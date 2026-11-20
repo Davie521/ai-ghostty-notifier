@@ -11,6 +11,8 @@ public enum AgentConstants {
     /// Category carrying the "Go to tab" button. Registered at launch; every
     /// posted notification references it.
     public static let categoryID = "com.ghostty-notify.session"
+    /// The same without the button, for a nudge the user answers elsewhere.
+    public static let noReturnCategoryID = "com.ghostty-notify.elsewhere"
     public static let gotoActionID = "goto-tab"
     /// Sessions untouched for this long are forgotten and their leftover
     /// notifications withdrawn.
@@ -177,6 +179,7 @@ public enum StateCodec {
             var roundID: String?
             var owner: String?
             var expiresAt: Double?
+            var nudge: Bool?
         }
         var sessions: [String: Record]
     }
@@ -193,7 +196,8 @@ public enum StateCodec {
                     subtitle: $0.subtitle,
                     body: $0.body,
                     postedAt: $0.postedAt,
-                    roundID: $0.roundID, owner: $0.owner, expiresAt: $0.expiresAt)
+                    roundID: $0.roundID, owner: $0.owner, expiresAt: $0.expiresAt,
+                    nudge: $0.nudge ? true : nil)
             }
         )
         let encoder = JSONEncoder()
@@ -227,7 +231,8 @@ public enum StateCodec {
                     // reporting itself as "now" the moment the next prompt is
                     // submitted — the exact bug `postedAt` exists to prevent.
                     postedAt: $0.postedAt ?? $0.updatedAt,
-                    roundID: $0.roundID, owner: $0.owner, expiresAt: $0.expiresAt)
+                    roundID: $0.roundID, owner: $0.owner, expiresAt: $0.expiresAt,
+                    nudge: $0.nudge ?? false)
             }
         )
         return state
