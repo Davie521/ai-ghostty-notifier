@@ -69,6 +69,15 @@ final class Notifier {
         }
     }
 
+    /// Returns once the center has answered a request sent after everything
+    /// before it, such as a `withdraw`: a process about to exit waits here so
+    /// that its last removals are not lost with it.
+    func settle() async {
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            center.getDeliveredNotifications { _ in done.resume() }
+        }
+    }
+
     func setDelegate(_ delegate: UNUserNotificationCenterDelegate) {
         center.delegate = delegate
     }
@@ -132,7 +141,9 @@ final class Notifier {
         }
     }
 
-    func post(identifier: String, sessionID: String, request: NotifyRequest) {
+    /// `postedAt` is the session's `postedAt` for this notification, carried
+    /// so a late click or close can be told from one on the current banner.
+    func post(identifier: String, sessionID: String, request: NotifyRequest, postedAt: Double) {
         let content = UNMutableNotificationContent()
         content.title = request.title
         content.subtitle = request.subtitle
@@ -147,6 +158,7 @@ final class Notifier {
         // session after the agent restarted and reloaded its bookkeeping.
         content.userInfo = ["session_id": sessionID]
         if let tabID = request.tabID { content.userInfo["tab_id"] = tabID }
+        content.userInfo["posted_at"] = postedAt
         if let sound = request.sound {
             content.sound = Self.sound(named: sound)
         }
