@@ -69,7 +69,7 @@ public actor DiskRoundJournal: RoundJournalProviding {
         } else if event.kind == .preTool, claude,
             !FileManager.default.fileExists(atPath: path(event, "start"))
         {
-            guard write(String(Int(event.occurredAt)), path(event, "start")) else {
+            guard write(Self.clock(at: event.occurredAt), path(event, "start")) else {
                 throw CocoaError(.fileWriteUnknown)
             }
         }
@@ -179,15 +179,33 @@ public actor DiskRoundJournal: RoundJournalProviding {
             event.payload.backgroundTasks = nil
             event.payload.backgroundUnidentified = nil
         }
-        let start = Self.read(path(event, "start"))
-        if !start.isEmpty, start.utf8.allSatisfy({ (48...57).contains($0) }),
-            let value = Double(start), value.isFinite
-        {
-            event.startedAt = value
-        } else {
-            event.startedAt = 0
-        }
+        let clock = Self.clock(Self.read(path(event, "start")))
+        event.startedAt = clock?.value ?? 0
+        event.startToken = clock?.token
         return event
+    }
+
+    /// A round's clock: when it started, in whole seconds, and an id of its
+    /// own, so a clock begun in the same second is still told apart. A
+    /// start written before the id existed is the seconds alone.
+    static func clock(at time: Double) -> String {
+        String(Int(time)) + " " + UUID().uuidString
+    }
+
+    static func clock(_ text: String) -> (value: Double, token: String?)? {
+        let parts = text.split(separator: " ", omittingEmptySubsequences: false)
+        guard (1...2).contains(parts.count), !parts[0].isEmpty,
+            parts[0].utf8.allSatisfy({ (48...57).contains($0) }),
+            let value = Double(parts[0]), value.isFinite
+        else { return nil }
+        guard parts.count == 2 else { return (value, nil) }
+        guard !parts[1].isEmpty, parts[1].count <= 64,
+            parts[1].utf8.allSatisfy({
+                (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0)
+                    || $0 == 45
+            })
+        else { return nil }
+        return (value, String(parts[1]))
     }
 
     /// A prompt that begins a round: its clock starts over, and for Claude its
@@ -198,7 +216,7 @@ public actor DiskRoundJournal: RoundJournalProviding {
     /// as before.
     private func startRound(_ event: HookEvent, firstSeen: Bool) throws {
         remove(path(event, "start"))
-        if event.source == .codex, !write(String(Int(event.occurredAt)), path(event, "start")) {
+        if event.source == .codex, !write(Self.clock(at: event.occurredAt), path(event, "start")) {
             throw CocoaError(.fileWriteUnknown)
         }
         guard event.source == .claude else { return }
@@ -276,11 +294,14 @@ public actor DiskRoundJournal: RoundJournalProviding {
         guard event.kind == .stop else { return }
         _ = withLock(path(event, "round-lock")) {
             guard Self.read(path(event, "round")) == event.roundID else { return false }
-            // Only the start this Stop measured from: a turn the round goes on
-            // with (another task's report) may have begun a clock since.
-            // Compared as read, never converted: a corrupt start may not fit.
-            if event.startedAt > 0,
-                Double(Self.read(path(event, "start"))) == event.startedAt
+            // Only the clock this Stop measured from: a turn the round goes on
+            // with (another task's report) may have begun one since, even in
+            // the same second. Known by its id; a Stop from a hook older than
+            // the id, by its value, compared as read (a corrupt start may not
+            // fit an integer).
+            if let current = Self.clock(Self.read(path(event, "start"))), event.startedAt > 0,
+                event.startToken.map({ $0 == current.token })
+                    ?? (current.token == nil && current.value == event.startedAt)
             {
                 remove(path(event, "start"))
             }

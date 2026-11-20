@@ -21,7 +21,9 @@ latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-n
   round's start is not on record (after an interrupted turn, in a resumed
   session's first round, after a failed write) the round notifies as before.
   A paused stop never leaves the hook, so an app older than the hook cannot
-  announce it.
+  announce it. Each round's clock now has an id of its own, so a completion
+  delivered late cannot clear the clock of a turn begun after it, even in
+  the same second.
   `GHOSTTY_NOTIFY_WAIT_BACKGROUND=0` restores the old behavior.
 
 ## 0.11.3 — 2026-11-15

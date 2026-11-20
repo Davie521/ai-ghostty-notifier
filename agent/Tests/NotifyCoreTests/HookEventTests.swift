@@ -795,6 +795,43 @@ struct RoundJournalTests {
         #expect(!FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.start"))
     }
 
+    @Test func aClockBegunInTheSameSecondIsNotTheOneMeasured() async throws {
+        let sandbox = try HookSandbox()
+        var event = try sandbox.event()
+        event.startToken = "clock-a"
+        try sandbox.write("abc-123.start", "1000 clock-b\n")  // the next turn's, same second
+        await DiskRoundJournal().finish(event)
+        #expect(DiskRoundJournal.read(sandbox.root.path + "/abc-123.start") == "1000 clock-b")
+        try sandbox.write("abc-123.start", "1000 clock-a\n")
+        await DiskRoundJournal().finish(event)
+        #expect(!FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.start"))
+    }
+
+    @Test func aClockCarriesItsIdIntoTheEvent() async throws {
+        let sandbox = try HookSandbox()
+        _ = try sandbox.event()
+        try FileManager.default.removeItem(at: sandbox.root.appendingPathComponent("abc-123.start"))
+        var tool = sampleEvent(kind: .preTool, root: sandbox.root.path)
+        tool.occurredAt = 1234
+        _ = try await DiskRoundJournal().capture(tool)
+        let written = DiskRoundJournal.read(sandbox.root.path + "/abc-123.start")
+        let clock = try #require(DiskRoundJournal.clock(written))
+        #expect(clock.value == 1234)
+        let stop = try await DiskRoundJournal().capture(sampleEvent(root: sandbox.root.path))
+        #expect(stop.startedAt == 1234)
+        #expect(stop.startToken == clock.token)
+        #expect(stop.startToken != nil)
+    }
+
+    @Test func startsAreReadInEitherFormAndNothingElse() {
+        #expect(DiskRoundJournal.clock("1000")?.value == 1000)
+        #expect(DiskRoundJournal.clock("1000")?.token == nil)
+        #expect(DiskRoundJournal.clock("1000 ABC-123")?.token == "ABC-123")
+        for bad in ["", " ", "x", "10.5", "1000 ", "1000 a b", "1000 a/b", "-1"] {
+            #expect(DiskRoundJournal.clock(bad) == nil)
+        }
+    }
+
     @Test func completionRemovesOnlyItsStart() async throws {
         let sandbox = try HookSandbox()
         let journal = DiskRoundJournal()

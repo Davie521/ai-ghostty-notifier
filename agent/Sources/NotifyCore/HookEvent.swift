@@ -153,6 +153,8 @@ public struct HookEvent: Codable, Equatable, Sendable {
     /// round running: Claude will wake the session again, so the round is
     /// paused, not finished. Absent from events of older hooks.
     public var awaitingBackground: Bool?
+    /// The id of the clock `startedAt` was read from (`RoundJournal.clock`).
+    public var startToken: String?
     public var payload: HookPayload
 
     public init(
@@ -223,6 +225,7 @@ public struct HookEvent: Codable, Equatable, Sendable {
         case homeDirectory = "home_dir"
         case searchPath = "search_path"
         case awaitingBackground = "awaiting_background"
+        case startToken = "start_token"
         case payload
     }
 

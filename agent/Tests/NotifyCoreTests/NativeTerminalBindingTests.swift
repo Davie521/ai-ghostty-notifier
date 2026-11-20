@@ -700,6 +700,7 @@ struct NativeProcessTests {
         #expect(next.startedAt == 2000)
         #expect(next.roundID != first.roundID)
         await journal.finish(started)
-        #expect(DiskRoundJournal.read(sandbox.root.path + "/abc-123.start") == "2000")
+        let left = DiskRoundJournal.read(sandbox.root.path + "/abc-123.start")
+        #expect(DiskRoundJournal.clock(left)?.value == 2000)
     }
 }
