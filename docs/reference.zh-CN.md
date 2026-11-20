@@ -212,7 +212,7 @@ hook 会读取完 stdin、写明诊断并返回成功，避免阻塞 CLI，但�
 "$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge-done
 ```
 
-一直没撤的话，五分钟后自己消失（`GHOSTTY_NOTIFY_TIMEOUT` 更短就按它）。`--nudge-done`
+不管撤没撤，它十五秒后都会自己消失（`GHOSTTY_NOTIFY_TIMEOUT` 更短就按它）：弹出来时你看一眼就够了，要做的事本来就在手机上。`--nudge-done`
 只撤「叫你」通知：要是这一轮跑完的通知已经替换了它，那条会留着。这两个都要求正在运行的 App
 不比命令旧；还在跑的旧版 App 会直接报错、不发给它，所以更新后要重开一次。从支持它们的版本起，App 包里带着
 `Contents/Resources/nudge-v2`，skill 会先查它：插件更新可能先把 skill 带来，App 还是旧的。
