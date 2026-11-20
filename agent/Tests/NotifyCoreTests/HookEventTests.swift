@@ -706,6 +706,31 @@ struct BackgroundWaitTests {
         #expect(took < .seconds(2))
     }
 
+    @Test func aShellExcusedForAnEarlierSubagentStaysExcusedAfterIt() async throws {
+        let sandbox = try await firstRound()
+        let old = BackgroundTask(id: "agent-old", type: "subagent")
+        _ = try await capture(sandbox, .stop, typed: [old])
+        _ = try await capture(sandbox, .prompt, source: "user")
+        let shell = BackgroundTask(id: "sh", type: "shell")
+        let mine = BackgroundTask(id: "agent-new", type: "subagent")
+        #expect(
+            try await capture(sandbox, .stop, typed: [old, shell, mine]).awaitingBackground == true)
+        _ = try await capture(sandbox, .prompt, source: "system", turn: "w", prompt: report)
+        // Both subagents are done; the old one's shell runs on.
+        #expect(try await capture(sandbox, .stop, typed: [shell]).awaitingBackground == false)
+    }
+
+    @Test func aLaunchersKindIsKeptWhileItIsListedWithout() async throws {
+        let sandbox = try await firstRound()
+        _ = try await capture(
+            sandbox, .stop, typed: [BackgroundTask(id: "agent", type: "subagent")])
+        _ = try await capture(sandbox, .prompt, source: "user")
+        _ = try await capture(sandbox, .stop, typed: [BackgroundTask(id: "agent")])
+        _ = try await capture(sandbox, .prompt, source: "user")
+        let listed = [BackgroundTask(id: "agent"), BackgroundTask(id: "sh", type: "shell")]
+        #expect(try await capture(sandbox, .stop, typed: listed).awaitingBackground == false)
+    }
+
     @Test func anOlderClaudeOrTheSettingOffKeepsTheOldBehavior() async throws {
         let sandbox = try HookSandbox()
         _ = try sandbox.event()
@@ -750,6 +775,15 @@ struct RoundJournalTests {
         await journal.finish(event)
         #expect(DiskRoundJournal.read(sandbox.root.path + "/abc-123.start") == "2001")
         #expect(!(await journal.isCurrent(event)))
+    }
+
+    @Test func aLateCompletionLeavesAClockBegunAfterIt() async throws {
+        let sandbox = try HookSandbox()
+        let journal = DiskRoundJournal()
+        let event = try sandbox.event()  // measured from 1000
+        try sandbox.write("abc-123.start", "1500\n")  // the round went on, with a clock of its own
+        await journal.finish(event)
+        #expect(DiskRoundJournal.read(sandbox.root.path + "/abc-123.start") == "1500")
     }
 
     @Test func completionRemovesOnlyItsStart() async throws {

@@ -50,6 +50,11 @@ public actor DiskRoundJournal: RoundJournalProviding {
         let continuesRun =
             event.kind == .prompt && waits && event.isTaskReport && !resumes && valid
             && stoppedRound(event) == old
+        // A new round's baseline goes before the round is published: a hook
+        // stopped in between leaves none, not the last round's.
+        if event.kind == .prompt, claude, !(resumes || joinsTurn) {
+            discard(path(event, "background-earlier"))
+        }
         event.roundID = (event.kind == .prompt && !continuesRun) || !valid ? UUID().uuidString : old
         if event.roundID != old, !write(event.roundID, path(event, "round")) {
             throw CocoaError(.fileWriteUnknown)
@@ -102,6 +107,16 @@ public actor DiskRoundJournal: RoundJournalProviding {
             if let tasks = event.payload.backgroundTasks,
                 event.payload.backgroundUnidentified != true
             {
+                let earlierPath = path(event, "background-earlier")
+                var baseline =
+                    interrupted ? nil : record(earlierPath).flatMap(Snapshot.init)
+                // A kind left out now is the one on record: in the round's
+                // baseline, or in this process's last snapshot.
+                let last = record(path(event, "background")).flatMap(Snapshot.init)
+                    .flatMap { !$0.owner.isEmpty && $0.owner == event.owner ? $0 : nil }
+                let kinds = (last?.kinds ?? [:]).merging(baseline?.kinds ?? [:]) { _, round in round
+                }
+                let tasks = tasks.map { BackgroundTask(id: $0.id, type: $0.type ?? kinds[$0.id]) }
                 // The next round's baseline, kept even when empty and whether
                 // or not waiting is on, for this process only.
                 let snapshot = Snapshot(
@@ -110,10 +125,20 @@ public actor DiskRoundJournal: RoundJournalProviding {
                 if !write(snapshot.text, path(event, "background")) {
                     discard(path(event, "background"))
                 }
-                if waits, !interrupted,
-                    let baseline = record(path(event, "background-earlier")).flatMap(Snapshot.init),
-                    !baseline.newWork(in: tasks).isEmpty
-                {
+                var newWork: [BackgroundTask] = []
+                if waits, let before = baseline {
+                    let judged = before.judge(tasks)
+                    newWork = judged.new
+                    // Excused once as an earlier launcher's, excused for the
+                    // rest of the round, even after that launcher ends.
+                    if !judged.excused.isEmpty {
+                        baseline?.tasks += judged.excused.map { ($0.id, $0.type ?? "") }
+                        if baseline.map({ write($0.text, earlierPath) }) != true {
+                            discard(earlierPath)
+                        }
+                    }
+                }
+                if !newWork.isEmpty {
                     // Recorded here, under the lock, and not by whoever
                     // consumes the event later: a report that wakes the
                     // session may come first. After a Stop of this round that
@@ -248,7 +273,13 @@ public actor DiskRoundJournal: RoundJournalProviding {
         guard event.kind == .stop else { return }
         _ = withLock(path(event, "round-lock")) {
             guard Self.read(path(event, "round")) == event.roundID else { return false }
-            remove(path(event, "start"))
+            // Only the start this Stop measured from: a turn the round goes on
+            // with (another task's report) may have begun a clock since.
+            if event.startedAt > 0,
+                Self.read(path(event, "start")) == String(Int(event.startedAt))
+            {
+                remove(path(event, "start"))
+            }
             return true
         }
     }
@@ -434,24 +465,37 @@ struct Snapshot: Equatable {
 
     static func == (lhs: Snapshot, rhs: Snapshot) -> Bool { lhs.text == rhs.text }
 
+    /// The kind on record for each task.
+    var kinds: [String: String] {
+        var kinds: [String: String] = [:]
+        for task in tasks where task.id != "*" && !task.type.isEmpty { kinds[task.id] = task.type }
+        return kinds
+    }
+
     /// The work in `running` that this round started and that will wake the
-    /// session. A subagent or workflow from before may itself start shells
-    /// and monitors, which show in the same list with no sign of whose they
-    /// are: while one runs, those do not count. Linear in both lists.
-    func newWork(in running: [BackgroundTask]) -> [BackgroundTask] {
+    /// session (`new`). A subagent or workflow from before may itself start
+    /// shells and monitors, which show in the same list with no sign of whose
+    /// they are: while one runs, those are `excused`. Linear in both lists.
+    func judge(_ running: [BackgroundTask]) -> (new: [BackgroundTask], excused: [BackgroundTask]) {
         var known: [String: String] = [:]
         var everyOf: Set<String> = []
         for task in tasks {
             if task.id == "*" { everyOf.insert(task.type) } else { known[task.id] = task.type }
         }
         let launchers: Set<String> = ["subagent", "workflow"]
-        // A kind left out now is the one recorded before.
         let launcherBefore = running.contains { task in
             known[task.id].map { launchers.contains(task.type ?? $0) } ?? false
         }
-        return running.filter { task in
-            task.wakesSession && known[task.id] == nil && !everyOf.contains(task.type ?? "")
-                && !(launcherBefore && !launchers.contains(task.type ?? ""))
+        var new: [BackgroundTask] = []
+        var excused: [BackgroundTask] = []
+        for task in running
+        where task.wakesSession && known[task.id] == nil && !everyOf.contains(task.type ?? "") {
+            if launcherBefore && !launchers.contains(task.type ?? "") {
+                excused.append(task)
+            } else {
+                new.append(task)
+            }
         }
+        return (new, excused)
     }
 }
