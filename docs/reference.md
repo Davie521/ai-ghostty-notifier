@@ -223,7 +223,7 @@ needs you part-way through (Face ID on your phone, a verification code, a QR sca
 decision it cannot make for you), it can call you itself:
 
 ```bash
-"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge "Face ID on your iPhone to finish the login"
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge "Pick which of the two migrations to run first"
 ```
 
 The installers put a `ghostty-nudge` skill in `<config>/skills/` for Claude
@@ -240,6 +240,31 @@ The menu bar lists it, and it clears like the others: when you return to the
 tab, when you send a prompt, or after `GHOSTTY_NOTIFY_TIMEOUT`. A later nudge,
 or the run's completion notification, replaces it.
 
+Some steps you do somewhere else, a captcha to slide on your phone say, and
+there is nothing to come back to the tab for. For those the agent adds
+`--no-return`:
+
+```bash
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge --no-return "Slide the captcha in Taobao on the iPhone"
+```
+
+Such a nudge has no Go to tab button, and since you never come back to clear
+it, it does not wait for you. The agent watches for your step anyway, and once
+it lands it takes the nudge back:
+
+```bash
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge-done
+```
+
+If it never does, the nudge goes by itself after five minutes (sooner if
+`GHOSTTY_NOTIFY_TIMEOUT` is shorter). `--nudge-done` takes back only a nudge:
+should the run's completion notification have replaced it already, that one
+stays. Both need an app at least as new as the command; an older one still
+running is reported, not sent to, so restart it after an update. The app
+bundle carries `Contents/Resources/nudge-v2` from the version that knows them
+on, and the skill looks for it first, since a plugin update can bring the skill
+before the app.
+
 It finds its session through `CLAUDE_CODE_SESSION_ID` or `CODEX_THREAD_ID`,
 which Claude Code and Codex set for the commands they run (with both set, as
 in Codex started from Claude Code, the CLI nearest above the command wins), and
@@ -251,7 +276,7 @@ session (Codex shows its thread name there), and when none or several are,
 Go to tab only brings Ghostty forward. It goes through the resident app only. Codex's sandbox refuses
 writes under `~/.claude`, so there the nudge goes to a second queue in the
 user's own temporary directory, which the sandbox leaves writable and from
-which the app takes notifications and nothing else; it needs no escalation. When it cannot send (no session, the app not running, notifications not
+which the app takes nudges and `--nudge-done` and nothing else; it needs no escalation. When it cannot send (no session, the app not running, notifications not
 allowed), it exits 1 and says why; the skill then has Claude say what it needs
 in its reply instead. A nudge the app has not taken within five seconds is
 taken back, so it does not turn up later after the agent has already asked in

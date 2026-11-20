@@ -12,7 +12,8 @@ import NotifyCore
 //   ghostty-notify-agent --worker                    captured context on stdin
 //   ghostty-notify-agent --resident-pid              read-only installer preflight
 //   ghostty-notify-agent --test                      one notification via the resident
-//   ghostty-notify-agent --nudge <message>           call the user back to this Claude session
+//   ghostty-notify-agent --nudge [--no-return] <message>  call the user back to this Claude session
+//   ghostty-notify-agent --nudge-done                take that nudge back once it is answered
 //   ghostty-notify-agent --where <tab-id>            where a jump to that tab would go
 //   ghostty-notify-agent --jump-waiting              go to the newest waiting session
 
@@ -109,8 +110,17 @@ if arguments.count >= 2, arguments[1] == "--nudge" {
     Task { @MainActor in
         exit(
             await Nudge.run(
-                words: Array(arguments.dropFirst(2)), environment: environment, paths: paths))
+                arguments: Array(arguments.dropFirst(2)), environment: environment, paths: paths))
     }
+    CFRunLoopRun()
+}
+if arguments.count == 2, arguments[1] == "--nudge-done" {
+    // Bounded like --nudge, whose five-second wait for the agent it shares.
+    DispatchQueue.global().asyncAfter(deadline: .now() + 20) {
+        FileHandle.standardError.write(Data("ghostty-notify: --nudge-done timed out\n".utf8))
+        _exit(1)
+    }
+    Task { @MainActor in exit(await Nudge.done(environment: environment, paths: paths)) }
     CFRunLoopRun()
 }
 if arguments.count == 3, arguments[1] == "--where" {

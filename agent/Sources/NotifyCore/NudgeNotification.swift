@@ -19,6 +19,13 @@ public enum NudgeNotification {
     /// a nudge says one thing.
     public static let maximumLength = 240
 
+    /// The longest a `--no-return` nudge stays. The user does its step
+    /// somewhere else, a phone usually, and never comes back to the tab to
+    /// clear it; the coding agent takes it back with `--nudge-done` once the
+    /// step lands, and this is for when it never does. Five minutes is about
+    /// how long a coding agent should wait on one step before moving on.
+    public static let noReturnSeconds: Double = 300
+
     public struct Session: Equatable, Sendable {
         public var id: String
         public var source: HookSource
@@ -69,7 +76,7 @@ public enum NudgeNotification {
     public static func request(
         sessionID: String, source: HookSource = .claude, message: String, title: String,
         project: String, tabID: String?, roundID: String?, settings: [String: String],
-        bundle: Bundle = .main
+        noReturn: Bool = false, bundle: Bundle = .main
     ) -> NotifyRequest {
         let options = HookOptions(settings)
         let app =
@@ -83,8 +90,19 @@ public enum NudgeNotification {
             // Silent by default: a nudge comes while the user is usually still
             // around, and a sound is kept for long runs they walked away from.
             sound: options.nudgeSound ? "Ping" : nil, tabID: tabID?.isEmpty == false ? tabID : nil,
-            timeout: options.timeout, clearOnFocus: options.clearOnFocus,
-            roundID: roundID?.isEmpty == false ? roundID : nil, source: source)
+            timeout: noReturn
+                ? min(options.timeout ?? noReturnSeconds, noReturnSeconds)
+                : options.timeout,
+            clearOnFocus: options.clearOnFocus,
+            roundID: roundID?.isEmpty == false ? roundID : nil, source: source,
+            nudge: true, noReturn: noReturn)
+    }
+
+    /// `--nudge [--no-return] <message>`: the flag only in front, so a message
+    /// that happens to mention it is still said in full.
+    public static func parse(_ arguments: [String]) -> (noReturn: Bool, words: [String]) {
+        guard arguments.first == "--no-return" else { return (false, arguments) }
+        return (true, Array(arguments.dropFirst()))
     }
 
     public enum Problem: Equatable, Sendable {
@@ -99,6 +117,13 @@ public enum NudgeNotification {
         /// Like `.agent(.notCollected)`, from the queue a sandboxed CLI can
         /// write to (`AgentPaths.nudgeSpool`), which an older agent never reads.
         case notCollectedFromSandbox
+        /// The running app predates `--no-return` and `--nudge-done`: it
+        /// would drop the request and the CLI could not tell.
+        case outdated
+        /// `--nudge-done` queued, not taken, and taken back: the nudge stays.
+        case doneNotCollected
+        /// `--nudge-done` queued, not taken, and not taken back either.
+        case doneStuck(String)
     }
 
     public static func explain(_ problem: Problem, app: String) -> String {
@@ -132,14 +157,43 @@ public enum NudgeNotification {
                 is read only by \(AgentConstants.displayName) 0.9.0 or later: update the \
                 app if it is older.
                 """
+        case .doneNotCollected:
+            return """
+                The agent did not pick up --nudge-done within five seconds, so the request was \
+                taken back. The nudge, if the session shows one, is still on screen; a \
+                --no-return nudge goes by itself within five minutes.
+                Its log may say why: ~/.claude/notifications/ghostty-agent/agent.log
+                """
+        case .doneStuck(let reason):
+            return """
+                The agent did not pick up --nudge-done within five seconds, and it could not \
+                be taken back (\(reason)). The agent may still act on it later, taking back \
+                whatever nudge this session shows then.
+                Its log may say why: ~/.claude/notifications/ghostty-agent/agent.log
+                """
+        case .outdated:
+            return """
+                The running \(AgentConstants.displayName) is older than this command and does \
+                not know --no-return or --nudge-done, so nothing was sent.
+                Quit it from the menu bar and open it again, or run the installer again.
+                """
         }
     }
 
-    public static let usage = "usage: ghostty-notify-agent --nudge <what you need from the user>"
+    public static let usage = """
+        usage: ghostty-notify-agent --nudge [--no-return] <what you need from the user>
+               ghostty-notify-agent --nudge-done
+        """
 
     /// `lookedUp`: the tab was not known, and the agent was asked to find it
     /// by the session's title.
-    public static func sent(tabKnown: Bool, lookedUp: Bool = false) -> String {
+    public static func sent(tabKnown: Bool, lookedUp: Bool = false, noReturn: Bool = false)
+        -> String
+    {
+        if noReturn {
+            return "Sent, without Go to tab. Run --nudge-done once the user has done it; "
+                + "otherwise it goes by itself within five minutes."
+        }
         if tabKnown { return "Sent. Go to tab brings the user back to this session's tab." }
         if lookedUp {
             return "Sent. This session's tab was not known yet, so the app looks for the one tab "

@@ -32,6 +32,9 @@ public struct SessionRecord: Equatable, Sendable {
     /// a timer alone dies with the process: an agent restarted by an upgrade or
     /// a login left every surviving notification without its timeout.
     public var expiresAt: Double?
+    /// The outstanding notification came from `--nudge`, so `--nudge-done`
+    /// may take it back. Any other notification it must leave alone.
+    public var nudge: Bool
 
     public init(
         tabID: String? = nil,
@@ -44,7 +47,8 @@ public struct SessionRecord: Equatable, Sendable {
         postedAt: Double = 0,
         roundID: String? = nil,
         owner: String? = nil,
-        expiresAt: Double? = nil
+        expiresAt: Double? = nil,
+        nudge: Bool = false
     ) {
         self.tabID = tabID
         self.notificationIDs = notificationIDs
@@ -57,6 +61,7 @@ public struct SessionRecord: Equatable, Sendable {
         self.roundID = roundID
         self.owner = owner
         self.expiresAt = expiresAt
+        self.nudge = nudge
     }
 
     /// Drop the notification's text once nothing is on screen for this session.
@@ -74,6 +79,7 @@ public struct SessionRecord: Equatable, Sendable {
         body = ""
         postedAt = 0
         expiresAt = nil
+        nudge = false
     }
 }
 
@@ -144,7 +150,8 @@ public struct SessionState: Equatable, Sendable {
         subtitle: String = "",
         body: String = "",
         now: Double,
-        roundID: String? = nil
+        roundID: String? = nil,
+        nudge: Bool = false
     ) -> String {
         let id = Self.notificationID(sessionID: sessionID)
         var record = sessions[sessionID] ?? SessionRecord()
@@ -158,6 +165,7 @@ public struct SessionState: Equatable, Sendable {
         record.body = body
         record.postedAt = now
         record.roundID = roundID
+        record.nudge = nudge
         // A replacement starts its own clock; the caller sets it.
         record.expiresAt = nil
         sessions[sessionID] = record
@@ -236,6 +244,13 @@ public struct SessionState: Equatable, Sendable {
         record.clearNotice()
         sessions[sessionID] = record
         return ids
+    }
+
+    /// `takeNotifications`, only while what is on screen is a nudge: the
+    /// run's completion notification may have replaced it since.
+    public mutating func takeNudge(sessionID: String) -> [String] {
+        guard sessions[sessionID]?.nudge == true else { return [] }
+        return takeNotifications(sessionID: sessionID)
     }
 
     /// A late prompt from the same generation must not clear its own Stop's

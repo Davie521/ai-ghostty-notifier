@@ -108,6 +108,12 @@ public struct HookTransport: Sendable {
         return DiskRoundJournal.read(paths.root + "/capabilities")
             .split(whereSeparator: \.isNewline).contains("hook-event-v1:\(pid)")
     }
+    /// The resident knows `--nudge --no-return` and `--nudge-done`.
+    public var acceptsNoReturnNudges: Bool {
+        guard let pid = runningPID else { return false }
+        return DiskRoundJournal.read(paths.root + "/capabilities")
+            .split(whereSeparator: \.isNewline).contains("nudge-v2:\(pid)")
+    }
     public var acceptsNativeHooks: Bool {
         guard let pid = runningPID else { return false }
         return acceptsHookEvents

@@ -85,6 +85,9 @@ mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 install -m 755 "$BUILT" "$CONTENTS/MacOS/$BINARY_NAME"
 install -m 644 "$REPO/agent/Resources/Info.plist" "$CONTENTS/Info.plist"
 install -m 644 "$REPO/agent/Resources/native-hook-v1" "$CONTENTS/Resources/native-hook-v1"
+# The ghostty-nudge skill looks for this before using --no-return and
+# --nudge-done: a plugin update can bring the skill without a newer app.
+install -m 644 "$REPO/agent/Resources/nudge-v2" "$CONTENTS/Resources/nudge-v2"
 
 # The translations. macOS chooses among the bundle's .lproj directories from
 # the user's language list, so en.lproj must be there too or a Chinese-only
