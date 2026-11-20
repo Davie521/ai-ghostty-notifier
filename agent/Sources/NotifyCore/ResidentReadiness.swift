@@ -11,7 +11,9 @@ public final class ResidentReadiness {
 
     public func publishCapabilities(pid: Int32) throws {
         guard accepting else { return }
-        try "hook-event-v1:\(pid)\n".write(
+        // clock-id-v1: finish clears only the clock a Stop measured
+        // (RoundJournal.clock), so a Claude Stop may be handed to this app.
+        try "hook-event-v1:\(pid)\nclock-id-v1:\(pid)\n".write(
             toFile: paths.root + "/capabilities", atomically: true, encoding: .utf8)
         try "native-hook-v1:\(pid)\n".write(
             toFile: paths.root + "/native-hook-ready", atomically: true, encoding: .utf8)

@@ -81,8 +81,11 @@ enum NativeHookRuntime {
             }
             let transport = HookTransport(paths: paths)
             let app = HookTransport.application(event: event, home: paths.home)
+            let clockSafe =
+                event.source != .claude || event.kind != .stop || transport.acceptsClockIDs
             if app != nil, transport.acceptsNativeHooks,
-                event.kind == .prompt || (event.options.prefersResident && transport.authorized)
+                event.kind == .prompt
+                    || (event.options.prefersResident && transport.authorized && clockSafe)
             {
                 try transport.queue(.hookEvent(event))
                 return

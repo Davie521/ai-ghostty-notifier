@@ -41,11 +41,9 @@ public enum HookIntake {
             // A background task's report is recognized by its structure: its
             // id must survive the cut (ids are at most 200 characters).
             var keep = 200
-            if source == .claude, HookEvent.isTaskReport(prompt),
-                let close = prompt.range(of: "</task-id>")
-            {
+            if source == .claude, let report = HookEvent.reportBounds(prompt) {
                 let end = prompt.unicodeScalars.distance(
-                    from: prompt.unicodeScalars.startIndex, to: close.upperBound)
+                    from: prompt.unicodeScalars.startIndex, to: report.end)
                 if end <= 1000 { keep = max(keep, end) }
             }
             payload.prompt = String(String.UnicodeScalarView(prompt.unicodeScalars.prefix(keep)))

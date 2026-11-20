@@ -161,6 +161,21 @@ struct NativeHookTests {
         #expect(event.isInjectedPrompt)
     }
 
+    @Test func aSubagentsHandBackKeepsItsIdThroughTheCut() throws {
+        let id = String(repeating: "a", count: 190)
+        let report =
+            "<agent-message from=\"\(id)\">\n[Subagent hand-back] "
+            + String(repeating: "x", count: 300)
+        let json = try JSONSerialization.data(withJSONObject: [
+            "session_id": "abc", "prompt": report, "hook_event_name": "UserPromptSubmit",
+        ])
+        let event = try #require(
+            try parse(
+                String(decoding: json, as: UTF8.self), source: .claude,
+                environment: ["GHOSTTY_NOTIFY_TTY": "/dev/ttys007"]))
+        #expect(event.reportedTask == id)
+    }
+
     @Test(arguments: [HookSource.claude, .codex])
     func onlyAClaudeTaskReportIsKeptPastTheUsualCut(source: HookSource) throws {
         let quoting = String(repeating: "x", count: 300) + "</task-id>"
@@ -253,9 +268,12 @@ struct NativeHookTests {
         try readiness.publishCapabilities(pid: 400)
         try readiness.publishAuthorization("authorized")
         #expect(transport.acceptsNativeHooks && transport.authorized)
+        // This version clears only the clock a Stop measured.
+        #expect(transport.acceptsClockIDs)
         readiness.close()
         #expect(transport.runningPID == 400)
         #expect(!transport.acceptsNativeHooks && !transport.authorized)
+        #expect(!transport.acceptsClockIDs)
         try readiness.publishAuthorization("authorized")
         try readiness.publishCapabilities(pid: 400)
         #expect(!transport.acceptsNativeHooks && !transport.authorized)

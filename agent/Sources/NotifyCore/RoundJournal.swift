@@ -35,20 +35,31 @@ public actor DiskRoundJournal: RoundJournalProviding {
             }
         let claude = event.source == .claude
         let waits = claude && event.options.waitBackground
+        // Every record below is this Claude process's own: one from another
+        // process (a resumed session) is no record at all.
+        let owner = event.owner ?? ""
+        func own<Record: OwnedRecord>(_ record: Record?) -> Record? {
+            record.flatMap { !owner.isEmpty && $0.owner == owner ? $0 : nil }
+        }
+        // The current turn, as its prompt recorded it.
+        let turn = own(record(path(event, "turn")).flatMap(TurnRecord.init))
         // A message sent while a turn runs carries that turn's prompt id: it
         // joins the turn, which keeps its start and its baseline.
         let joinsTurn =
             event.kind == .prompt && waits && !event.isInjectedPrompt
-            && event.payload.promptID.map { record(path(event, "turn")) == $0 } ?? false
-        // The work a paused round waits on reports back: the round goes on,
-        // and keeping its start makes its completion count the wait.
+            && event.payload.promptID.map { $0 == turn?.prompt } ?? false
+        // A report from work the paused round waits on: the round goes on,
+        // and keeping its start makes its completion count the wait. Any
+        // other report, or one pasted by a person, does not.
+        let pause = own(record(path(event, "paused")).flatMap(PauseRecord.init))
         let resumes =
-            event.kind == .prompt && waits && event.isTaskReport && isFile(path(event, "paused"))
+            event.kind == .prompt && waits
+            && event.reportedTask.map { pause?.tasks.contains($0) ?? false } ?? false
         // Another task's report right after a Stop that went out continues the
         // same run: it keeps the round, so that completion, perhaps not yet
         // delivered, stays current rather than being cancelled by it.
         let continuesRun =
-            event.kind == .prompt && waits && event.isTaskReport && !resumes && valid
+            event.kind == .prompt && waits && event.reportedTask != nil && !resumes && valid
             && stoppedRound(event) == old
         // A new round's baseline goes before the round is published: a hook
         // stopped in between leaves none, not the last round's.
@@ -60,9 +71,12 @@ public actor DiskRoundJournal: RoundJournalProviding {
             throw CocoaError(.fileWriteUnknown)
         }
         if event.kind == .prompt {
-            if !(resumes || joinsTurn) { try startRound(event, firstSeen: old.isEmpty) }
+            var logical = resumes ? turn?.round : nil
+            if !(resumes || joinsTurn) { logical = try startRound(event, firstSeen: old.isEmpty) }
             if claude, !joinsTurn {
-                if event.payload.promptID.map({ write($0, path(event, "turn")) }) != true {
+                let next = TurnRecord(
+                    owner: owner, prompt: event.payload.promptID ?? "", round: logical ?? "")
+                if owner.isEmpty || !write(next.text, path(event, "turn")) {
                     discard(path(event, "turn"))
                 }
             }
@@ -77,10 +91,10 @@ public actor DiskRoundJournal: RoundJournalProviding {
             // A tool used under no known turn stands for one that may never
             // reach its Stop. Lost track of the turns, nothing running can be
             // told apart.
-            let turn = event.payload.promptID ?? "?"
+            let used = event.payload.promptID ?? "?"
             if let turns = entries("turns", event) {
-                if !turns.contains(turn),
-                    !write((turns + [turn]).joined(separator: "\n"), path(event, "turns"))
+                if !turns.contains(used),
+                    !write((turns + [used]).joined(separator: "\n"), path(event, "turns"))
                 {
                     forget(event)
                 }
@@ -94,10 +108,11 @@ public actor DiskRoundJournal: RoundJournalProviding {
             // interrupted, and what it left running is not known to be this
             // round's: it may be a server. The round's baseline no longer tells
             // its work apart, for this Stop or any later one of the round.
-            // Two turns are proof enough without this Stop's own id.
-            // The stopping turn, or the one its prompt recorded; with neither,
-            // the turns cannot be matched to it.
-            let stopping = event.payload.promptID ?? record(path(event, "turn"))
+            // Two turns are proof enough without this Stop's own id; without
+            // that id, the one its prompt recorded; with neither, the turns
+            // cannot be matched to it.
+            let stopping =
+                event.payload.promptID ?? turn.map(\.prompt).flatMap { $0.isEmpty ? nil : $0 }
             let interrupted =
                 turns.map { turns in
                     Set(turns).count > 1 || turns.contains("?")
@@ -109,21 +124,29 @@ public actor DiskRoundJournal: RoundJournalProviding {
                 event.payload.backgroundUnidentified != true
             {
                 let earlierPath = path(event, "background-earlier")
+                // The round's baseline: this process's, and the one this round
+                // began with, not one a failed write or removal left behind.
                 var baseline =
-                    interrupted ? nil : record(earlierPath).flatMap(Snapshot.init)
+                    interrupted
+                    ? nil
+                    : own(record(earlierPath).flatMap(Snapshot.init)).flatMap {
+                        !$0.mark.isEmpty && $0.mark == turn?.round ? $0 : nil
+                    }
                 // A kind left out now is the one on record: in the round's
                 // baseline, or in this process's last snapshot.
-                let last = record(path(event, "background")).flatMap(Snapshot.init)
-                    .flatMap { !$0.owner.isEmpty && $0.owner == event.owner ? $0 : nil }
-                let kinds = (last?.kinds ?? [:]).merging(baseline?.kinds ?? [:]) { _, round in round
-                }
+                let kinds = (lastSnapshot(event, owner: owner)?.kinds ?? [:]).merging(
+                    baseline?.kinds ?? [:]
+                ) { _, round in round }
                 let tasks = tasks.map { BackgroundTask(id: $0.id, type: $0.type ?? kinds[$0.id]) }
                 // The next round's baseline, kept even when empty and whether
-                // or not waiting is on, for this process only.
+                // or not waiting is on, for this process only, under a mark
+                // of its own that the record of the latest one must match.
                 let snapshot = Snapshot(
-                    owner: event.owner ?? "",
+                    owner: owner, mark: UUID().uuidString,
                     tasks: tasks.filter(\.mayWakeSession).map { ($0.id, $0.type ?? "") })
-                if !write(snapshot.text, path(event, "background")) {
+                if owner.isEmpty || !write(snapshot.mark, path(event, "background-mark"))
+                    || !write(snapshot.text, path(event, "background"))
+                {
                     discard(path(event, "background"))
                 }
                 var newWork: [BackgroundTask] = []
@@ -144,20 +167,22 @@ public actor DiskRoundJournal: RoundJournalProviding {
                 if !newWork.isEmpty {
                     // Recorded here, under the lock, and not by whoever
                     // consumes the event later: a report that wakes the
-                    // session may come first. After a Stop of this round that
-                    // went out, a new generation, so that Stop, maybe not yet
-                    // consumed, cannot announce the round or clear its start.
-                    // Otherwise the round keeps its id, which its prompt,
-                    // maybe not yet consumed, still needs. Unrecorded, it is
-                    // not held.
+                    // session may come first. It names the work waited on,
+                    // whose reports alone resume the round. After a Stop of
+                    // this round that went out, a new generation, so that
+                    // Stop, maybe not yet consumed, cannot announce the round
+                    // or clear its start. Otherwise the round keeps its id,
+                    // which its prompt, maybe not yet consumed, still needs.
+                    // Unrecorded, it is not held.
+                    let marker = PauseRecord(owner: owner, tasks: newWork.map(\.id)).text
                     if stoppedRound(event).map({ $0 == nil || $0 == event.roundID }) ?? false {
                         let generation = UUID().uuidString
                         if write(generation, path(event, "round")) {
                             event.roundID = generation
-                            paused = write("1", path(event, "paused"))
+                            paused = write(marker, path(event, "paused"))
                         }
                     } else {
-                        paused = write("1", path(event, "paused"))
+                        paused = write(marker, path(event, "paused"))
                     }
                 }
                 if waits { event.awaitingBackground = paused }
@@ -217,35 +242,49 @@ public actor DiskRoundJournal: RoundJournalProviding {
     /// which is not its work. Without a baseline on record from this very
     /// process (a resumed session, one open before this version, a failed
     /// write, a CLI that did not say) the round is never held, and notifies
-    /// as before.
-    private func startRound(_ event: HookEvent, firstSeen: Bool) throws {
+    /// as before. Returns the id this round's baseline carries.
+    private func startRound(_ event: HookEvent, firstSeen: Bool) throws -> String? {
         remove(path(event, "start"))
         if event.source == .codex, !write(Self.clock(at: event.occurredAt), path(event, "start")) {
             throw CocoaError(.fileWriteUnknown)
         }
-        guard event.source == .claude else { return }
+        guard event.source == .claude else { return nil }
         discard(path(event, "paused"))
         let owner = event.owner ?? ""
+        let last = path(event, "background")
         // A session's first prompt comes before its transcript exists: no
         // work of its own can be running yet. Monitors can (a plugin arms
         // them at start), so all of them count as already running. Only for
         // a session not seen before, and only on a confirmed absence: a
         // transcript gone later, or one that cannot be looked at, says
         // nothing about what runs.
-        let last = path(event, "background")
         if firstSeen, !owner.isEmpty, let transcript = event.payload.transcriptPath,
-            Self.confirmedAbsent(transcript),
-            !write(Snapshot(owner: owner, tasks: [("*", "monitor")]).text, last)
+            Self.confirmedAbsent(transcript)
         {
-            discard(last)
+            let seed = Snapshot(owner: owner, mark: UUID().uuidString, tasks: [("*", "monitor")])
+            if !write(seed.mark, path(event, "background-mark")) || !write(seed.text, last) {
+                discard(last)
+            }
         }
+        let round = UUID().uuidString
         let baseline = path(event, "background-earlier")
-        if let snapshot = record(last).flatMap(Snapshot.init), !owner.isEmpty,
-            snapshot.owner == owner, write(snapshot.text, baseline)
+        if let snapshot = lastSnapshot(event, owner: owner),
+            write(Snapshot(owner: owner, mark: round, tasks: snapshot.tasks).text, baseline)
         {
-            return
+            return round
         }
         discard(baseline)
+        return round
+    }
+
+    /// This process's latest snapshot: the one the record of the latest
+    /// names, not one a failed write or removal left behind.
+    private func lastSnapshot(_ event: HookEvent, owner: String) -> Snapshot? {
+        guard !owner.isEmpty, let mark = record(path(event, "background-mark")), !mark.isEmpty,
+            let snapshot = record(path(event, "background")).flatMap(Snapshot.init),
+            snapshot.owner == owner, snapshot.mark == mark
+        else { return nil }
+        return snapshot
     }
 
     /// The round whose last Stop went out: none when there is no record, and
@@ -420,7 +459,8 @@ public actor DiskRoundJournal: RoundJournalProviding {
         // The background-wait records are only ever written to the session
         // directory, which may not be the only thing in the rate directory.
         let sessionOnly: Set<String> = [
-            "background", "background-earlier", "paused", "turns", "stopped", "turn",
+            "background", "background-earlier", "background-mark", "paused", "turns", "stopped",
+            "turn",
         ]
         for directory in Set([event.sessionDirectory, event.rateDirectory]) {
             let stamp = directory + "/.pruned"
@@ -462,22 +502,30 @@ public actor DiskRoundJournal: RoundJournalProviding {
     }
 }
 
+/// A record that belongs to the Claude process that wrote it.
+protocol OwnedRecord { var owner: String { get } }
+
 /// What ran when a Claude round began or a Stop came: the process it was seen
-/// by, then one `id<TAB>type` line per task that may wake the session. An id
-/// of `*` stands for every task of its type.
-struct Snapshot: Equatable {
+/// by and a mark of its own, then one `id<TAB>type` line per task that may
+/// wake the session. An id of `*` stands for every task of its type.
+struct Snapshot: Equatable, OwnedRecord {
     var owner: String
+    var mark: String
     var tasks: [(id: String, type: String)]
 
-    init(owner: String, tasks: [(id: String, type: String)]) {
+    init(owner: String, mark: String = "", tasks: [(id: String, type: String)]) {
         self.owner = owner
+        self.mark = mark
         self.tasks = tasks
     }
 
     init?(_ text: String) {
         var lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-        guard let first = lines.first, first.hasPrefix("owner\t") else { return nil }
-        owner = String(first.dropFirst("owner\t".count))
+        guard let first = lines.first else { return nil }
+        let head = first.split(separator: "\t", omittingEmptySubsequences: false)
+        guard (2...3).contains(head.count), head[0] == "owner" else { return nil }
+        owner = String(head[1])
+        mark = head.count == 3 ? String(head[2]) : ""
         lines.removeFirst()
         var tasks: [(id: String, type: String)] = []
         for line in lines where !line.isEmpty {
@@ -489,7 +537,8 @@ struct Snapshot: Equatable {
     }
 
     var text: String {
-        (["owner\t" + owner] + tasks.map { $0.id + "\t" + $0.type }).joined(separator: "\n")
+        (["owner\t" + owner + "\t" + mark] + tasks.map { $0.id + "\t" + $0.type })
+            .joined(separator: "\n")
     }
 
     static func == (lhs: Snapshot, rhs: Snapshot) -> Bool { lhs.text == rhs.text }
@@ -531,4 +580,53 @@ struct Snapshot: Equatable {
         }
         return (new, excused)
     }
+}
+
+/// The turn a Claude prompt began: the process, the prompt's id, and the id
+/// of the round's baseline, so a baseline left over from another round is
+/// told apart.
+struct TurnRecord: OwnedRecord {
+    var owner: String
+    var prompt: String
+    var round: String
+
+    init(owner: String, prompt: String, round: String) {
+        self.owner = owner
+        self.prompt = prompt
+        self.round = round
+    }
+
+    init?(_ text: String) {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        guard lines.count == 3, lines[0].hasPrefix("owner\t"), lines[1].hasPrefix("prompt\t"),
+            lines[2].hasPrefix("round\t")
+        else { return nil }
+        owner = String(lines[0].dropFirst(6))
+        prompt = String(lines[1].dropFirst(7))
+        round = String(lines[2].dropFirst(6))
+    }
+
+    var text: String { "owner\t\(owner)\nprompt\t\(prompt)\nround\t\(round)" }
+}
+
+/// A round held on background work: the process, then the ids of the work
+/// whose reports resume it.
+struct PauseRecord: OwnedRecord {
+    var owner: String
+    var tasks: [String]
+
+    init(owner: String, tasks: [String]) {
+        self.owner = owner
+        self.tasks = tasks
+    }
+
+    init?(_ text: String) {
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        guard let first = lines.first, first.hasPrefix("owner\t") else { return nil }
+        owner = String(first.dropFirst(6))
+        lines.removeFirst()
+        tasks = lines.filter { !$0.isEmpty }.map(String.init)
+    }
+
+    var text: String { (["owner\t" + owner] + tasks).joined(separator: "\n") }
 }

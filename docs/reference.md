@@ -217,9 +217,11 @@ notification. Permission/input prompts are silent unless
 A Claude turn that ends while background work it started is still running (a
 command sent to the background, a background subagent, a workflow, a monitor)
 is paused, not finished: Claude wakes the session when that work ends. Such a
-stop does not notify. The report that wakes the session continues the same
-run, so when the session is really done the notification counts the whole
-wait, from the first tool call after your prompt. A message you send while
+stop does not notify. The report that wakes the session (a
+`<task-notification>`, or a subagent's `<agent-message>` hand-back) continues
+the same run, if it comes from the work the round is waiting on and from the
+same Claude process, so when the session is really done the notification
+counts the whole wait, from the first tool call after your prompt. A message you send while
 the turn is running joins that run too. Work still running from before your
 last prompt, such as a dev server, does not count, and neither do Claude's own
 housekeeping tasks, which do not wake the session; a turn that itself leaves a
@@ -232,6 +234,9 @@ at its start is on record, so whenever that is not known it notifies as
 before: after a turn you interrupted, in the first round of a session that was
 resumed or already open when this version was installed, and with an older
 Claude Code that does not say what is running.
+A Claude stop goes to the resident app only if it advertises `clock-id-v1`;
+an older one would clear the clock of a turn the round went on with, so a
+worker of the hook's own version takes the stop instead.
 `GHOSTTY_NOTIFY_WAIT_BACKGROUND=0` turns this off.
 
 <a id="when-claude-needs-you"></a>

@@ -23,7 +23,10 @@ latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-n
   A paused stop never leaves the hook, so an app older than the hook cannot
   announce it. Each round's clock now has an id of its own, so a completion
   delivered late cannot clear the clock of a turn begun after it, even in
-  the same second.
+  the same second, and a Claude stop goes to the app only if it advertises
+  `clock-id-v1`. Only a report from the awaited work (a
+  `<task-notification>` or a subagent's `<agent-message>` hand-back), in the
+  same Claude process, resumes a held round.
   `GHOSTTY_NOTIFY_WAIT_BACKGROUND=0` restores the old behavior.
 
 ## 0.11.3 — 2026-11-15

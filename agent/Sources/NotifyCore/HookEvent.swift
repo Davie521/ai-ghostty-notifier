@@ -191,23 +191,46 @@ public struct HookEvent: Codable, Equatable, Sendable {
         switch payload.promptSource {
         case "system", "loop_wakeup", "schedule_wakeup", "poll_event": return true
         case "user", "sdk": return false
-        default: return Self.isTaskReport(payload.prompt ?? "")
+        default: return Self.reportedTask(payload.prompt ?? "") != nil
         }
     }
 
-    /// An injected prompt that is a background task reporting back, the one
-    /// kind that resumes a round paused on it. A scheduled job is not one.
-    public var isTaskReport: Bool {
-        isInjectedPrompt && Self.isTaskReport(payload.prompt ?? "")
+    /// The background task an injected prompt reports on: the one kind of
+    /// prompt that resumes a round paused on that task. A scheduled job is
+    /// not one.
+    public var reportedTask: String? {
+        isInjectedPrompt ? Self.reportedTask(payload.prompt ?? "") : nil
     }
 
-    /// The report's own structure, not just its first word: a person may well
-    /// begin a message with the tag.
-    static func isTaskReport(_ prompt: String) -> Bool {
+    /// Which task a report is from, read from its own structure, not just its
+    /// first word (a person may well begin a message with the tag). Recorded
+    /// on the CLI: a command, monitor or workflow reports in a
+    /// `<task-notification>` with its `<task-id>`; a subagent hands back in an
+    /// `<agent-message from="…">`. Either id is the one in `background_tasks`.
+    static func reportedTask(_ prompt: String) -> String? { reportBounds(prompt)?.id }
+
+    /// The id and where it ends in `prompt`.
+    static func reportBounds(_ prompt: String) -> (id: String, end: String.Index)? {
         let text = prompt.drop(while: \.isWhitespace)
-        guard text.hasPrefix("<task-notification>") else { return false }
-        let report = text.dropFirst("<task-notification>".count).drop(while: \.isWhitespace)
-        return report.hasPrefix("<task-id>") && report.contains("</task-id>")
+        let notification = "<task-notification>"
+        let agent = "<agent-message from=\""
+        var body: Substring
+        var close: String
+        if text.hasPrefix(notification) {
+            let rest = text.dropFirst(notification.count).drop(while: \.isWhitespace)
+            guard rest.hasPrefix("<task-id>") else { return nil }
+            body = rest.dropFirst("<task-id>".count)
+            close = "</task-id>"
+        } else if text.hasPrefix(agent) {
+            body = text.dropFirst(agent.count)
+            close = "\">"
+        } else {
+            return nil
+        }
+        guard let end = body.range(of: close),
+            let id = BackgroundTask.usable(String(body[..<end.lowerBound]))
+        else { return nil }
+        return (id, end.upperBound)
     }
 
     enum CodingKeys: String, CodingKey {
