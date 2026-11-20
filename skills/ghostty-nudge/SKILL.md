@@ -8,7 +8,7 @@ description: Call the user back to this session with a macOS notification whose 
 Run this once, with one line saying what you need from them:
 
 ```bash
-"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge "Type the 6-digit code from the bank's SMS here to finish the login"
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge "Pick which of the two migrations to run first"
 ```
 
 - **Lead with the action**, in the user's language, under about 100
@@ -35,7 +35,17 @@ Run this once, with one line saying what you need from them:
 Some steps the user does somewhere else and is done: slide a captcha, Face ID
 or a tap to confirm on their phone, scan a code with it. They never come back
 to the tab for those, so a Go to tab button is no use and the nudge would sit
-on screen. Add `--no-return` in front of the message:
+on screen.
+
+First check that the app is new enough; a plugin update can bring this skill
+without it:
+
+```bash
+test -f "$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/Resources/nudge-v2"
+```
+
+If that fails, nudge as above, without `--no-return`, and skip `--nudge-done`.
+Otherwise add `--no-return` in front of the message:
 
 ```bash
 "$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge --no-return "Slide the captcha in Taobao on the iPhone"

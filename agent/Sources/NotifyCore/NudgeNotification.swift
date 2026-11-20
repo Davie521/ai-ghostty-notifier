@@ -120,6 +120,8 @@ public enum NudgeNotification {
         /// The running app predates `--no-return` and `--nudge-done`: it
         /// would drop the request and the CLI could not tell.
         case outdated
+        /// `--nudge-done` queued, not taken, and not taken back either.
+        case doneStuck(String)
     }
 
     public static func explain(_ problem: Problem, app: String) -> String {
@@ -152,6 +154,13 @@ public enum NudgeNotification {
                 A sandbox kept it out of the usual queue, and the queue it went to instead \
                 is read only by \(AgentConstants.displayName) 0.9.0 or later: update the \
                 app if it is older.
+                """
+        case .doneStuck(let reason):
+            return """
+                The agent did not pick up --nudge-done within five seconds, and it could not \
+                be taken back (\(reason)). The agent may still act on it later, taking back \
+                whatever nudge this session shows then.
+                Its log may say why: ~/.claude/notifications/ghostty-agent/agent.log
                 """
         case .outdated:
             return """

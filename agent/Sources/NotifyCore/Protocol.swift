@@ -195,6 +195,14 @@ public enum RequestCodec {
                 clearOnFocus = !["0", "false", "no", "off"].contains(text.lowercased())
             }
 
+            // A no-return nudge has no button and nobody comes back to clear
+            // it, so whoever queued it, it is a nudge and it runs out.
+            let noReturn = object["no_return"] as? Bool ?? false
+            if noReturn {
+                timeout = min(
+                    timeout ?? NudgeNotification.noReturnSeconds,
+                    NudgeNotification.noReturnSeconds)
+            }
             return .notify(
                 NotifyRequest(
                     sessionID: try session(),
@@ -209,8 +217,8 @@ public enum RequestCodec {
                     source: try source(),
                     owner: optional("owner"),
                     tabTitle: optional("tab_title"),
-                    nudge: object["nudge"] as? Bool ?? false,
-                    noReturn: object["no_return"] as? Bool ?? false
+                    nudge: noReturn || object["nudge"] as? Bool ?? false,
+                    noReturn: noReturn
                 )
             )
         case "dismiss":

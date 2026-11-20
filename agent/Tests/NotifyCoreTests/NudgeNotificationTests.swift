@@ -211,6 +211,25 @@ import Testing
         #expect(try RequestCodec.decode(RequestCodec.encode(.notify(plain))) == .notify(plain))
     }
 
+    /// Whoever queued it, a no-return nudge is a nudge and runs out.
+    @Test func theAgentHoldsANoReturnNudgeToItsRules() throws {
+        func decoded(_ extra: String) throws -> NotifyRequest? {
+            let json = #"{"type":"notify","session_id":"\#(Self.session)","title":"t""#
+            guard
+                case .notify(let request) = try RequestCodec.decode(Data((json + extra + "}").utf8))
+            else { return nil }
+            return request
+        }
+        let bare = try decoded(#","no_return":true"#)
+        #expect(bare?.nudge == true)
+        #expect(bare?.timeout == NudgeNotification.noReturnSeconds)
+        #expect(try decoded(#","no_return":true,"timeout":3600"#)?.timeout == 300)
+        #expect(try decoded(#","no_return":true,"timeout":60"#)?.timeout == 60)
+        // Not one: as before.
+        let plain = try decoded(#","timeout":3600"#)
+        #expect(plain?.nudge == false && plain?.noReturn == false && plain?.timeout == 3600)
+    }
+
     @Test func takingANudgeBackSurvivesTheSpool() throws {
         let claude = AgentRequest.dismissNudge(sessionID: Self.session)
         let codex = AgentRequest.dismissNudge(sessionID: Self.thread, source: .codex)

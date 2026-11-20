@@ -223,7 +223,7 @@ needs you part-way through (Face ID on your phone, a verification code, a QR sca
 decision it cannot make for you), it can call you itself:
 
 ```bash
-"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge "Type the code from the bank's SMS here to finish the login"
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge "Pick which of the two migrations to run first"
 ```
 
 The installers put a `ghostty-nudge` skill in `<config>/skills/` for Claude
@@ -260,7 +260,10 @@ If it never does, the nudge goes by itself after five minutes (sooner if
 `GHOSTTY_NOTIFY_TIMEOUT` is shorter). `--nudge-done` takes back only a nudge:
 should the run's completion notification have replaced it already, that one
 stays. Both need an app at least as new as the command; an older one still
-running is reported, not sent to, so restart it after an update.
+running is reported, not sent to, so restart it after an update. The app
+bundle carries `Contents/Resources/nudge-v2` from the version that knows them
+on, and the skill looks for it first, since a plugin update can bring the skill
+before the app.
 
 It finds its session through `CLAUDE_CODE_SESSION_ID` or `CODEX_THREAD_ID`,
 which Claude Code and Codex set for the commands they run (with both set, as

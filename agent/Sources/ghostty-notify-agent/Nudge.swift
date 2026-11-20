@@ -149,7 +149,9 @@ enum Nudge {
                         sandboxed ? .notCollectedFromSandbox : .agent(.notCollected), app: app))
                 return false
             case .stuck(let reason):
-                SelfTest.fail(NudgeNotification.explain(.stuck(reason), app: app))
+                let problem: NudgeNotification.Problem =
+                    if case .dismissNudge = request { .doneStuck(reason) } else { .stuck(reason) }
+                SelfTest.fail(NudgeNotification.explain(problem, app: app))
                 return false
             case .taken: break  // The agent took it after all.
             }

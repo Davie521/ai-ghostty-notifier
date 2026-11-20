@@ -346,6 +346,8 @@ nudge_queue() {
 nudge_spool_drained() {
     [[ "$(find "$NUDGES" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')" == "0" ]]
 }
+check "the bundle carries the marker the skill checks before --no-return" \
+    test -f "$APP/Contents/Resources/nudge-v2"
 check "the agent prepares the nudge spool, private to the user" \
     test "$(stat -f %Lp "$NUDGES" 2>/dev/null)" = "700"
 check "and says where it is, for a CLI that may not ask macOS" \
@@ -365,8 +367,11 @@ check "taking back what is not a nudge leaves it" \
     wait_for 10 log_has "nudge for $NUDGE_SID already gone"
 check "on screen" test "$(state_outstanding "$NUDGE_SID")" = "claude-$NUDGE_SID"
 nudge_queue "$(jq -nc --arg s "$NUDGE_SID" \
-    '{type:"notify",session_id:$s,title:"nudge",nudge:true,no_return:true}')"
-check "a nudge is remembered as one" wait_for 10 state_nudge "$NUDGE_SID"
+    '{type:"notify",session_id:$s,title:"nudge",no_return:true}')"
+check "a no-return nudge is remembered as a nudge" wait_for 10 state_nudge "$NUDGE_SID"
+check "and runs out within five minutes even when queued without a timeout" test \
+    "$(jq -r --arg s "$NUDGE_SID" \
+        '.sessions[$s] | .expiresAt - .postedAt | . > 299 and . < 301' "$STATE")" = true
 nudge_queue "$(jq -nc --arg s "$NUDGE_SID" '{type:"dismiss_nudge",session_id:$s}')"
 check "and taken back from the nudge spool" wait_for 10 state_is "$NUDGE_SID" ""
 nudge_queue "$(jq -nc --arg s "$NUDGE_SID" '{type:"notify",session_id:$s,title:"nudge"}')"

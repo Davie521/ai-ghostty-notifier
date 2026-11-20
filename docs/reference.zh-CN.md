@@ -187,7 +187,7 @@ hook 会读取完 stdin、写明诊断并返回成功，避免阻塞 CLI，但�
 报验证码、扫二维码、替它拍板）时，可以自己叫你：
 
 ```bash
-"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge "在这里输入银行短信里的验证码，完成登录"
+"$HOME/Library/Application Support/claude-ghostty-notify/ClaudeGhosttyNotify.app/Contents/MacOS/ghostty-notify-agent" --nudge "两个数据库迁移先跑哪个，请你定"
 ```
 
 安装器会放一个 `ghostty-nudge` skill：Claude Code 的放在 `<config>/skills/`，Codex 的放在
@@ -214,7 +214,8 @@ hook 会读取完 stdin、写明诊断并返回成功，避免阻塞 CLI，但�
 
 一直没撤的话，五分钟后自己消失（`GHOSTTY_NOTIFY_TIMEOUT` 更短就按它）。`--nudge-done`
 只撤「叫你」通知：要是这一轮跑完的通知已经替换了它，那条会留着。这两个都要求正在运行的 App
-不比命令旧；还在跑的旧版 App 会直接报错、不发给它，所以更新后要重开一次。
+不比命令旧；还在跑的旧版 App 会直接报错、不发给它，所以更新后要重开一次。从支持它们的版本起，App 包里带着
+`Contents/Resources/nudge-v2`，skill 会先查它：插件更新可能先把 skill 带来，App 还是旧的。
 
 它靠 Claude Code 和 Codex 给自己跑的命令设置的 `CLAUDE_CODE_SESSION_ID` 或 `CODEX_THREAD_ID`
 认出会话（两个都有时，比如在 Claude Code 里起的 Codex，以离命令最近的那个 CLI 为准），靠这个
