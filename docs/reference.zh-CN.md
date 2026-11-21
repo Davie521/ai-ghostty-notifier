@@ -328,8 +328,9 @@ Codex 的 `config.json` 只贡献 `GHOSTTY_NOTIFY_*` 键；null 值忽略，
   查询绑定标签页；绑定会缓存，并在所属 CLI 或 Ghostty 进程变化后失效。
 - Claude 标题优先使用 hook 的 `session_title`，其次是 transcript 中最后一个
   自定义标题，再其次是 AI 标题。Codex 优先用线程名称，否则用第一句提问。
-- Claude 从提问后的第一次工具调用计时；Codex 从提问开始计时，包含推理和托管工具
-  的耗时。识别出的 Codex 自动续跑边界不通知，也不清零计时。
+- Claude 从提问后的第一次工具调用计时；任务报告接着被压住的那一轮时、或者你在这一轮
+  跑到一半时又发了话，都不重新计时。Codex 从提问开始计时，包含推理和托管工具的耗时。
+  识别出的 Codex 自动续跑边界不通知，也不清零计时。
 - Codex 在 Stop 后绑定标签页，通常先等 1.5 秒，让 TUI 标题动画稳定。
   没有终端 CLI 归属的桌面端和 MCP-server 会话会跳过。
 - 完全没有终端的 Claude 会话同样跳过，比如由服务或脚本拉起的 headless `claude -p`；

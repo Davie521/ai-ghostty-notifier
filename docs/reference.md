@@ -421,9 +421,11 @@ What the notification is able to say, and how it finds the tab:
 - Claude titles prefer the hook's `session_title`, then the transcript's latest
   custom title, then its latest AI title. Codex prefers its stored thread name,
   then the session's first prompt.
-- Claude timing starts at the first tool call after a prompt. Codex timing starts
-  at the prompt, including reasoning and hosted-tool time. Recognized Codex
-  rollout continuations do not notify or reset the timer.
+- Claude timing starts at the first tool call after a prompt. A report that
+  resumes a round held on background work, or a message you send while the
+  turn is running, does not restart it. Codex timing starts at the prompt,
+  including reasoning and hosted-tool time. Recognized Codex rollout
+  continuations do not notify or reset the timer.
 - Codex binds after Stop, normally allowing 1.5 seconds for its animated TUI title
   to settle. Desktop and MCP-server processes without a terminal CLI owner are
   skipped.
