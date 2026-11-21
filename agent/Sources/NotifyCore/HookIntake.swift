@@ -38,7 +38,15 @@ public enum HookIntake {
         else { return nil }
         if payload.cwd?.isEmpty != false { payload.cwd = cwd }
         if let prompt = payload.prompt {
-            payload.prompt = String(String.UnicodeScalarView(prompt.unicodeScalars.prefix(200)))
+            // A background task's report is recognized by its structure: its
+            // id must survive the cut (ids are at most 200 characters).
+            var keep = 200
+            if source == .claude, let report = HookEvent.reportBounds(prompt) {
+                let end = prompt.unicodeScalars.distance(
+                    from: prompt.unicodeScalars.startIndex, to: report.end)
+                if end <= 1000 { keep = max(keep, end) }
+            }
+            payload.prompt = String(String.UnicodeScalarView(prompt.unicodeScalars.prefix(keep)))
         }
 
         var env = environment

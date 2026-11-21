@@ -3,6 +3,34 @@
 What changed in each release. The one-command installer always fetches the
 latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-notifier/releases).
 
+## Unreleased
+
+### Fixed
+
+- A Claude turn that ends while its own background work is still running (a
+  command sent to the background, a background subagent, a workflow, a
+  monitor) no longer says the task is complete. Claude wakes the session when
+  that work ends; the notification now comes when the session is really done,
+  and counts the whole wait. Before, the stop posted "Finished after …" while
+  the agent was only queueing, and the report that woke the session reset the
+  clock, so the real completion was often too short to notify at all.
+  A message sent while the turn runs joins that run. Background work left
+  running from earlier rounds, such as a dev server, does not hold a round
+  back, nor does Claude's own housekeeping, nor, while a subagent or workflow
+  from before the round may have started them, new commands and monitors;
+  whenever what already ran at a
+  round's start is not on record (after an interrupted turn, in a resumed
+  session's first round, after a failed write) the round notifies as before.
+  A paused stop never leaves the hook, so an app older than the hook cannot
+  announce it. Each round's clock now has an id of its own, so a completion
+  delivered late cannot clear the clock of a turn begun after it, even in
+  the same second, and a Claude stop goes to the app only if it advertises
+  `clock-id-v1`. A report (a `<task-notification>` or a subagent's
+  `<agent-message>` hand-back) arriving while a round is held, in the same
+  Claude process, keeps that round going; only the awaited work's report is
+  crossed off what it waits on.
+  `GHOSTTY_NOTIFY_WAIT_BACKGROUND=0` restores the old behavior.
+
 ## 0.12.1 — 2026-11-21
 
 ### Fixed

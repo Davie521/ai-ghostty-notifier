@@ -109,7 +109,9 @@ public final class HookProcessor {
             log("handled UserPromptSubmit \(event.key) round=\(event.roundID)")
             return
         }
-        let key = event.key + ":" + event.kind.rawValue
+        // A round can carry Stops of more than one clock (another task's
+        // report went on with it): those are different completions.
+        let key = event.key + ":" + event.kind.rawValue + ":" + (event.startToken ?? "")
         if let item = pending[key], item.round == event.roundID { return }
         pending.removeValue(forKey: key)?.task.cancel()
         let token = UUID()
@@ -129,6 +131,13 @@ public final class HookProcessor {
     }
 
     private func perform(_ event: HookEvent) async {
+        if event.source == .claude, event.kind == .stop, event.awaitingBackground == true {
+            // Not finished: Claude wakes the session when that work ends. Not
+            // even expiry may finish it, or the completion loses the wait.
+            // The hook keeps such a Stop to itself; this covers a direct caller.
+            log("waiting on background work \(event.key); kept round start")
+            return
+        }
         guard await valid(event) else {
             await journal.finish(event)
             return

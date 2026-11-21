@@ -13,8 +13,9 @@ public final class ResidentReadiness {
         guard accepting else { return }
         // `nudge-v2`: takes `--nudge --no-return` and `--nudge-done`. An older
         // resident drops the request they send, and a newer CLI must not report
-        // that as done.
-        try "hook-event-v1:\(pid)\nnudge-v2:\(pid)\n".write(
+        // that as done. `clock-id-v1`: finish clears only the clock a Stop
+        // measured (RoundJournal.clock), so a Claude Stop may be handed to it.
+        try "hook-event-v1:\(pid)\nnudge-v2:\(pid)\nclock-id-v1:\(pid)\n".write(
             toFile: paths.root + "/capabilities", atomically: true, encoding: .utf8)
         try "native-hook-v1:\(pid)\n".write(
             toFile: paths.root + "/native-hook-ready", atomically: true, encoding: .utf8)

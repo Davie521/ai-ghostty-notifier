@@ -96,6 +96,28 @@ private actor ContentGate: SessionContentProviding {
     }
 }
 
+/// Holds every title lookup until released, counting them.
+private actor HoldingGate: SessionContentProviding {
+    var entered = 0
+    var waiting: [CheckedContinuation<String, Never>] = []
+    func title(for event: HookEvent) async -> String {
+        entered += 1
+        return await withCheckedContinuation { waiting.append($0) }
+    }
+    func isContinuing(_ event: HookEvent) -> Bool { false }
+    func releaseAll() {
+        for item in waiting { item.resume(returning: "title") }
+        waiting.removeAll()
+    }
+    func waitUntil(_ count: Int) async throws {
+        for _ in 0..<1000 {
+            if entered >= count { return }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        throw CocoaError(.executableRuntimeMismatch)
+    }
+}
+
 private actor BindingSpy: TerminalBindingProviding {
     var resolved = 0
     func existing(_ event: HookEvent) -> String? { "tab-1" }
@@ -238,6 +260,26 @@ struct HookProcessorTests {
         #expect(await journal.claims == 1)
     }
 
+    @Test func stopsOfTwoClocksInOneRoundAreBothCompletions() async throws {
+        let gate = HoldingGate()
+        var notices: [NotifyRequest] = []
+        let processor = HookProcessor(
+            journal: JournalSpy(), content: gate, binding: BindingSpy(), clock: FixedClock(),
+            onPrompt: { _, _ in }, onNotify: { _, notice in notices.append(notice) })
+        var first = sampleEvent()
+        first.startToken = "clock-a"
+        var second = sampleEvent()
+        second.startToken = "clock-b"
+        let one = processor.receive(first)
+        try await gate.waitUntil(1)
+        let two = processor.receive(second)
+        try await gate.waitUntil(2)
+        await gate.releaseAll()
+        await one.value
+        await two.value
+        #expect(notices.count == 2)
+    }
+
     @Test func continuationKeepsClockAndSkipsBinding() async {
         let journal = JournalSpy()
         let binding = BindingSpy()
@@ -251,6 +293,43 @@ struct HookProcessorTests {
         #expect(await journal.finished.isEmpty)
         #expect(await journal.claims == 0)
         #expect(await binding.resolved == 0)
+    }
+
+    @Test func aStopWaitingOnBackgroundWorkKeepsTheRoundOpen() async {
+        let journal = JournalSpy()
+        let binding = BindingSpy()
+        let content = ContentGate()
+        var notices: [NotifyRequest] = []
+        var logged: [String] = []
+        let processor = HookProcessor(
+            journal: journal, content: content, binding: binding, clock: FixedClock(),
+            onPrompt: { _, _ in }, onNotify: { _, notice in notices.append(notice) },
+            log: { logged.append($0) })
+        var event = sampleEvent()
+        event.awaitingBackground = true
+        await processor.receive(event).value
+        #expect(notices.isEmpty)
+        #expect(await journal.finished.isEmpty)
+        #expect(await journal.claims == 0)
+        #expect(await binding.resolved == 0)
+        #expect(await content.entered == false)
+        #expect(logged.contains { $0.hasPrefix("waiting on background work") })
+        event.awaitingBackground = false
+        await processor.receive(event).value
+        #expect(notices.count == 1)
+        #expect(notices.first?.sound == "Glass")
+    }
+
+    @Test func evenAnExpiredPausedStopKeepsTheRoundOpen() async {
+        let journal = JournalSpy()
+        let processor = HookProcessor(
+            journal: journal, content: ContentGate(), binding: BindingSpy(),
+            clock: FixedClock(instant: 2301), onPrompt: { _, _ in },
+            onNotify: { _, _ in Issue.record("a paused round notified") })
+        var event = sampleEvent()
+        event.awaitingBackground = true
+        await processor.receive(event).value
+        #expect(await journal.finished.isEmpty)
     }
 
     @Test func expiredEventDoesNoTitleOrTerminalWork() async {

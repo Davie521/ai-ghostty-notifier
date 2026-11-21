@@ -20,11 +20,51 @@ public struct HookPayload: Codable, Equatable, Sendable {
     public var prompt: String?
     public var turnID: String?
     public var agentID: String?
+    /// The prompt that started the Claude turn. A message sent while a turn
+    /// runs joins it under the same id; a turn that is interrupted never
+    /// reaches a Stop with its id.
+    public var promptID: String?
+    /// Who wrote a Claude prompt: `user` typed it, `sdk` is headless; `system`,
+    /// `loop_wakeup`, `schedule_wakeup` and `poll_event` were injected.
+    public var promptSource: String?
+    /// The background work still running when a Claude turn stopped. Claude
+    /// wakes the session again when any of it ends.
+    public var backgroundTasks: [BackgroundTask]?
+    /// The list had an entry that may wake the session but could not be
+    /// identified, so it does not tell what runs.
+    public var backgroundUnidentified: Bool?
 
     public init(sessionID: String, kind: HookKind, cwd: String? = nil) {
         self.sessionID = sessionID
         self.hookEventName = kind.rawValue
         self.cwd = cwd
+    }
+
+    /// The new fields are read leniently: they are still rolling out, and a
+    /// shape this version does not expect must not cost the whole event.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sessionID = try container.decode(String.self, forKey: .sessionID)
+        cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
+        hookEventName = try container.decode(String.self, forKey: .hookEventName)
+        transcriptPath = try container.decodeIfPresent(String.self, forKey: .transcriptPath)
+        sessionTitle = try container.decodeIfPresent(String.self, forKey: .sessionTitle)
+        message = try container.decodeIfPresent(String.self, forKey: .message)
+        prompt = try container.decodeIfPresent(String.self, forKey: .prompt)
+        turnID = try container.decodeIfPresent(String.self, forKey: .turnID)
+        agentID = try container.decodeIfPresent(String.self, forKey: .agentID)
+        promptID = (try? container.decodeIfPresent(String.self, forKey: .promptID))
+            .flatMap { $0 }.flatMap(BackgroundTask.usable)
+        promptSource = (try? container.decodeIfPresent(String.self, forKey: .promptSource))
+            .flatMap { $0 }.map { String($0.prefix(40)) }
+        let entries =
+            (try? container.decodeIfPresent(
+                [BackgroundTask.Lenient].self, forKey: .backgroundTasks)).flatMap { $0 }
+        backgroundTasks = entries.map { $0.compactMap(\.task) }
+        let unidentified =
+            entries?.contains(where: \.unidentified) == true
+            || (try? container.decodeIfPresent(Bool.self, forKey: .backgroundUnidentified)) == true
+        backgroundUnidentified = unidentified ? true : nil
     }
 
     enum CodingKeys: String, CodingKey {
@@ -36,6 +76,62 @@ public struct HookPayload: Codable, Equatable, Sendable {
         case message, prompt
         case turnID = "turn_id"
         case agentID = "agent_id"
+        case promptID = "prompt_id"
+        case promptSource = "source"
+        case backgroundTasks = "background_tasks"
+        case backgroundUnidentified = "ghostty_notify_background_unidentified"
+    }
+}
+
+/// One entry of Claude's `background_tasks`. Only what tells entries apart is
+/// kept; descriptions and command lines stay in the CLI. The hook reads the
+/// whole list and drops it once it has decided (`RoundJournal.capture`).
+public struct BackgroundTask: Codable, Equatable, Sendable {
+    /// The kinds that report back by waking the session. The list also
+    /// carries Claude's own housekeeping ("dream", "auto-mode scan", …); a
+    /// kind not known to wake it must not hold a completion that may never
+    /// come, so anything else is ignored, as before this was read at all.
+    public static let wakingTypes: Set<String> = ["shell", "subagent", "monitor", "workflow"]
+    public var id: String
+    public var type: String?
+
+    public init(id: String, type: String? = nil) {
+        self.id = id
+        self.type = type
+    }
+
+    public var wakesSession: Bool { type.map(Self.wakingTypes.contains) ?? false }
+
+    /// Whether it may be work that wakes the session: a known waking kind, or
+    /// one whose kind was not given. A baseline keeps these, so a task seen
+    /// once untyped is not taken for new work when its kind shows up.
+    public var mayWakeSession: Bool { type.map(Self.wakingTypes.contains) ?? true }
+
+    /// An identifier fit for a one-per-line state file.
+    static func usable(_ id: String) -> String? {
+        !id.isEmpty && id.count <= 200 && id != "*"
+            && !id.contains(where: { $0.isNewline || $0 == "\t" }) ? id : nil
+    }
+
+    /// Never throws: an entry without a usable id is dropped, not fatal, and
+    /// marked when it may be one that wakes the session.
+    struct Lenient: Decodable {
+        var task: BackgroundTask?
+        var unidentified = false
+        init(from decoder: Decoder) {
+            let container = try? decoder.container(keyedBy: BackgroundTask.CodingKeys.self)
+            // A blank kind is no kind given.
+            let type = (try? container?.decodeIfPresent(String.self, forKey: .type)).flatMap { $0 }
+                .map { String(NotificationPolicy.clean($0).prefix(40)) }.flatMap {
+                    $0.isEmpty ? nil : $0
+                }
+            guard let id = (try? container?.decode(String.self, forKey: .id)).flatMap(usable)
+            else {
+                unidentified = type.map(BackgroundTask.wakingTypes.contains) ?? true
+                return
+            }
+            task = BackgroundTask(id: id, type: type)
+        }
     }
 }
 
@@ -56,6 +152,12 @@ public struct HookEvent: Codable, Equatable, Sendable {
     public var codexSQLiteHome: String?
     public var homeDirectory: String?
     public var searchPath: String?
+    /// Set by the hook on a Claude Stop that leaves background work of this
+    /// round running: Claude will wake the session again, so the round is
+    /// paused, not finished. Absent from events of older hooks.
+    public var awaitingBackground: Bool?
+    /// The id of the clock `startedAt` was read from (`RoundJournal.clock`).
+    public var startToken: String?
     public var payload: HookPayload
 
     public init(
@@ -83,6 +185,56 @@ public struct HookEvent: Codable, Equatable, Sendable {
     public var project: String {
         URL(fileURLWithPath: payload.cwd ?? "").lastPathComponent
     }
+    /// A Claude prompt nobody typed: a background task reporting back, a
+    /// scheduled wakeup. It resumes the work in progress rather than starting
+    /// new work. Without a known `source` (2.1.329 does not send it), a
+    /// finished task's report is recognizable by its text.
+    public var isInjectedPrompt: Bool {
+        guard source == .claude, kind == .prompt else { return false }
+        switch payload.promptSource {
+        case "system", "loop_wakeup", "schedule_wakeup", "poll_event": return true
+        case "user", "sdk": return false
+        default: return Self.reportedTask(payload.prompt ?? "") != nil
+        }
+    }
+
+    /// The background task an injected prompt reports on: the one kind of
+    /// prompt that resumes a round paused on that task. A scheduled job is
+    /// not one.
+    public var reportedTask: String? {
+        isInjectedPrompt ? Self.reportedTask(payload.prompt ?? "") : nil
+    }
+
+    /// Which task a report is from, read from its own structure, not just its
+    /// first word (a person may well begin a message with the tag). Recorded
+    /// on the CLI: a command, monitor or workflow reports in a
+    /// `<task-notification>` with its `<task-id>`; a subagent hands back in an
+    /// `<agent-message from="…">`. Either id is the one in `background_tasks`.
+    static func reportedTask(_ prompt: String) -> String? { reportBounds(prompt)?.id }
+
+    /// The id and where it ends in `prompt`.
+    static func reportBounds(_ prompt: String) -> (id: String, end: String.Index)? {
+        let text = prompt.drop(while: \.isWhitespace)
+        let notification = "<task-notification>"
+        let agent = "<agent-message from=\""
+        var body: Substring
+        var close: String
+        if text.hasPrefix(notification) {
+            let rest = text.dropFirst(notification.count).drop(while: \.isWhitespace)
+            guard rest.hasPrefix("<task-id>") else { return nil }
+            body = rest.dropFirst("<task-id>".count)
+            close = "</task-id>"
+        } else if text.hasPrefix(agent) {
+            body = text.dropFirst(agent.count)
+            close = "\">"
+        } else {
+            return nil
+        }
+        guard let end = body.range(of: close),
+            let id = BackgroundTask.usable(String(body[..<end.lowerBound]))
+        else { return nil }
+        return (id, end.upperBound)
+    }
 
     enum CodingKeys: String, CodingKey {
         case version, source
@@ -98,6 +250,8 @@ public struct HookEvent: Codable, Equatable, Sendable {
         case codexSQLiteHome = "codex_sqlite_home"
         case homeDirectory = "home_dir"
         case searchPath = "search_path"
+        case awaitingBackground = "awaiting_background"
+        case startToken = "start_token"
         case payload
     }
 
@@ -133,6 +287,7 @@ public struct HookOptions: Equatable, Sendable {
     public var onPrompt: Bool
     public var clearOnFocus: Bool
     public var nudgeSound: Bool
+    public var waitBackground: Bool
     public var settle: Double
     public var backend: String
     public var prefersResident: Bool { ["auto", "agent"].contains(backend) }
@@ -157,6 +312,8 @@ public struct HookOptions: Equatable, Sendable {
             (settings["GHOSTTY_NOTIFY_CLEAR_ON_FOCUS"] ?? "1").lowercased())
         nudgeSound = ["1", "true", "yes", "on"].contains(
             (settings["GHOSTTY_NOTIFY_NUDGE_SOUND"] ?? "0").lowercased())
+        waitBackground = !["0", "false", "no", "off"].contains(
+            (settings["GHOSTTY_NOTIFY_WAIT_BACKGROUND"] ?? "1").lowercased())
         if let text = settings["GHOSTTY_NOTIFY_CODEX_SETTLE"],
             text.range(of: #"^[0-9]+(\.[0-9]+)?$"#, options: .regularExpression) != nil,
             let value = Double(text), value.isFinite

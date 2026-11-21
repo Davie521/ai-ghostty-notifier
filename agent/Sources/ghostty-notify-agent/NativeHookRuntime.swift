@@ -64,6 +64,14 @@ enum NativeHookRuntime {
             let event = try await journal.capture(parsed)
             await journal.prepare(event)
             guard !Task.isCancelled else { return }
+            if event.awaitingBackground == true {
+                // A paused round has nothing to announce, and an app older than
+                // this hook would not know that: it stays here, with its start.
+                AgentLog.append(
+                    "kept paused Stop \(event.key) in the hook; background work still running",
+                    to: paths.log)
+                return
+            }
             if event.kind == .preTool {
                 // Returning early would let Claude redraw while the OSC marker
                 // is outstanding. Always await restoration before exiting.
@@ -73,8 +81,11 @@ enum NativeHookRuntime {
             }
             let transport = HookTransport(paths: paths)
             let app = HookTransport.application(event: event, home: paths.home)
+            let clockSafe =
+                event.source != .claude || event.kind != .stop || transport.acceptsClockIDs
             if app != nil, transport.acceptsNativeHooks,
-                event.kind == .prompt || (event.options.prefersResident && transport.authorized)
+                event.kind == .prompt
+                    || (event.options.prefersResident && transport.authorized && clockSafe)
             {
                 try transport.queue(.hookEvent(event))
                 return

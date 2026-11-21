@@ -142,6 +142,921 @@ struct HookEventTests {
     }
 }
 
+// One at a time: these are many, each all file work, and run abreast they
+// crowd the timing tests of other suites on a small CI machine.
+@Suite("Background work keeps a Claude round open", .serialized)
+struct BackgroundWaitTests {
+    private func payload(_ json: String) throws -> HookPayload {
+        try JSONDecoder().decode(HookPayload.self, from: Data(json.utf8))
+    }
+
+    @Test func backgroundTasksAreReadLenientlyAndKeepOnlyIdentity() throws {
+        let read = try payload(
+            """
+            {"session_id":"abc-123","hook_event_name":"Stop","prompt_id":"p-1","background_tasks":[
+             {"id":"b1","type":"shell","status":"running","description":"lock","command":"x"},
+             {"type":"subagent"},{"id":""},"junk",{"id":"b2"}]}
+            """)
+        #expect(read.promptID == "p-1")
+        #expect(
+            read.backgroundTasks == [
+                BackgroundTask(id: "b1", type: "shell"), BackgroundTask(id: "b2"),
+            ])
+        for shape in ["null", "{}", "\"b1\"", "[[1]]"] {
+            let odd = try payload(
+                #"{"session_id":"abc-123","hook_event_name":"Stop","background_tasks":"#
+                    + shape + "}")
+            #expect(odd.backgroundTasks == nil || odd.backgroundTasks == [])
+        }
+        let wrong = try payload(
+            #"{"session_id":"abc-123","hook_event_name":"UserPromptSubmit","source":7,"prompt_id":5,"prompt":"hi"}"#
+        )
+        #expect(wrong.promptSource == nil)
+        #expect(wrong.promptID == nil)
+        #expect(wrong.prompt == "hi")
+    }
+
+    @Test func newFieldsSurviveTheTripToTheResidentApp() throws {
+        var event = sampleEvent()
+        event.payload.backgroundTasks = [BackgroundTask(id: "b1", type: "shell")]
+        event.awaitingBackground = true
+        #expect(
+            try RequestCodec.decode(RequestCodec.encode(.hookEvent(event))) == .hookEvent(event))
+    }
+
+    @Test(
+        arguments: [
+            ("system", nil, true), ("loop_wakeup", nil, true),
+            ("user", "<task-notification>", false),
+            ("sdk", nil, false), (nil, "  <task-notification>\n<task-id>b1</task-id>", true),
+            (nil, "<task-notification> is the marker I am debugging", false),
+            (nil, "hello", false), ("poll_event", nil, true), ("schedule_wakeup", nil, true),
+            ("future", "hello", false),
+            ("future", "<task-notification><task-id>b1</task-id>", true),
+        ] as [(String?, String?, Bool)])
+    func onlyPromptsNobodyTypedResumeTheRound(source: String?, prompt: String?, injected: Bool) {
+        var event = sampleEvent(kind: .prompt)
+        event.payload.promptSource = source
+        event.payload.prompt = prompt
+        #expect(event.isInjectedPrompt == injected)
+        event.source = .codex
+        #expect(!event.isInjectedPrompt)
+    }
+
+    private func capture(
+        _ sandbox: HookSandbox, _ kind: HookKind, source: String? = nil, turn: String? = nil,
+        prompt: String? = nil, owner: String = "process-1",
+        tasks: [String]? = nil, typed: [BackgroundTask]? = nil, unidentified: Bool = false,
+        settings: [String: String] = [:]
+    ) async throws -> HookEvent {
+        var event = sampleEvent(kind: kind, root: sandbox.root.path)
+        event.settings = settings
+        event.payload.promptSource = source
+        event.payload.promptID = turn
+        event.payload.prompt = prompt
+        event.owner = owner
+        event.payload.transcriptPath = sandbox.transcript
+        event.payload.backgroundTasks =
+            typed ?? tasks?.map { BackgroundTask(id: $0, type: "shell") }
+        event.payload.backgroundUnidentified = unidentified ? true : nil
+        let captured = try await DiskRoundJournal().capture(event)
+        // Claude writes the transcript once a prompt is in.
+        if kind == .prompt { try sandbox.write("transcript.jsonl", "{}\n") }
+        return captured
+    }
+
+    /// A session this version sees from its first prompt.
+    private func fresh() throws -> HookSandbox {
+        let sandbox = try HookSandbox()
+        _ = try sandbox.event()
+        try FileManager.default.removeItem(at: sandbox.root.appendingPathComponent("abc-123.round"))
+        return sandbox
+    }
+
+    /// A new session's first round, started at 1000.
+    private func firstRound() async throws -> HookSandbox {
+        let sandbox = try fresh()
+        _ = try await capture(sandbox, .prompt, source: "user")
+        try sandbox.write("abc-123.start", "1000\n")
+        return sandbox
+    }
+
+    private let report = "<task-notification>\n<task-id>lock</task-id>\n</task-notification>"
+
+    private func started(_ sandbox: HookSandbox) -> String {
+        DiskRoundJournal.read(sandbox.root.path + "/abc-123.start")
+    }
+
+    @Test func aRoundWaitingOnItsOwnTaskKeepsItsStartUntilTheTaskReportsBack() async throws {
+        let sandbox = try await firstRound()
+        let paused = try await capture(sandbox, .stop, tasks: ["lock"])
+        #expect(paused.awaitingBackground == true)
+        #expect(paused.startedAt == 1000)
+        #expect(paused.payload.backgroundTasks == nil)
+        let woken = try await capture(sandbox, .prompt, source: "system", prompt: report)
+        #expect(woken.roundID != paused.roundID)
+        #expect(started(sandbox) == "1000")
+        let done = try await capture(sandbox, .stop, tasks: [])
+        #expect(done.awaitingBackground == false)
+        #expect(done.startedAt == 1000)
+        // An empty record, not none: "nothing runs" is known, not unknown.
+        #expect(FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.background"))
+        let record = DiskRoundJournal.read(sandbox.root.path + "/abc-123.background")
+        #expect(Snapshot(record).map { $0.owner == "process-1" && $0.tasks.isEmpty } == true)
+        #expect(!FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.paused"))
+    }
+
+    @Test func aWakeupAfterAFinishedRoundStartsItsOwnClock() async throws {
+        let sandbox = try await firstRound()
+        // The Stop is not yet drained by the app, so its start is still on disk.
+        #expect(try await capture(sandbox, .stop, tasks: []).awaitingBackground == false)
+        _ = try await capture(sandbox, .prompt, source: "loop_wakeup")
+        #expect(started(sandbox).isEmpty)
+    }
+
+    @Test func workLeftRunningFromEarlierRoundsDoesNotHoldANewRound() async throws {
+        let sandbox = try await firstRound()
+        #expect(try await capture(sandbox, .stop, tasks: ["server"]).awaitingBackground == true)
+        _ = try await capture(sandbox, .prompt, source: "user")
+        #expect(started(sandbox).isEmpty)
+        try sandbox.write("abc-123.start", "1500\n")
+        let next = try await capture(sandbox, .stop, tasks: ["server"])
+        #expect(next.awaitingBackground == false)
+        #expect(next.startedAt == 1500)
+        let more = try await capture(sandbox, .stop, tasks: ["server", "agent"])
+        #expect(more.awaitingBackground == true)
+    }
+
+    @Test func onlyWorkThatWakesTheSessionHoldsTheRound() async throws {
+        let sandbox = try await firstRound()
+        let housekeeping =
+            ["dream", "auto-mode scan", "memory save", "teammate", "MCP task", "code"]
+            .map { BackgroundTask(id: $0, type: $0) }
+        let untyped = BackgroundTask(id: "untyped")
+        #expect(
+            try await capture(sandbox, .stop, typed: housekeeping + [untyped]).awaitingBackground
+                == false)
+        // A later round: in a session's first one, every monitor counts as
+        // already running. (An untyped task still running would excuse the
+        // shells and monitors below, as it may have started them.)
+        _ = try await capture(sandbox, .stop, typed: housekeeping)
+        _ = try await capture(sandbox, .prompt, source: "user")
+        for type in ["shell", "subagent", "monitor", "workflow"] {
+            let waiting = try await capture(
+                sandbox, .stop, typed: housekeeping + [BackgroundTask(id: type, type: type)])
+            #expect(waiting.awaitingBackground == true)
+        }
+    }
+
+    @Test func aNewTaskAfterManyEarlierOnesIsStillSeen() async throws {
+        let sandbox = try await firstRound()
+        let earlier = (0..<200).map { "old-\($0)" }
+        _ = try await capture(sandbox, .stop, tasks: earlier)
+        _ = try await capture(sandbox, .prompt, source: "user")
+        #expect(try await capture(sandbox, .stop, tasks: earlier).awaitingBackground == false)
+        #expect(
+            try await capture(sandbox, .stop, tasks: earlier + ["new"]).awaitingBackground == true)
+    }
+
+    @Test func aMessageSentMidTurnStillWaitsForTheTurnsOwnTask() async throws {
+        let sandbox = try fresh()
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        _ = try await capture(sandbox, .preTool, turn: "turn-a")
+        try sandbox.write("abc-123.start", "1000\n")
+        // Claude fires the prompt hook for it with the running turn's id: the
+        // message joins the turn, which keeps its clock.
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        #expect(started(sandbox) == "1000")
+        _ = try await capture(sandbox, .preTool, turn: "turn-a")
+        let stop = try await capture(sandbox, .stop, turn: "turn-a", tasks: ["lock"])
+        #expect(stop.awaitingBackground == true)
+        #expect(stop.startedAt == 1000)
+    }
+
+    @Test func workLeftByAnInterruptedTurnDoesNotHoldTheNextRound() async throws {
+        let sandbox = try fresh()
+        // Turn A starts a server and is interrupted: no Stop ever names it.
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        _ = try await capture(sandbox, .preTool, turn: "turn-a")
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-b")
+        _ = try await capture(sandbox, .preTool, turn: "turn-b")
+        let unknown = try await capture(sandbox, .stop, turn: "turn-b", tasks: ["server"])
+        #expect(unknown.awaitingBackground == false)
+        // Now the server is on record: the next round tells it apart again.
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-c")
+        _ = try await capture(sandbox, .preTool, turn: "turn-c")
+        let next = try await capture(sandbox, .stop, turn: "turn-c", tasks: ["server", "lock"])
+        #expect(next.awaitingBackground == true)
+    }
+
+    @Test func twoTurnsWithoutAStopShowAnInterruptionEvenWithoutAnID() async throws {
+        let sandbox = try fresh()
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        _ = try await capture(sandbox, .preTool, turn: "turn-a")
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-b")
+        _ = try await capture(sandbox, .preTool, turn: "turn-b")
+        #expect(try await capture(sandbox, .stop, tasks: ["server"]).awaitingBackground == false)
+    }
+
+    @Test func aWakeupAfterAnInterruptionLearnsWhatWasRunning() async throws {
+        let sandbox = try fresh()
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        _ = try await capture(sandbox, .preTool, turn: "turn-a")
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-b")
+        _ = try await capture(sandbox, .preTool, turn: "turn-b")
+        _ = try await capture(sandbox, .stop, turn: "turn-b", tasks: ["server"])
+        // Nothing was paused, so the wakeup starts a round of its own.
+        _ = try await capture(sandbox, .prompt, source: "loop_wakeup", turn: "turn-w")
+        _ = try await capture(sandbox, .preTool, turn: "turn-w")
+        let wake = try await capture(sandbox, .stop, turn: "turn-w", tasks: ["server"])
+        #expect(wake.awaitingBackground == false)
+    }
+
+    @Test func aSessionOlderThanThisVersionNotifiesUntilItsFirstStopIsSeen() async throws {
+        let sandbox = try HookSandbox()
+        _ = try sandbox.event()  // rounds on record, but no Stop seen by this version
+        try sandbox.write("transcript.jsonl", "{}\n")
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        _ = try await capture(sandbox, .preTool, turn: "turn-a")
+        #expect(
+            try await capture(sandbox, .stop, turn: "turn-a", tasks: ["server"]).awaitingBackground
+                == false)
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-b")
+        _ = try await capture(sandbox, .preTool, turn: "turn-b")
+        let next = try await capture(sandbox, .stop, turn: "turn-b", tasks: ["server", "lock"])
+        #expect(next.awaitingBackground == true)
+    }
+
+    @Test func aPauseThatCannotBeRecordedDoesNotHoldTheRound() async throws {
+        let sandbox = try fresh()
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        let blocker = sandbox.root.appendingPathComponent("abc-123.paused")
+        try FileManager.default.createDirectory(at: blocker, withIntermediateDirectories: true)
+        try "keep".write(
+            to: blocker.appendingPathComponent("inside"), atomically: true, encoding: .utf8)
+        let stop = try await capture(sandbox, .stop, turn: "turn-a", tasks: ["lock"])
+        #expect(stop.awaitingBackground == false)
+        // Not a marker, and not ours to delete.
+        _ = try await capture(sandbox, .prompt, source: "system")
+        #expect(started(sandbox).isEmpty)
+        #expect(
+            FileManager.default.fileExists(atPath: blocker.appendingPathComponent("inside").path))
+    }
+
+    @Test func aBaselineThatCannotBeRecordedDoesNotHoldTheRound() async throws {
+        let sandbox = try fresh()
+        try FileManager.default.createDirectory(
+            at: sandbox.root.appendingPathComponent("abc-123.background-earlier"),
+            withIntermediateDirectories: true)
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        let stop = try await capture(sandbox, .stop, turn: "turn-a", tasks: ["server"])
+        #expect(stop.awaitingBackground == false)
+    }
+
+    @Test func anUpgradeMidTurnNotifiesThatTurn() async throws {
+        let sandbox = try HookSandbox()
+        _ = try sandbox.event()  // the older hook saw the prompt: only .round and .start
+        _ = try await capture(sandbox, .preTool, turn: "turn-a")
+        let stop = try await capture(sandbox, .stop, turn: "turn-a", tasks: ["server"])
+        #expect(stop.awaitingBackground == false)
+    }
+
+    @Test func aStopWithTheSettingOffStillRecordsWhatRuns() async throws {
+        let sandbox = try fresh()
+        let off = ["GHOSTTY_NOTIFY_WAIT_BACKGROUND": "0"]
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a", settings: off)
+        _ = try await capture(sandbox, .stop, turn: "turn-a", tasks: ["server"], settings: off)
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-b")
+        let stop = try await capture(sandbox, .stop, turn: "turn-b", tasks: ["server"])
+        #expect(stop.awaitingBackground == false)
+    }
+
+    @Test func aStopThatDoesNotSayWhatRunsLeavesTheNextRoundUnheld() async throws {
+        let sandbox = try fresh()
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        _ = try await capture(sandbox, .stop, turn: "turn-a")
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-b")
+        let stop = try await capture(sandbox, .stop, turn: "turn-b", tasks: ["server"])
+        #expect(stop.awaitingBackground == false)
+    }
+
+    @Test func aStopWithTheSettingOffStillRetiresItsTurn() async throws {
+        let sandbox = try fresh()
+        let off = ["GHOSTTY_NOTIFY_WAIT_BACKGROUND": "0"]
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        _ = try await capture(sandbox, .preTool, turn: "turn-a")
+        _ = try await capture(sandbox, .stop, turn: "turn-a", tasks: ["x"], settings: off)
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-b")
+        _ = try await capture(sandbox, .preTool, turn: "turn-b")
+        let stop = try await capture(sandbox, .stop, turn: "turn-b", tasks: ["lock"])
+        #expect(stop.awaitingBackground == true)
+    }
+
+    @Test func aResumedSessionOrOneOpenBeforeInstallIsNotHeldAtFirst() async throws {
+        let sandbox = try fresh()
+        try sandbox.write("transcript.jsonl", "{}\n")  // history, but none recorded here
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        let stop = try await capture(sandbox, .stop, turn: "turn-a", tasks: ["server"])
+        #expect(stop.awaitingBackground == false)
+    }
+
+    @Test func turnsThatCannotBeRecordedHoldNothing() async throws {
+        let sandbox = try fresh()
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        try FileManager.default.createDirectory(
+            at: sandbox.root.appendingPathComponent("abc-123.turns"),
+            withIntermediateDirectories: true)
+        _ = try await capture(sandbox, .preTool, turn: "turn-a")
+        let stop = try await capture(sandbox, .stop, turn: "turn-a", tasks: ["lock"])
+        #expect(stop.awaitingBackground == false)
+    }
+
+    @Test func unreadableRecordsAreUnknownNotEmpty() async throws {
+        let sandbox = try fresh()
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        try Data([0xFF, 0xFE]).write(
+            to: sandbox.root.appendingPathComponent("abc-123.background-earlier"))
+        #expect(
+            try await capture(sandbox, .stop, turn: "turn-a", tasks: ["server"]).awaitingBackground
+                == false)
+        try Data([0xFF, 0xFE]).write(to: sandbox.root.appendingPathComponent("abc-123.background"))
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-b")
+        #expect(
+            try await capture(sandbox, .stop, turn: "turn-b", tasks: ["server"]).awaitingBackground
+                == false)
+    }
+
+    @Test func anUnidentifiedTaskLeavesWhatRunsUnknown() async throws {
+        let sandbox = try fresh()
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        let first = try await capture(sandbox, .stop, turn: "turn-a", tasks: [], unidentified: true)
+        #expect(first.awaitingBackground == false)
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-b")
+        let next = try await capture(sandbox, .stop, turn: "turn-b", tasks: ["server"])
+        #expect(next.awaitingBackground == false)
+    }
+
+    @Test func onlyAnUnidentifiedEntryThatMayWakeTheSessionCounts() throws {
+        func read(_ list: String) throws -> HookPayload {
+            try JSONDecoder().decode(
+                HookPayload.self,
+                from: Data(
+                    (#"{"session_id":"abc-123","hook_event_name":"Stop","background_tasks":"#
+                        + list + "}").utf8))
+        }
+        #expect(try read(#"[{"type":"shell"}]"#).backgroundUnidentified == true)
+        #expect(try read(#"[{"id":7}]"#).backgroundUnidentified == true)
+        #expect(try read(#"["junk"]"#).backgroundUnidentified == true)
+        #expect(
+            try read(#"[{"type":"dream"},{"id":"b1","type":"shell"}]"#).backgroundUnidentified
+                == nil)
+        var event = sampleEvent()
+        event.payload = try read(#"[{"type":"monitor"}]"#)
+        let trip = try HookEvent.decode(JSONEncoder().encode(event))
+        #expect(trip.payload.backgroundUnidentified == true)
+    }
+
+    @Test func aPauseMakesAnEarlierStopOfTheRoundStale() async throws {
+        let sandbox = try await firstRound()
+        let journal = DiskRoundJournal()
+        // Another Stop hook made Claude go on after this Stop, not yet consumed.
+        let earlier = try await capture(sandbox, .stop, tasks: [])
+        let paused = try await capture(sandbox, .stop, tasks: ["lock"])
+        #expect(paused.awaitingBackground == true)
+        #expect(paused.roundID != earlier.roundID)
+        #expect(!(await journal.isCurrent(earlier)))
+        await journal.finish(earlier)
+        #expect(started(sandbox) == "1000")
+    }
+
+    @Test func aScheduledJobIsNotTheReportAPausedRoundWaitsFor() async throws {
+        let sandbox = try await firstRound()
+        #expect(try await capture(sandbox, .stop, tasks: ["server"]).awaitingBackground == true)
+        _ = try await capture(sandbox, .prompt, source: "schedule_wakeup", prompt: "nightly job")
+        #expect(started(sandbox).isEmpty)
+        #expect(try await capture(sandbox, .stop, tasks: ["server"]).awaitingBackground == false)
+    }
+
+    @Test func aPauseWithoutAnEarlierStopKeepsTheRoundsPrompt() async throws {
+        let sandbox = try fresh()
+        let prompt = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        let stop = try await capture(sandbox, .stop, turn: "turn-a", tasks: ["lock"])
+        #expect(stop.awaitingBackground == true)
+        #expect(stop.roundID == prompt.roundID)
+        #expect(await DiskRoundJournal().isCurrent(prompt))
+    }
+
+    @Test func aTranscriptGoneLaterDoesNotEraseWhatRuns() async throws {
+        let sandbox = try await firstRound()
+        _ = try await capture(sandbox, .stop, tasks: ["server"])
+        try FileManager.default.removeItem(atPath: sandbox.transcript)
+        _ = try await capture(sandbox, .prompt, source: "user")
+        #expect(try await capture(sandbox, .stop, tasks: ["server"]).awaitingBackground == false)
+    }
+
+    @Test func aToolUsedUnderNoKnownTurnHoldsNothing() async throws {
+        let sandbox = try fresh()
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        _ = try await capture(sandbox, .preTool)
+        #expect(
+            try await capture(sandbox, .stop, turn: "turn-a", tasks: ["lock"]).awaitingBackground
+                == false)
+    }
+
+    @Test func anInterruptionCountsForTheRestOfTheRound() async throws {
+        let sandbox = try fresh()
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        _ = try await capture(sandbox, .preTool, turn: "turn-a")
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-b")
+        _ = try await capture(sandbox, .preTool, turn: "turn-b")
+        _ = try await capture(sandbox, .stop, turn: "turn-b", tasks: [])
+        // Another Stop hook made Claude go on, and A's server shows up now.
+        let again = try await capture(sandbox, .stop, turn: "turn-b", tasks: ["server"])
+        #expect(again.awaitingBackground == false)
+    }
+
+    @Test func aTaskSeenWithoutItsKindIsNotNewWhenTheKindShows() async throws {
+        let sandbox = try await firstRound()
+        _ = try await capture(sandbox, .stop, typed: [BackgroundTask(id: "server")])
+        _ = try await capture(sandbox, .prompt, source: "user")
+        #expect(try await capture(sandbox, .stop, tasks: ["server"]).awaitingBackground == false)
+    }
+
+    @Test func aMessageRightAfterTheReportStillJoinsTheResumedRound() async throws {
+        let sandbox = try await firstRound()
+        #expect(try await capture(sandbox, .stop, tasks: ["lock"]).awaitingBackground == true)
+        _ = try await capture(sandbox, .prompt, source: "system", turn: "turn-w", prompt: report)
+        // Sent while Claude reads the report, before it uses any tool.
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-w")
+        #expect(started(sandbox) == "1000")
+        let done = try await capture(sandbox, .stop, turn: "turn-w", tasks: [])
+        #expect(done.startedAt == 1000)
+    }
+
+    @Test func shellsAnEarlierSubagentMayHaveStartedDoNotHoldTheRound() async throws {
+        let sandbox = try await firstRound()
+        let agent = BackgroundTask(id: "agent", type: "subagent")
+        _ = try await capture(sandbox, .stop, typed: [agent])
+        _ = try await capture(sandbox, .prompt, source: "user")
+        let shell = BackgroundTask(id: "sh", type: "shell")
+        #expect(
+            try await capture(sandbox, .stop, typed: [agent, shell]).awaitingBackground == false)
+        let another = BackgroundTask(id: "agent-2", type: "subagent")
+        #expect(
+            try await capture(sandbox, .stop, typed: [agent, shell, another]).awaitingBackground
+                == true)
+    }
+
+    @Test func aResumedProcessDoesNotTrustTheLastOnesRecord() async throws {
+        let sandbox = try await firstRound()
+        _ = try await capture(sandbox, .stop, tasks: [])
+        _ = try await capture(sandbox, .prompt, source: "user", owner: "process-2")
+        #expect(
+            try await capture(sandbox, .stop, owner: "process-2", tasks: ["lock"])
+                .awaitingBackground == false)
+        // Once the new process has stopped, its own record counts.
+        _ = try await capture(sandbox, .prompt, source: "user", owner: "process-2")
+        #expect(
+            try await capture(sandbox, .stop, owner: "process-2", tasks: ["lock", "new"])
+                .awaitingBackground == true)
+    }
+
+    @Test func aFirstRoundCountsEveryMonitorAsAlreadyRunning() async throws {
+        let sandbox = try await firstRound()
+        let monitor = BackgroundTask(id: "plugin-watch", type: "monitor")
+        #expect(try await capture(sandbox, .stop, typed: [monitor]).awaitingBackground == false)
+        #expect(
+            try await capture(
+                sandbox, .stop, typed: [monitor, BackgroundTask(id: "s", type: "shell")]
+            )
+            .awaitingBackground == true)
+    }
+
+    @Test func aTranscriptThatCannotBeLookedAtIsNotAbsent() async throws {
+        let sandbox = try fresh()
+        let locked = sandbox.root.appendingPathComponent("locked")
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: locked.path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o700], ofItemAtPath: locked.path)
+        }
+        #expect(!DiskRoundJournal.confirmedAbsent(locked.appendingPathComponent("t.jsonl").path))
+        #expect(DiskRoundJournal.confirmedAbsent(sandbox.root.appendingPathComponent("no").path))
+    }
+
+    @Test func anInterruptionSurvivesAStopThatSaysNothing() async throws {
+        let sandbox = try fresh()
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        _ = try await capture(sandbox, .preTool, turn: "turn-a")
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-b")
+        _ = try await capture(sandbox, .preTool, turn: "turn-b")
+        _ = try await capture(sandbox, .stop, turn: "turn-b", tasks: [], unidentified: true)
+        let again = try await capture(sandbox, .stop, turn: "turn-b", tasks: ["server"])
+        #expect(again.awaitingBackground == false)
+    }
+
+    @Test func twoHeldStopsKeepTheRoundsPrompt() async throws {
+        let sandbox = try fresh()
+        let prompt = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        #expect(
+            try await capture(sandbox, .stop, turn: "turn-a", tasks: ["a"]).awaitingBackground
+                == true)
+        let second = try await capture(sandbox, .stop, turn: "turn-a", tasks: ["a", "b"])
+        #expect(second.awaitingBackground == true)
+        #expect(await DiskRoundJournal().isCurrent(prompt))
+    }
+
+    @Test func aSecondReportDoesNotCancelTheCompletionThatWentOut() async throws {
+        let sandbox = try await firstRound()
+        #expect(try await capture(sandbox, .stop, tasks: ["a", "b"]).awaitingBackground == true)
+        let fromA = "<task-notification>\n<task-id>a</task-id>\n</task-notification>"
+        _ = try await capture(sandbox, .prompt, source: "system", turn: "w1", prompt: fromA)
+        // Both have ended by the time this turn stops: the completion goes out.
+        let done = try await capture(sandbox, .stop, turn: "w1", tasks: [])
+        #expect(done.awaitingBackground == false)
+        #expect(done.startedAt == 1000)
+        let other = "<task-notification>\n<task-id>b</task-id>\n</task-notification>"
+        _ = try await capture(sandbox, .prompt, source: "system", turn: "w2", prompt: other)
+        #expect(await DiskRoundJournal().isCurrent(done))
+    }
+
+    @Test func anUnreadableRecordOfAStopThatWentOutStillMakesItStale() async throws {
+        let sandbox = try await firstRound()
+        let out = try await capture(sandbox, .stop, tasks: [])
+        try Data([0xFF, 0xFE]).write(to: sandbox.root.appendingPathComponent("abc-123.stopped"))
+        let paused = try await capture(sandbox, .stop, tasks: ["lock"])
+        #expect(paused.awaitingBackground == true)
+        #expect(!(await DiskRoundJournal().isCurrent(out)))
+    }
+
+    @Test func anEarlierSubagentListedWithoutItsKindIsStillOne() async throws {
+        let sandbox = try await firstRound()
+        _ = try await capture(
+            sandbox, .stop, typed: [BackgroundTask(id: "agent", type: "subagent")])
+        _ = try await capture(sandbox, .prompt, source: "user")
+        let listed = [BackgroundTask(id: "agent"), BackgroundTask(id: "sh", type: "shell")]
+        #expect(try await capture(sandbox, .stop, typed: listed).awaitingBackground == false)
+    }
+
+    @Test func aLongListIsComparedQuickly() async throws {
+        let sandbox = try await firstRound()
+        // Small enough not to crowd the timing tests that run alongside, large
+        // enough that comparing every pair would take far longer than this.
+        let many = (0..<1_500).map { "t\($0)" }
+        _ = try await capture(sandbox, .stop, tasks: many)
+        _ = try await capture(sandbox, .prompt, source: "user")
+        let clock = ContinuousClock()
+        var held: Bool?
+        let took = try await clock.measure {
+            held = try await capture(sandbox, .stop, tasks: many + ["new"]).awaitingBackground
+        }
+        #expect(held == true)
+        #expect(took < .seconds(1))
+    }
+
+    @Test func aShellExcusedForAnEarlierSubagentStaysExcusedAfterIt() async throws {
+        let sandbox = try await firstRound()
+        let old = BackgroundTask(id: "agent-old", type: "subagent")
+        _ = try await capture(sandbox, .stop, typed: [old])
+        _ = try await capture(sandbox, .prompt, source: "user")
+        try sandbox.write("abc-123.start", "1000\n")
+        let shell = BackgroundTask(id: "sh", type: "shell")
+        let mine = BackgroundTask(id: "agent-new", type: "subagent")
+        #expect(
+            try await capture(sandbox, .stop, typed: [old, shell, mine]).awaitingBackground == true)
+        let handBack = "<agent-message from=\"agent-new\">\n[Subagent hand-back]\n</agent-message>"
+        _ = try await capture(sandbox, .prompt, turn: "w", prompt: handBack)
+        #expect(started(sandbox) == "1000")  // the same round goes on
+        // Both subagents are done; the old one's shell runs on.
+        #expect(
+            try await capture(sandbox, .stop, turn: "w", typed: [shell]).awaitingBackground == false
+        )
+    }
+
+    @Test func aLaunchersKindIsKeptWhileItIsListedWithout() async throws {
+        let sandbox = try await firstRound()
+        _ = try await capture(
+            sandbox, .stop, typed: [BackgroundTask(id: "agent", type: "subagent")])
+        _ = try await capture(sandbox, .prompt, source: "user")
+        _ = try await capture(sandbox, .stop, typed: [BackgroundTask(id: "agent")])
+        _ = try await capture(sandbox, .prompt, source: "user")
+        let listed = [BackgroundTask(id: "agent"), BackgroundTask(id: "sh", type: "shell")]
+        #expect(try await capture(sandbox, .stop, typed: listed).awaitingBackground == false)
+    }
+
+    @Test func aStopWithoutItsIdIsMatchedToTheTurnItsPromptRecorded() async throws {
+        let sandbox = try fresh()
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        _ = try await capture(sandbox, .preTool, turn: "turn-a")
+        // A is interrupted; B stops before it uses a tool, its id left out.
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-b")
+        #expect(try await capture(sandbox, .stop, tasks: ["server"]).awaitingBackground == false)
+    }
+
+    @Test func anEarlierTaskOfUnknownKindMayHaveStartedTheShell() async throws {
+        let sandbox = try await firstRound()
+        _ = try await capture(sandbox, .stop, typed: [BackgroundTask(id: "wf")])
+        _ = try await capture(sandbox, .prompt, source: "user")
+        let listed = [BackgroundTask(id: "wf"), BackgroundTask(id: "sh", type: "shell")]
+        #expect(try await capture(sandbox, .stop, typed: listed).awaitingBackground == false)
+    }
+
+    @Test func aSubagentHandingBackResumesTheRoundWaitingOnIt() async throws {
+        let sandbox = try await firstRound()
+        let agent = BackgroundTask(id: "a1b2c3", type: "subagent")
+        #expect(try await capture(sandbox, .stop, typed: [agent]).awaitingBackground == true)
+        // As recorded: no `source`, the hand-back is the prompt.
+        let handBack =
+            "<agent-message from=\"a1b2c3\">\n[Subagent hand-back] The report follows:\n  done\n</agent-message>"
+        _ = try await capture(sandbox, .prompt, turn: "w", prompt: handBack)
+        #expect(started(sandbox) == "1000")
+        #expect(try await capture(sandbox, .stop, turn: "w", tasks: []).startedAt == 1000)
+    }
+
+    @Test func anotherReportWhileHeldKeepsTheWaitForTheAwaitedOne() async throws {
+        let sandbox = try await firstRound()
+        #expect(try await capture(sandbox, .stop, tasks: ["lock"]).awaitingBackground == true)
+        // An earlier task ends meanwhile and reports first.
+        let other = "<task-notification>\n<task-id>other</task-id>\n</task-notification>"
+        _ = try await capture(sandbox, .prompt, turn: "p", prompt: other)
+        #expect(started(sandbox) == "1000")
+        #expect(
+            try await capture(sandbox, .stop, turn: "p", tasks: ["lock"]).awaitingBackground == true
+        )
+        _ = try await capture(sandbox, .prompt, turn: "q", prompt: report)
+        #expect(try await capture(sandbox, .stop, turn: "q", tasks: []).startedAt == 1000)
+    }
+
+    @Test func anotherProcessResumesNothingAndJoinsNothing() async throws {
+        let sandbox = try await firstRound()
+        _ = try await capture(sandbox, .preTool, turn: "turn-a")
+        try sandbox.write("abc-123.start", "1000\n")
+        // A message with the running turn's id, but from another process.
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a", owner: "process-2")
+        #expect(started(sandbox).isEmpty)
+        let fresh = try await firstRound()
+        #expect(try await capture(fresh, .stop, tasks: ["lock"]).awaitingBackground == true)
+        _ = try await capture(fresh, .prompt, source: "system", prompt: report, owner: "process-2")
+        #expect(started(fresh).isEmpty)
+    }
+
+    @Test func aStopFromAnotherProcessIsNotJudgedOnThisOnesBaseline() async throws {
+        let sandbox = try await firstRound()
+        #expect(
+            try await capture(sandbox, .stop, owner: "process-2", tasks: ["lock"])
+                .awaitingBackground == false)
+    }
+
+    @Test func aBaselineLeftFromAnotherRoundIsNotThisRounds() async throws {
+        let sandbox = try await firstRound()
+        _ = try await capture(sandbox, .stop, tasks: [])
+        _ = try await capture(sandbox, .prompt, source: "user")
+        // As if the new baseline could be neither written nor removed.
+        try sandbox.write(
+            "abc-123.background-earlier",
+            Snapshot(owner: "process-1", mark: "an-earlier-round", tasks: []).text)
+        #expect(try await capture(sandbox, .stop, tasks: ["server"]).awaitingBackground == false)
+    }
+
+    @Test func aSnapshotLeftFromAnEarlierStopIsNotTheLatest() async throws {
+        let sandbox = try await firstRound()
+        _ = try await capture(sandbox, .stop, tasks: ["server"])
+        // As if the latest snapshot could be neither written nor removed.
+        try sandbox.write(
+            "abc-123.background", Snapshot(owner: "process-1", mark: "older", tasks: []).text)
+        _ = try await capture(sandbox, .prompt, source: "user")
+        #expect(try await capture(sandbox, .stop, tasks: ["server"]).awaitingBackground == false)
+    }
+
+    @Test func aReportStillToComeKeepsTheRoundThroughAnotherOne() async throws {
+        let sandbox = try await firstRound()
+        func from(_ id: String) -> String {
+            "<task-notification>\n<task-id>\(id)</task-id>\n</task-notification>"
+        }
+        #expect(
+            try await capture(sandbox, .stop, tasks: ["a", "b", "c"]).awaitingBackground == true)
+        _ = try await capture(sandbox, .prompt, turn: "w1", prompt: from("a"))
+        // b has ended too, its report not yet in; c runs on.
+        #expect(
+            try await capture(sandbox, .stop, turn: "w1", tasks: ["c"]).awaitingBackground == true)
+        _ = try await capture(sandbox, .prompt, turn: "w2", prompt: from("b"))
+        #expect(started(sandbox) == "1000")
+        #expect(
+            try await capture(sandbox, .stop, turn: "w2", tasks: ["c"]).awaitingBackground == true)
+        _ = try await capture(sandbox, .prompt, turn: "w3", prompt: from("c"))
+        #expect(try await capture(sandbox, .stop, turn: "w3", tasks: []).startedAt == 1000)
+    }
+
+    @Test func aStopOfAPromptWhoseHookDidNotRunIsNotHeld() async throws {
+        let sandbox = try fresh()
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        _ = try await capture(sandbox, .stop, turn: "turn-a", tasks: ["server"])
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-b")
+        _ = try await capture(sandbox, .stop, turn: "turn-b", tasks: ["server"])
+        // C's prompt hook never ran: the turn on record is still B's.
+        _ = try await capture(sandbox, .preTool, turn: "turn-c")
+        #expect(
+            try await capture(sandbox, .stop, turn: "turn-c", tasks: ["server", "x"])
+                .awaitingBackground == false)
+    }
+
+    @Test func aSnapshotThatCouldNotBeRemovedIsNotTheLatest() async throws {
+        let sandbox = try await firstRound()
+        _ = try await capture(sandbox, .stop, tasks: [])
+        let file = sandbox.root.appendingPathComponent("abc-123.background").path
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: file)
+        defer { try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: file) }
+        // What runs is unknown now, and the old snapshot cannot go.
+        _ = try await capture(sandbox, .stop, tasks: [], unidentified: true)
+        _ = try await capture(sandbox, .prompt, source: "user")
+        #expect(try await capture(sandbox, .stop, tasks: ["server"]).awaitingBackground == false)
+    }
+
+    @Test func whatAnEarlierWorkflowLeftAfterItEndedDoesNotHoldTheRound() async throws {
+        let sandbox = try await firstRound()
+        _ = try await capture(sandbox, .stop, typed: [BackgroundTask(id: "wf", type: "workflow")])
+        _ = try await capture(sandbox, .prompt, source: "user")
+        // Between two Stops it started a server and ended.
+        let server = BackgroundTask(id: "server", type: "shell")
+        #expect(try await capture(sandbox, .stop, typed: [server]).awaitingBackground == false)
+    }
+
+    @Test func aReportPastedMidTurnJoinsTheTurn() async throws {
+        let sandbox = try fresh()
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        _ = try await capture(sandbox, .preTool, turn: "turn-a")
+        try sandbox.write("abc-123.start", "1000\n")
+        let pasted = "<task-notification>\n<task-id>other</task-id>\n</task-notification>"
+        _ = try await capture(sandbox, .prompt, turn: "turn-a", prompt: pasted)
+        #expect(started(sandbox) == "1000")
+    }
+
+    @Test func aPauseLeftFromAnEarlierRoundResumesNothing() async throws {
+        let sandbox = try await firstRound()
+        #expect(try await capture(sandbox, .stop, tasks: ["lock"]).awaitingBackground == true)
+        let file = sandbox.root.appendingPathComponent("abc-123.paused").path
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: file)
+        defer { try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: file) }
+        _ = try await capture(sandbox, .prompt, source: "user")  // cannot remove the pause
+        try sandbox.write("abc-123.start", "1500\n")
+        _ = try await capture(sandbox, .prompt, source: "system", prompt: report)
+        #expect(started(sandbox).isEmpty)
+    }
+
+    @Test func anInterruptionHoldsNothingEvenIfTheBaselineCannotGo() async throws {
+        let sandbox = try fresh()
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        _ = try await capture(sandbox, .stop, turn: "turn-a", tasks: [])
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-b")
+        // Tools of a turn that never stops show up (its prompt hook missed).
+        _ = try await capture(sandbox, .preTool, turn: "turn-x")
+        _ = try await capture(sandbox, .preTool, turn: "turn-b")
+        let file = sandbox.root.appendingPathComponent("abc-123.background-earlier").path
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: file)
+        defer { try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: file) }
+        _ = try await capture(sandbox, .stop, turn: "turn-b", tasks: [])
+        let again = try await capture(sandbox, .stop, turn: "turn-b", tasks: ["server"])
+        #expect(again.awaitingBackground == false)
+    }
+
+    @Test func anotherProcessDoesNotKeepThisOnesCompletionCurrent() async throws {
+        let sandbox = try await firstRound()
+        let out = try await capture(sandbox, .stop, tasks: [])
+        _ = try await capture(
+            sandbox, .prompt, source: "system", prompt: report, owner: "process-2")
+        #expect(!(await DiskRoundJournal().isCurrent(out)))
+    }
+
+    @Test func manyNewTasksAreAwaitedQuickly() async throws {
+        let sandbox = try await firstRound()
+        let clock = ContinuousClock()
+        var held: Bool?
+        let took = try await clock.measure {
+            held = try await capture(sandbox, .stop, tasks: (0..<1_500).map { "n\($0)" })
+                .awaitingBackground
+        }
+        #expect(held == true)
+        #expect(took < .seconds(1))
+    }
+
+    @Test func aTurnThatNeverStoppedLeavesTheNextRoundNoBaseline() async throws {
+        let sandbox = try fresh()
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        // A starts a server, its tool hook missed, and is interrupted.
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-b")
+        #expect(
+            try await capture(sandbox, .stop, turn: "turn-b", tasks: ["server"])
+                .awaitingBackground == false)
+    }
+
+    @Test func aWorkflowThatEndedExcusesNothingStartedAfter() async throws {
+        let sandbox = try await firstRound()
+        let wf = BackgroundTask(id: "wf", type: "workflow")
+        _ = try await capture(sandbox, .stop, typed: [wf])
+        _ = try await capture(sandbox, .prompt, source: "user")
+        let mine = BackgroundTask(id: "agent", type: "subagent")
+        // The workflow has ended; the round waits on its own subagent.
+        #expect(try await capture(sandbox, .stop, typed: [mine]).awaitingBackground == true)
+        let handBack = "<agent-message from=\"agent\">\n[Subagent hand-back]\n</agent-message>"
+        _ = try await capture(sandbox, .prompt, turn: "w", prompt: handBack)
+        let shell = BackgroundTask(id: "sh", type: "shell")
+        #expect(
+            try await capture(sandbox, .stop, turn: "w", typed: [shell]).awaitingBackground == true)
+    }
+
+    @Test func aReportPastedMidTurnConsumesNothing() async throws {
+        let sandbox = try await firstRound()
+        #expect(try await capture(sandbox, .stop, tasks: ["a", "b"]).awaitingBackground == true)
+        let fromA = "<task-notification>\n<task-id>a</task-id>\n</task-notification>"
+        _ = try await capture(sandbox, .prompt, turn: "w", prompt: fromA)
+        let fromB = "<task-notification>\n<task-id>b</task-id>\n</task-notification>"
+        _ = try await capture(sandbox, .prompt, turn: "w", prompt: fromB)  // pasted mid-turn
+        let pause = DiskRoundJournal.read(sandbox.root.path + "/abc-123.paused")
+        #expect(PauseRecord(pause)?.tasks == ["b"])
+    }
+
+    @Test func aNotificationBeforeTheFirstPromptStillLeavesASessionNew() async throws {
+        let sandbox = try fresh()
+        _ = try await capture(sandbox, .notification)
+        _ = try await capture(sandbox, .prompt, source: "user", turn: "turn-a")
+        #expect(
+            try await capture(sandbox, .stop, turn: "turn-a", tasks: ["lock"]).awaitingBackground
+                == true)
+    }
+
+    @Test func aStopThatWentOutRetiresAPauseLeftInItsGeneration() async throws {
+        let sandbox = try await firstRound()
+        #expect(try await capture(sandbox, .stop, tasks: ["lock"]).awaitingBackground == true)
+        let file = sandbox.root.appendingPathComponent("abc-123.paused").path
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: file)
+        defer { try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: file) }
+        // Another Stop of the turn, nothing running: it goes out.
+        let out = try await capture(sandbox, .stop, tasks: [])
+        #expect(out.awaitingBackground == false)
+        _ = try await capture(sandbox, .prompt, turn: "late", prompt: report)
+        #expect(await DiskRoundJournal().isCurrent(out))
+    }
+
+    @Test func aPauseOnANewClockKeepsTheEarlierClocksCompletion() async throws {
+        let sandbox = try await firstRound()
+        try sandbox.write("abc-123.start", "1000 clock-a\n")
+        let out = try await capture(sandbox, .stop, tasks: [])
+        let other = "<task-notification>\n<task-id>x</task-id>\n</task-notification>"
+        _ = try await capture(sandbox, .prompt, turn: "r", prompt: other)
+        // The report's turn, with a clock of its own.
+        try sandbox.write("abc-123.start", "1500 clock-b\n")
+        #expect(
+            try await capture(sandbox, .stop, turn: "r", tasks: ["new"]).awaitingBackground == true)
+        #expect(await DiskRoundJournal().isCurrent(out))
+        // The new clock's own pause stands, though a Stop of this generation
+        // went out on the earlier clock: its report resumes it.
+        let fromNew = "<task-notification>\n<task-id>new</task-id>\n</task-notification>"
+        _ = try await capture(sandbox, .prompt, turn: "s", prompt: fromNew)
+        #expect(started(sandbox) == "1500 clock-b")
+        #expect(try await capture(sandbox, .stop, turn: "s", tasks: []).startedAt == 1500)
+    }
+
+    @Test func aBlankKindIsNoKind() throws {
+        let read = try JSONDecoder().decode(
+            HookPayload.self,
+            from: Data(
+                #"{"session_id":"abc-123","hook_event_name":"Stop","background_tasks":[{"id":"server","type":""}]}"#
+                    .utf8))
+        #expect(read.backgroundTasks == [BackgroundTask(id: "server")])
+    }
+
+    @Test func aTurnRecordThatCannotBeReadShowsNoFinishedTurn() async throws {
+        let sandbox = try await firstRound()
+        _ = try await capture(sandbox, .stop, tasks: [])
+        try Data([0xFF, 0xFE]).write(to: sandbox.root.appendingPathComponent("abc-123.turn"))
+        _ = try await capture(sandbox, .prompt, source: "user")
+        #expect(try await capture(sandbox, .stop, tasks: ["server"]).awaitingBackground == false)
+    }
+
+    @Test func anEarlierTaskNowKnownAsAShellExcusesNothing() async throws {
+        let sandbox = try await firstRound()
+        _ = try await capture(sandbox, .stop, typed: [BackgroundTask(id: "s1")])
+        _ = try await capture(sandbox, .prompt, source: "user")
+        let listed = [
+            BackgroundTask(id: "s1", type: "shell"), BackgroundTask(id: "s2", type: "shell"),
+        ]
+        #expect(try await capture(sandbox, .stop, typed: listed).awaitingBackground == true)
+    }
+
+    @Test func anOlderClaudeOrTheSettingOffKeepsTheOldBehavior() async throws {
+        let sandbox = try HookSandbox()
+        _ = try sandbox.event()
+        #expect(try await capture(sandbox, .stop).awaitingBackground == nil)
+        let off = ["GHOSTTY_NOTIFY_WAIT_BACKGROUND": "off"]
+        #expect(
+            try await capture(sandbox, .stop, tasks: ["lock"], settings: off).awaitingBackground
+                == nil)
+        _ = try await capture(sandbox, .prompt, source: "system", settings: off)
+        #expect(started(sandbox).isEmpty)
+    }
+}
+
 final class HookSandbox: @unchecked Sendable {
     let root: URL
     init() throws {
@@ -150,6 +1065,7 @@ final class HookSandbox: @unchecked Sendable {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
     deinit { try? FileManager.default.removeItem(at: root) }
+    var transcript: String { root.appendingPathComponent("transcript.jsonl").path }
     func write(_ name: String, _ value: String) throws {
         try value.write(to: root.appendingPathComponent(name), atomically: true, encoding: .utf8)
     }
@@ -172,6 +1088,61 @@ struct RoundJournalTests {
         await journal.finish(event)
         #expect(DiskRoundJournal.read(sandbox.root.path + "/abc-123.start") == "2001")
         #expect(!(await journal.isCurrent(event)))
+    }
+
+    @Test func aLateCompletionLeavesAClockBegunAfterIt() async throws {
+        let sandbox = try HookSandbox()
+        let journal = DiskRoundJournal()
+        let event = try sandbox.event()  // measured from 1000
+        try sandbox.write("abc-123.start", "1500\n")  // the round went on, with a clock of its own
+        await journal.finish(event)
+        #expect(DiskRoundJournal.read(sandbox.root.path + "/abc-123.start") == "1500")
+    }
+
+    @Test func aStartTooLargeForAnIntegerIsNoCrash() async throws {
+        let sandbox = try HookSandbox()
+        var event = try sandbox.event()
+        try sandbox.write("abc-123.start", "99999999999999999999\n")
+        event.startedAt = try #require(Double("99999999999999999999"))
+        await DiskRoundJournal().finish(event)
+        #expect(!FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.start"))
+    }
+
+    @Test func aClockBegunInTheSameSecondIsNotTheOneMeasured() async throws {
+        let sandbox = try HookSandbox()
+        var event = try sandbox.event()
+        event.startToken = "clock-a"
+        try sandbox.write("abc-123.start", "1000 clock-b\n")  // the next turn's, same second
+        await DiskRoundJournal().finish(event)
+        #expect(DiskRoundJournal.read(sandbox.root.path + "/abc-123.start") == "1000 clock-b")
+        try sandbox.write("abc-123.start", "1000 clock-a\n")
+        await DiskRoundJournal().finish(event)
+        #expect(!FileManager.default.fileExists(atPath: sandbox.root.path + "/abc-123.start"))
+    }
+
+    @Test func aClockCarriesItsIdIntoTheEvent() async throws {
+        let sandbox = try HookSandbox()
+        _ = try sandbox.event()
+        try FileManager.default.removeItem(at: sandbox.root.appendingPathComponent("abc-123.start"))
+        var tool = sampleEvent(kind: .preTool, root: sandbox.root.path)
+        tool.occurredAt = 1234
+        _ = try await DiskRoundJournal().capture(tool)
+        let written = DiskRoundJournal.read(sandbox.root.path + "/abc-123.start")
+        let clock = try #require(DiskRoundJournal.clock(written))
+        #expect(clock.value == 1234)
+        let stop = try await DiskRoundJournal().capture(sampleEvent(root: sandbox.root.path))
+        #expect(stop.startedAt == 1234)
+        #expect(stop.startToken == clock.token)
+        #expect(stop.startToken != nil)
+    }
+
+    @Test func startsAreReadInEitherFormAndNothingElse() {
+        #expect(DiskRoundJournal.clock("1000")?.value == 1000)
+        #expect(DiskRoundJournal.clock("1000")?.token == nil)
+        #expect(DiskRoundJournal.clock("1000 ABC-123")?.token == "ABC-123")
+        for bad in ["", " ", "x", "10.5", "1000 ", "1000 a b", "1000 a/b", "-1"] {
+            #expect(DiskRoundJournal.clock(bad) == nil)
+        }
     }
 
     @Test func completionRemovesOnlyItsStart() async throws {
@@ -221,6 +1192,25 @@ struct RoundJournalTests {
             toFile: DiskRoundJournal.rateFile(event), atomically: true, encoding: .utf8)
         #expect(!(await journal.claimRate(event, now: 2000)))
         #expect(await journal.claimRate(event, now: 2000))
+    }
+
+    @Test func backgroundRecordsArePrunedOnlyFromTheSessionDirectory() async throws {
+        let sandbox = try HookSandbox()
+        var event = try sandbox.event()
+        event.occurredAt = Date().timeIntervalSince1970
+        let rates = URL(fileURLWithPath: event.rateDirectory)
+        try FileManager.default.createDirectory(at: rates, withIntermediateDirectories: true)
+        let shared = rates.appendingPathComponent("feed.background")
+        let ours = sandbox.root.appendingPathComponent("abc-123.background")
+        let month = Date(timeIntervalSinceNow: -30 * 86400)
+        for file in [shared, ours] {
+            try "x".write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes(
+                [.modificationDate: month], ofItemAtPath: file.path)
+        }
+        await DiskRoundJournal().prepare(event)
+        #expect(FileManager.default.fileExists(atPath: shared.path))
+        #expect(!FileManager.default.fileExists(atPath: ours.path))
     }
 
     @Test func codexOwnerChangeInvalidatesBindingAndStoresFirstPrompt() async throws {

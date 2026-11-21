@@ -93,6 +93,48 @@ class NativeHookTests(unittest.TestCase):
             self.assertEqual(result.stdout, stdout)
         return result
 
+    def session(self, env=None):
+        """One Claude process for a sequence of hooks, as in a real session:
+        every hook finds the same CLI ancestor, so the same owner."""
+        loop = ('while IFS= read -r hook && IFS= read -r data; do '
+                'printf "%s" "$data" | /bin/bash "$hook" >/dev/null; echo "done $?"; done')
+        proc = subprocess.Popen([str(self.bin / "claude"), "/bin/bash", "-c", loop],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+                                env={**self.env, **(env or {})})
+
+        def close():
+            if proc.poll() is None:
+                proc.stdin.close()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=3)
+
+        self.addCleanup(close)
+
+        def run(event, payload):
+            entry = {"PreToolUse": "ghostty-tab-save.sh",
+                     "UserPromptSubmit": "ghostty-round-reset.sh"}.get(event, "ghostty-notify.sh")
+            proc.stdin.write(str(self.hooks / entry) + "\n" + json.dumps(payload) + "\n")
+            proc.stdin.flush()
+            self.assertEqual(proc.stdout.readline().strip(), "done 0")
+        return run
+
+    def recorded(self, name, turn, **extra):
+        # Shapes as Claude Code 2.1.329 sends them (recorded). A new session:
+        # the transcript does not exist at its first prompt.
+        return {"session_id": SID, "hook_event_name": name, "cwd": "/work/中文项目",
+                "prompt_id": turn, "permission_mode": "auto",
+                "transcript_path": str(self.root / "transcript.jsonl"), **extra}
+
+    def recorded_stop(self, turn, tasks):
+        return self.recorded("Stop", turn, stop_hook_active=False, last_assistant_message="waiting",
+                             effort={"level": "medium"}, session_crons=[], background_tasks=[
+                                 {"id": t, "type": "shell", "status": "running",
+                                  "description": "Take the phone lock", "command": "lock acquire"}
+                                 for t in tasks])
+
     def fixture_processes(self):
         # A worker calls setsid() and its hook exits, so neither a process group
         # nor a parent link leads to it. What it runs does: workers and
@@ -316,7 +358,8 @@ class NativeHookTests(unittest.TestCase):
         root.mkdir(parents=True, exist_ok=True)
         (root / "agent.pid").write_text(str(resident.pid))
         (root / "ready").write_text("authorized\n")
-        (root / "capabilities").write_text(f"hook-event-v1:{resident.pid}\n")
+        (root / "capabilities").write_text(
+            f"hook-event-v1:{resident.pid}\nclock-id-v1:{resident.pid}\n")
         (root / "native-hook-ready").write_text(f"native-hook-v1:{resident.pid}\n")
         self.invoke("Stop", env={"GHOSTTY_NOTIFY_BACKEND": "", "GHOSTTY_NOTIFY_AGENT_APP": str(self.app)})
         requests = list((root / "spool").glob("*.json"))
@@ -333,6 +376,108 @@ class NativeHookTests(unittest.TestCase):
         self.wait(lambda: len(self.notices()) == 1)
         time.sleep(0.2)
         self.assertEqual(len(self.notices()), 1)
+
+    def test_claude_waiting_on_background_work_notifies_once_it_is_really_done(self):
+        # No `source` on the prompt: the report that wakes the session is the
+        # prompt text.
+        hook = self.session()
+        hook("UserPromptSubmit", self.recorded("UserPromptSubmit", "turn-1", prompt="go"))
+        hook("PreToolUse", self.recorded("PreToolUse", "turn-1", tool_name="Bash"))
+        (self.state() / (SID + ".start")).write_text(str(int(time.time()) - 700) + "\n")
+        start = (self.state() / (SID + ".start")).read_text()
+        hook("Stop", self.recorded_stop("turn-1", ["bq0o9rhwx"]))
+        log = self.root / ".claude/notifications/ghostty-agent/agent.log"
+        # Logged right before the hook returns: no worker and no app saw it.
+        self.assertIn("kept paused Stop " + SID + " in the hook", log.read_text())
+        time.sleep(0.3)
+        self.assertEqual(self.notices(), [])
+        hook("UserPromptSubmit", self.recorded(
+            "UserPromptSubmit", "turn-2", prompt="<task-notification>\n<task-id>bq0o9rhwx</task-id>\n"
+            "<status>completed</status>\n</task-notification>"))
+        hook("PreToolUse", self.recorded("PreToolUse", "turn-2", tool_name="Bash"))
+        self.assertEqual((self.state() / (SID + ".start")).read_text(), start)
+        hook("Stop", self.recorded_stop("turn-2", []))
+        self.wait(lambda: len(self.notices()) == 1)
+        self.assertIn("Task Complete — 中文项目", self.notices()[0])
+        self.assertFalse((self.state() / (SID + ".start")).exists())
+
+    def test_a_report_in_another_claude_process_does_not_resume_the_round(self):
+        hook = self.session()
+        hook("UserPromptSubmit", self.recorded("UserPromptSubmit", "turn-1", prompt="go"))
+        hook("PreToolUse", self.recorded("PreToolUse", "turn-1", tool_name="Bash"))
+        hook("Stop", self.recorded_stop("turn-1", ["bq0o9rhwx"]))
+        self.assertTrue((self.state() / (SID + ".paused")).exists())
+        # A resumed session is a new process; its clock starts over.
+        self.invoke("UserPromptSubmit", payload=self.recorded(
+            "UserPromptSubmit", "turn-2", prompt="<task-notification>\n<task-id>bq0o9rhwx</task-id>"))
+        self.assertFalse((self.state() / (SID + ".start")).exists())
+        self.assertFalse((self.state() / (SID + ".paused")).exists())
+
+    def ready_resident(self, capabilities):
+        resident_executable = self.bin / "ghostty-notify-agent"
+        shutil.copy2(self.host, resident_executable)
+        resident = subprocess.Popen([str(resident_executable)], stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        def stop_resident():
+            if resident.poll() is None:
+                resident.terminate()
+            try:
+                resident.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                resident.kill()
+                resident.wait(timeout=3)
+
+        self.addCleanup(stop_resident)
+        root = self.root / ".claude/notifications/ghostty-agent"
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "agent.pid").write_text(str(resident.pid))
+        (root / "ready").write_text("authorized\n")
+        (root / "capabilities").write_text(
+            "".join(f"{name}:{resident.pid}\n" for name in capabilities))
+        (root / "native-hook-ready").write_text(f"native-hook-v1:{resident.pid}\n")
+        return root
+
+    def spooled(self, root):
+        return [json.loads(p.read_text()) for p in sorted((root / "spool").glob("*.json"))]
+
+    def test_a_paused_stop_is_never_handed_to_a_ready_resident(self):
+        # A resident older than the hook would not know a paused Stop for
+        # what it is, so the hook must not hand it over at all.
+        root = self.ready_resident(["hook-event-v1", "clock-id-v1"])
+        hook = self.session(env={"GHOSTTY_NOTIFY_BACKEND": "",
+                                 "GHOSTTY_NOTIFY_AGENT_APP": str(self.app)})
+        hook("UserPromptSubmit", self.recorded("UserPromptSubmit", "turn-1", prompt="go"))
+        hook("PreToolUse", self.recorded("PreToolUse", "turn-1", tool_name="Bash"))
+        before = len(self.spooled(root))
+        hook("Stop", self.recorded_stop("turn-1", ["b1"]))
+        self.assertEqual(len(self.spooled(root)), before)
+        self.assertTrue((self.state() / (SID + ".start")).exists())
+        self.assertTrue((self.state() / (SID + ".paused")).exists())
+        # The same Stop without background work does reach the resident.
+        hook("Stop", self.recorded_stop("turn-1", []))
+        stops = [r for r in self.spooled(root)
+                 if r.get("type") == "hook_event" and r["payload"]["hook_event_name"] == "Stop"]
+        self.assertEqual(len(stops), 1)
+        self.assertNotIn("background_tasks", stops[0]["payload"])
+
+    def test_a_claude_stop_skips_a_resident_that_does_not_know_clock_ids(self):
+        # Its finish would clear whatever start the round has, perhaps that of
+        # a turn the round went on with: a worker of this version takes it.
+        root = self.ready_resident(["hook-event-v1"])
+        self.start()
+        self.invoke("Stop", env={"GHOSTTY_NOTIFY_BACKEND": "",
+                                 "GHOSTTY_NOTIFY_AGENT_APP": str(self.app)})
+        self.assertEqual([r for r in self.spooled(root) if r.get("type") == "hook_event"
+                          and r["payload"]["hook_event_name"] == "Stop"], [])
+        # The worker of this version delivers it, with the round's elapsed
+        # time, and clears the clock it measured.
+        self.wait(lambda: any(r.get("type") == "notify" for r in self.spooled(root)))
+        notice = next(r for r in self.spooled(root) if r.get("type") == "notify")
+        self.assertEqual(notice["session_id"], SID)
+        self.assertEqual(notice["subtitle"], "Task Complete — 中文项目")
+        self.assertRegex(notice["body"], r"^Finished after 11m ")
+        self.wait(lambda: not (self.state() / (SID + ".start")).exists())
 
     def test_new_prompt_cancels_detached_codex_settle(self):
         self.start("codex")
