@@ -35,6 +35,9 @@ public struct SessionRecord: Equatable, Sendable {
     /// The outstanding notification came from `--nudge`, so `--nudge-done`
     /// may take it back. Any other notification it must leave alone.
     public var nudge: Bool
+    /// That nudge was `--no-return`: nobody comes back to clear it, so a
+    /// Quit from the menu, which leaves nothing to run its timer, takes it.
+    public var noReturn: Bool
 
     public init(
         tabID: String? = nil,
@@ -48,7 +51,8 @@ public struct SessionRecord: Equatable, Sendable {
         roundID: String? = nil,
         owner: String? = nil,
         expiresAt: Double? = nil,
-        nudge: Bool = false
+        nudge: Bool = false,
+        noReturn: Bool = false
     ) {
         self.tabID = tabID
         self.notificationIDs = notificationIDs
@@ -62,6 +66,7 @@ public struct SessionRecord: Equatable, Sendable {
         self.owner = owner
         self.expiresAt = expiresAt
         self.nudge = nudge
+        self.noReturn = noReturn
     }
 
     /// Drop the notification's text once nothing is on screen for this session.
@@ -80,6 +85,7 @@ public struct SessionRecord: Equatable, Sendable {
         postedAt = 0
         expiresAt = nil
         nudge = false
+        noReturn = false
     }
 }
 
@@ -151,7 +157,8 @@ public struct SessionState: Equatable, Sendable {
         body: String = "",
         now: Double,
         roundID: String? = nil,
-        nudge: Bool = false
+        nudge: Bool = false,
+        noReturn: Bool = false
     ) -> String {
         let id = Self.notificationID(sessionID: sessionID)
         var record = sessions[sessionID] ?? SessionRecord()
@@ -166,6 +173,7 @@ public struct SessionState: Equatable, Sendable {
         record.postedAt = now
         record.roundID = roundID
         record.nudge = nudge
+        record.noReturn = noReturn
         // A replacement starts its own clock; the caller sets it.
         record.expiresAt = nil
         sessions[sessionID] = record
@@ -244,6 +252,32 @@ public struct SessionState: Equatable, Sendable {
         record.clearNotice()
         sessions[sessionID] = record
         return ids
+    }
+
+    /// Every `--no-return` nudge still on screen, taken: for a Quit from the
+    /// menu, after which no timer would ever withdraw them.
+    public mutating func takeNoReturnNudges() -> [String] {
+        sessions.keys.sorted().flatMap { sessionID -> [String] in
+            guard sessions[sessionID]?.noReturn == true else { return [] }
+            return takeNotifications(sessionID: sessionID)
+        }
+    }
+
+    /// Whether a notification posted at `postedAt` is still the session's
+    /// current one. A click or a close can reach the agent after a newer
+    /// notification replaced it under the same identifier; that response must
+    /// not take the newer one's bookkeeping or its timer with it. Nil, from a
+    /// notification posted before the time was carried, counts as current.
+    public func isCurrent(sessionID: String, postedAt: Double?) -> Bool {
+        guard let postedAt else { return true }
+        return sessions[sessionID]?.postedAt == postedAt
+    }
+
+    /// The session's notification already goes by `deadline`, so a later
+    /// reason to withdraw it soon must not push that back.
+    public func expires(sessionID: String, by deadline: Double) -> Bool {
+        guard let expiresAt = sessions[sessionID]?.expiresAt else { return false }
+        return expiresAt <= deadline
     }
 
     /// `takeNotifications`, only while what is on screen is a nudge: the

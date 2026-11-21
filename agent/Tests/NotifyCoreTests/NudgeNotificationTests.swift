@@ -261,16 +261,64 @@ import Testing
         #expect(state.sessions[Self.session]?.notificationIDs == [id])
     }
 
+    /// A Quit from the menu takes the no-return nudges, which nothing would
+    /// withdraw afterwards, and leaves every other notification.
+    @Test func aQuitTakesOnlyNoReturnNudges() {
+        var state = SessionState()
+        let other = "11111111-2222-3333-4444-555555555555"
+        let codex = "codex-" + Self.thread
+        let id = state.newNotification(sessionID: Self.session, now: 1, nudge: true, noReturn: true)
+        _ = state.newNotification(sessionID: other, now: 1, nudge: true)
+        let codexID = state.newNotification(sessionID: codex, now: 1, nudge: true, noReturn: true)
+        #expect(Set(state.takeNoReturnNudges()) == [id, codexID])
+        #expect(state.sessions[Self.session]?.notificationIDs == [])
+        #expect(state.sessions[Self.session]?.noReturn == false)
+        #expect(state.sessions[other]?.notificationIDs.count == 1)
+        #expect(state.takeNoReturnNudges() == [])
+        // The run's completion notification replaced it: not a nudge any more.
+        _ = state.newNotification(sessionID: Self.session, now: 2, nudge: true, noReturn: true)
+        _ = state.newNotification(sessionID: Self.session, now: 3)
+        #expect(state.takeNoReturnNudges() == [])
+    }
+
+    /// A click or close that reaches the agent after a newer banner replaced
+    /// the one it was for leaves the newer one's bookkeeping alone.
+    @Test func aLateResponseIsToldFromOneOnTheCurrentBanner() {
+        var state = SessionState()
+        _ = state.newNotification(sessionID: Self.session, now: 10)
+        #expect(state.isCurrent(sessionID: Self.session, postedAt: 10))
+        _ = state.newNotification(sessionID: Self.session, now: 12, nudge: true, noReturn: true)
+        #expect(!state.isCurrent(sessionID: Self.session, postedAt: 10))
+        #expect(state.isCurrent(sessionID: Self.session, postedAt: 12))
+        // Posted by an agent that did not carry the time yet.
+        #expect(state.isCurrent(sessionID: Self.session, postedAt: nil))
+    }
+
+    /// Being watched may end a notification sooner, never later.
+    @Test func beingWatchedNeverPutsTheEndBack() {
+        var state = SessionState()
+        _ = state.newNotification(sessionID: Self.session, now: 100)
+        #expect(!state.expires(sessionID: Self.session, by: 103))
+        state.setExpiry(sessionID: Self.session, at: 101)
+        #expect(state.expires(sessionID: Self.session, by: 103))
+        state.setExpiry(sessionID: Self.session, at: 115)
+        #expect(!state.expires(sessionID: Self.session, by: 103))
+        #expect(!state.expires(sessionID: "unknown", by: 103))
+    }
+
     @Test func whetherItIsANudgeOutlivesARestart() throws {
         var state = SessionState()
-        _ = state.newNotification(sessionID: Self.session, now: 1, nudge: true)
+        _ = state.newNotification(sessionID: Self.session, now: 1, nudge: true, noReturn: true)
         _ = state.newNotification(sessionID: Self.thread, now: 1)
         let restored = StateCodec.decode(try StateCodec.encode(state))
         #expect(restored.sessions[Self.session]?.nudge == true)
+        #expect(restored.sessions[Self.session]?.noReturn == true)
         #expect(restored.sessions[Self.thread]?.nudge == false)
+        #expect(restored.sessions[Self.thread]?.noReturn == false)
         // State an older agent wrote has no such field.
         let old = Data(
             #"{"sessions":{"\#(Self.session)":{"notificationIDs":["x"],"updatedAt":1}}}"#.utf8)
         #expect(StateCodec.decode(old).sessions[Self.session]?.nudge == false)
+        #expect(StateCodec.decode(old).sessions[Self.session]?.noReturn == false)
     }
 }

@@ -3,6 +3,21 @@
 What changed in each release. The one-command installer always fetches the
 latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-notifier/releases).
 
+## Unreleased
+
+### Fixed
+
+- Quitting the app from the menu bar takes any `--no-return` nudge still on
+  screen with it. Nothing ran its fifteen-second timer after a Quit, so it
+  stayed until the app was next opened. A restart keeps it, as before, and its
+  deadline comes back with the app.
+- Clicking or closing a banner just as a newer one replaced it no longer takes
+  the newer one's timer and bookkeeping with it, which left that one on screen
+  with nothing to withdraw it.
+- Being on the session's tab when a notification arrives can only bring its
+  end forward: with a timeout shorter than three seconds, it used to put it
+  back to three.
+
 ## 0.12.0 — 2026-11-21
 
 ### Added
