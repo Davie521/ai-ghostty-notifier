@@ -50,21 +50,27 @@ public actor DiskRoundJournal: RoundJournalProviding {
         let joinsTurn =
             event.kind == .prompt && waits
             && event.payload.promptID.map { !$0.isEmpty && $0 == turn?.prompt } ?? false
-        // A report from work the paused round waits on: the round goes on,
-        // and keeping its start makes its completion count the wait. Any
-        // other report, or one pasted by a person, does not.
+        // Whether the last Stop of this generation, from this process, went
+        // out: then a pause of the generation, should one be left, is over.
+        let wentOut =
+            !owner.isEmpty
+            && (stoppedRound(event) ?? nil).map { $0.round == old && $0.owner == owner } ?? false
         let pause = own(record(path(event, "paused")).flatMap(PauseRecord.init)).flatMap {
-            !$0.round.isEmpty && $0.round == turn?.round ? $0 : nil
+            !$0.round.isEmpty && $0.round == turn?.round && !wentOut ? $0 : nil
         }
+        // A report while the round is held: the round goes on, and keeping its
+        // start makes its completion count the wait. The awaited work's report
+        // is crossed off; another's (an earlier task ending meanwhile) keeps
+        // the wait for the rest. A message joining the running turn is none.
         let resumes =
-            event.kind == .prompt && waits
-            && event.reportedTask.map { pause?.tasks.contains($0) ?? false } ?? false
+            event.kind == .prompt && waits && !joinsTurn && event.reportedTask != nil
+            && pause != nil
         // Another task's report right after a Stop that went out continues the
         // same run: it keeps the round, so that completion, perhaps not yet
         // delivered, stays current rather than being cancelled by it.
         let continuesRun =
             event.kind == .prompt && waits && event.reportedTask != nil && !resumes && valid
-            && !owner.isEmpty && stoppedRound(event) == StoppedRecord(round: old, owner: owner)
+            && wentOut
         // A new round's baseline goes before the round is published: a hook
         // stopped in between leaves none, not the last round's.
         if event.kind == .prompt, claude, !(resumes || joinsTurn) {
@@ -82,7 +88,20 @@ public actor DiskRoundJournal: RoundJournalProviding {
         }
         if event.kind == .prompt {
             var logical = resumes ? turn?.round : nil
-            if !(resumes || joinsTurn) { logical = try startRound(event, firstSeen: old.isEmpty) }
+            if !(resumes || joinsTurn) {
+                // No turn has been seen in this session yet (a notification
+                // may have been), and the last turn reached its Stop.
+                let files = FileManager.default
+                let firstSeen = ["turn", "background", "background-mark"].allSatisfy {
+                    !files.fileExists(atPath: path(event, $0))
+                }
+                let unfinished =
+                    turn.map {
+                        !$0.prompt.isEmpty && record(path(event, "turn-stopped")) != $0.prompt
+                    }
+                    ?? false
+                logical = try startRound(event, firstSeen: firstSeen, afterUnfinished: unfinished)
+            }
             if claude, !joinsTurn {
                 let next = TurnRecord(
                     owner: owner, prompt: event.payload.promptID ?? "", round: logical ?? "")
@@ -113,6 +132,9 @@ public actor DiskRoundJournal: RoundJournalProviding {
             }
         }
         if event.kind == .stop, claude {
+            // The clock this Stop measures (the event carries it only once
+            // capture is done).
+            let measured = Self.clock(Self.read(path(event, "start")))?.token ?? ""
             let turns = entries("turns", event)
             // A turn that used tools and never reached its Stop was
             // interrupted, and what it left running is not known to be this
@@ -174,15 +196,23 @@ public actor DiskRoundJournal: RoundJournalProviding {
                     dropSnapshot(event)
                 }
                 var newWork: [BackgroundTask] = []
-                if waits, let before = baseline {
+                if waits, var before = baseline {
                     let judged = before.judge(tasks)
                     newWork = judged.new
                     // Excused once as an earlier launcher's, excused for the
-                    // rest of the round, even after that launcher ends.
-                    if !judged.excused.isEmpty {
-                        baseline?.tasks += judged.excused.map { ($0.id, $0.type ?? "") }
+                    // rest of the round, even after that launcher ends. A
+                    // launcher no longer listed has ended: what starts after
+                    // this is not its.
+                    let listed = Set(tasks.map(\.id))
+                    let ended = Set(
+                        before.tasks.filter { $0.id != "*" && Snapshot.launches($0.type) }
+                            .map(\.id)
+                    ).subtracting(listed)
+                    if !judged.excused.isEmpty || !ended.isEmpty {
+                        before.tasks.removeAll { ended.contains($0.id) }
+                        before.tasks += judged.excused.map { ($0.id, $0.type ?? "") }
                         // Unrecorded, the round cannot be held on it.
-                        if baseline.map({ write($0.text, earlierPath) }) != true {
+                        if !write(before.text, earlierPath) {
                             discard(earlierPath)
                             newWork = []
                         }
@@ -207,9 +237,10 @@ public actor DiskRoundJournal: RoundJournalProviding {
                     }
                     let marker = PauseRecord(owner: owner, round: turn?.round ?? "", tasks: awaited)
                         .text
-                    if stoppedRound(event).map({ $0.map { $0.round == event.roundID } ?? true })
-                        ?? false
-                    {
+                    if stoppedRound(event).map({
+                        $0.map { $0.round == event.roundID && $0.clock == measured }
+                            ?? true
+                    }) ?? false {
                         let generation = UUID().uuidString
                         if write(generation, path(event, "round")) {
                             event.roundID = generation
@@ -229,13 +260,17 @@ public actor DiskRoundJournal: RoundJournalProviding {
             // before this leaves the turns, not an old snapshot that looks
             // current without them.
             discard(path(event, "turns"))
+            // This turn reached its Stop; one that does not was interrupted,
+            // even if no tool hook recorded it.
+            if let stopping, !write(stopping, path(event, "turn-stopped")) {
+                discard(path(event, "turn-stopped"))
+            }
             if !paused {
                 discard(path(event, "paused"))
                 // This Stop goes out. Unless that is on record, a later one of
                 // the round could not make it stale, so none may be held.
-                if !write(
-                    StoppedRecord(round: event.roundID, owner: owner).text, path(event, "stopped"))
-                {
+                let out = StoppedRecord(round: event.roundID, owner: owner, clock: measured)
+                if !write(out.text, path(event, "stopped")) {
                     discard(path(event, "stopped"))
                     discard(path(event, "background-earlier"))
                 }
@@ -279,7 +314,9 @@ public actor DiskRoundJournal: RoundJournalProviding {
     /// process (a resumed session, one open before this version, a failed
     /// write, a CLI that did not say) the round is never held, and notifies
     /// as before. Returns the id this round's baseline carries.
-    private func startRound(_ event: HookEvent, firstSeen: Bool) throws -> String? {
+    private func startRound(_ event: HookEvent, firstSeen: Bool, afterUnfinished: Bool) throws
+        -> String?
+    {
         remove(path(event, "start"))
         if event.source == .codex, !write(Self.clock(at: event.occurredAt), path(event, "start")) {
             throw CocoaError(.fileWriteUnknown)
@@ -304,7 +341,9 @@ public actor DiskRoundJournal: RoundJournalProviding {
         }
         let round = UUID().uuidString
         let baseline = path(event, "background-earlier")
-        if let snapshot = lastSnapshot(event, owner: owner),
+        // After a turn that never reached its Stop, what it left running is
+        // unknown: no baseline.
+        if !afterUnfinished, let snapshot = lastSnapshot(event, owner: owner),
             write(Snapshot(owner: owner, mark: round, tasks: snapshot.tasks).text, baseline)
         {
             return round
@@ -505,7 +544,7 @@ public actor DiskRoundJournal: RoundJournalProviding {
         // directory, which may not be the only thing in the rate directory.
         let sessionOnly: Set<String> = [
             "background", "background-earlier", "background-mark", "paused", "turns", "stopped",
-            "turn",
+            "turn", "turn-stopped",
         ]
         for directory in Set([event.sessionDirectory, event.rateDirectory]) {
             let stamp = directory + "/.pruned"
@@ -588,6 +627,12 @@ struct Snapshot: Equatable, OwnedRecord {
 
     static func == (lhs: Snapshot, rhs: Snapshot) -> Bool { lhs.text == rhs.text }
 
+    /// A subagent or workflow, or a task of a kind never given, which may be
+    /// one: what may start other work.
+    static func launches(_ type: String) -> Bool {
+        type.isEmpty || type == "subagent" || type == "workflow"
+    }
+
     /// The kind on record for each task.
     var kinds: [String: String] {
         var kinds: [String: String] = [:]
@@ -611,9 +656,7 @@ struct Snapshot: Equatable, OwnedRecord {
         // since, and may have ended by now: the round's own shells and
         // monitors cannot be told from its, and do not count. One whose kind
         // was never given may be one too.
-        let launcherBefore = tasks.contains { task in
-            task.id != "*" && (task.type.isEmpty || launchers.contains(task.type))
-        }
+        let launcherBefore = tasks.contains { $0.id != "*" && Self.launches($0.type) }
         var new: [BackgroundTask] = []
         var excused: [BackgroundTask] = []
         for task in running
@@ -682,22 +725,26 @@ struct PauseRecord: OwnedRecord {
     var text: String { (["owner\t" + owner + "\t" + round] + tasks).joined(separator: "\n") }
 }
 
-/// The last Stop that went out: its generation and the process it came from.
+/// The last Stop that went out: its generation, the process it came from and
+/// the clock it measured.
 struct StoppedRecord: Equatable {
     var round: String
     var owner: String
+    var clock: String
 
-    init(round: String, owner: String) {
+    init(round: String, owner: String, clock: String) {
         self.round = round
         self.owner = owner
+        self.clock = clock
     }
 
     init?(_ text: String) {
         let parts = text.split(separator: "\t", omittingEmptySubsequences: false)
-        guard parts.count == 2, !parts[0].isEmpty else { return nil }
+        guard (2...3).contains(parts.count), !parts[0].isEmpty else { return nil }
         round = String(parts[0])
         owner = String(parts[1])
+        clock = parts.count == 3 ? String(parts[2]) : ""
     }
 
-    var text: String { round + "\t" + owner }
+    var text: String { round + "\t" + owner + "\t" + clock }
 }

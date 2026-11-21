@@ -120,14 +120,17 @@ public struct BackgroundTask: Codable, Equatable, Sendable {
         var unidentified = false
         init(from decoder: Decoder) {
             let container = try? decoder.container(keyedBy: BackgroundTask.CodingKeys.self)
+            // A blank kind is no kind given.
             let type = (try? container?.decodeIfPresent(String.self, forKey: .type)).flatMap { $0 }
+                .map { String(NotificationPolicy.clean($0).prefix(40)) }.flatMap {
+                    $0.isEmpty ? nil : $0
+                }
             guard let id = (try? container?.decode(String.self, forKey: .id)).flatMap(usable)
             else {
                 unidentified = type.map(BackgroundTask.wakingTypes.contains) ?? true
                 return
             }
-            task = BackgroundTask(
-                id: id, type: type.map { String(NotificationPolicy.clean($0).prefix(40)) })
+            task = BackgroundTask(id: id, type: type)
         }
     }
 }

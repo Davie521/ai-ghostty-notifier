@@ -470,6 +470,14 @@ class NativeHookTests(unittest.TestCase):
                                  "GHOSTTY_NOTIFY_AGENT_APP": str(self.app)})
         self.assertEqual([r for r in self.spooled(root) if r.get("type") == "hook_event"
                           and r["payload"]["hook_event_name"] == "Stop"], [])
+        # The worker of this version delivers it, with the round's elapsed
+        # time, and clears the clock it measured.
+        self.wait(lambda: any(r.get("type") == "notify" for r in self.spooled(root)))
+        notice = next(r for r in self.spooled(root) if r.get("type") == "notify")
+        self.assertEqual(notice["session_id"], SID)
+        self.assertEqual(notice["subtitle"], "Task Complete — 中文项目")
+        self.assertRegex(notice["body"], r"^Finished after 11m ")
+        self.wait(lambda: not (self.state() / (SID + ".start")).exists())
 
     def test_new_prompt_cancels_detached_codex_settle(self):
         self.start("codex")
