@@ -283,7 +283,8 @@ it lands it takes the nudge back:
 
 Either way the nudge goes by itself after fifteen seconds (sooner if
 `GHOSTTY_NOTIFY_TIMEOUT` is shorter): you take it in as it comes up, and the
-step itself is on your phone. `--nudge-done` takes back only a nudge:
+step itself is on your phone. Quitting the app from the menu bar takes it too,
+since nothing would be left to run that timer. `--nudge-done` takes back only a nudge:
 should the run's completion notification have replaced it already, that one
 stays. Both need an app at least as new as the command; an older one still
 running is reported, not sent to, so restart it after an update. The app

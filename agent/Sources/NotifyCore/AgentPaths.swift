@@ -180,6 +180,7 @@ public enum StateCodec {
             var owner: String?
             var expiresAt: Double?
             var nudge: Bool?
+            var noReturn: Bool?
         }
         var sessions: [String: Record]
     }
@@ -197,7 +198,7 @@ public enum StateCodec {
                     body: $0.body,
                     postedAt: $0.postedAt,
                     roundID: $0.roundID, owner: $0.owner, expiresAt: $0.expiresAt,
-                    nudge: $0.nudge ? true : nil)
+                    nudge: $0.nudge ? true : nil, noReturn: $0.noReturn ? true : nil)
             }
         )
         let encoder = JSONEncoder()
@@ -232,7 +233,7 @@ public enum StateCodec {
                     // submitted — the exact bug `postedAt` exists to prevent.
                     postedAt: $0.postedAt ?? $0.updatedAt,
                     roundID: $0.roundID, owner: $0.owner, expiresAt: $0.expiresAt,
-                    nudge: $0.nudge ?? false)
+                    nudge: $0.nudge ?? false, noReturn: $0.noReturn ?? false)
             }
         )
         return state

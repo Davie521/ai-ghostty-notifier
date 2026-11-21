@@ -219,8 +219,18 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // was still finding its window gives up without a trip or a focus.
         SpaceHopper.shutdownDeadline = Date().addingTimeInterval(Agent.jumpShutdownGrace - 0.5)
         for task in jumps.values { task.cancel() }
+        // Quit from the menu: nothing restarts the agent, so nothing would run
+        // a --no-return nudge's timer, and nobody comes back to clear it. A
+        // restart keeps it; its deadline comes back from the saved state.
+        let withdrawn = Agent.quitChosen ? state.takeNoReturnNudges() : []
+        cancelExpiry(withdrawn)
+        notifier.withdraw(withdrawn)
         Task {
             async let hooks: Void = hookProcessor.shutdown()
+            if !withdrawn.isEmpty {
+                let notifier = self.notifier
+                _ = try? await QueryDeadline.run(seconds: 2) { await notifier.settle() }
+            }
             let until = Date().addingTimeInterval(Agent.jumpShutdownGrace)
             while !jumps.isEmpty, Date() < until {
                 try? await Task.sleep(nanoseconds: 50_000_000)
@@ -393,6 +403,11 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             else { return }
             self.tabWatch.postedSelectionKnown(sessionID: notify.stateKey, selected: selected)
             guard selected == tabID, self.frontmostIsGhostty else { return }
+            // Sooner only: a short timeout of its own may already end it first.
+            guard
+                !self.state.expires(
+                    sessionID: notify.stateKey, by: Agent.now() + Agent.watchedGraceSeconds)
+            else { return }
             self.log("\(notify.sessionID) is already on screen; clearing in short order")
             self.scheduleExpiry(identifier: identifier, after: Agent.watchedGraceSeconds)
             self.saveState()
@@ -480,8 +495,11 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             title: notify.title,
             subtitle: notify.subtitle,
             body: notify.body,
-            now: Agent.now(), roundID: notify.roundID, nudge: notify.nudge)
-        notifier.post(identifier: identifier, sessionID: notify.stateKey, request: notify)
+            now: Agent.now(), roundID: notify.roundID, nudge: notify.nudge,
+            noReturn: notify.noReturn)
+        notifier.post(
+            identifier: identifier, sessionID: notify.stateKey, request: notify,
+            postedAt: state.sessions[notify.stateKey]?.postedAt ?? 0)
         log("posted \(identifier)")
         scheduleExpiry(identifier: identifier, after: notify.timeout)
         // Where the user was when it arrived: reaching its tab counts only
@@ -743,20 +761,33 @@ final class Agent: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         let action = response.actionIdentifier
         let sessionID = response.notification.request.content.userInfo["session_id"] as? String
         let tabID = response.notification.request.content.userInfo["tab_id"] as? String
+        let postedAt = response.notification.request.content.userInfo["posted_at"] as? Double
         let finish = UncheckedBox(completionHandler)
         Task { @MainActor in
-            self.clicked(identifier: identifier, action: action, sessionID: sessionID, tabID: tabID)
+            self.clicked(
+                identifier: identifier, action: action, sessionID: sessionID, tabID: tabID,
+                postedAt: postedAt)
             finish.value()
         }
     }
 
-    private func clicked(identifier: String, action: String, sessionID: String?, tabID: String?) {
+    private func clicked(
+        identifier: String, action: String, sessionID: String?, tabID: String?,
+        postedAt: Double?
+    ) {
         // Fall back to the bookkeeping when userInfo is unavailable, so a click
         // still routes after an upgrade that changed the payload.
         let session = sessionID ?? state.sessionID(forNotification: identifier)
-        state.forgetNotification(identifier)
-        cancelExpiry([identifier])
-        stateChanged()
+        // A response to a banner that a newer one has replaced since, under the
+        // same identifier: the newer one is still on screen, and keeps its
+        // bookkeeping and its timer.
+        if let session, !state.isCurrent(sessionID: session, postedAt: postedAt) {
+            log("late response to an earlier notification of \(session)")
+        } else {
+            state.forgetNotification(identifier)
+            cancelExpiry([identifier])
+            stateChanged()
+        }
 
         switch action {
         case UNNotificationDismissActionIdentifier:
