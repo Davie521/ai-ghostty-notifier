@@ -219,8 +219,9 @@ command sent to the background, a background subagent, a workflow, a monitor)
 is paused, not finished: Claude wakes the session when that work ends. Such a
 stop does not notify. The report that wakes the session (a
 `<task-notification>`, or a subagent's `<agent-message>` hand-back) continues
-the same run, if it comes from the work the round is waiting on and from the
-same Claude process, so when the session is really done the notification
+the same run, if it comes while the round is held and from the same Claude
+process (only the awaited work's report is crossed off the list of what the
+round waits on), so when the session is really done the notification
 counts the whole wait, from the first tool call after your prompt. A message you send while
 the turn is running joins that run too. Work still running from before your
 last prompt, such as a dev server, does not count, and neither do Claude's own

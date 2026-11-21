@@ -1007,6 +1007,12 @@ struct BackgroundWaitTests {
         #expect(
             try await capture(sandbox, .stop, turn: "r", tasks: ["new"]).awaitingBackground == true)
         #expect(await DiskRoundJournal().isCurrent(out))
+        // The new clock's own pause stands, though a Stop of this generation
+        // went out on the earlier clock: its report resumes it.
+        let fromNew = "<task-notification>\n<task-id>new</task-id>\n</task-notification>"
+        _ = try await capture(sandbox, .prompt, turn: "s", prompt: fromNew)
+        #expect(started(sandbox) == "1500 clock-b")
+        #expect(try await capture(sandbox, .stop, turn: "s", tasks: []).startedAt == 1500)
     }
 
     @Test func aBlankKindIsNoKind() throws {
@@ -1016,6 +1022,24 @@ struct BackgroundWaitTests {
                 #"{"session_id":"abc-123","hook_event_name":"Stop","background_tasks":[{"id":"server","type":""}]}"#
                     .utf8))
         #expect(read.backgroundTasks == [BackgroundTask(id: "server")])
+    }
+
+    @Test func aTurnRecordThatCannotBeReadShowsNoFinishedTurn() async throws {
+        let sandbox = try await firstRound()
+        _ = try await capture(sandbox, .stop, tasks: [])
+        try Data([0xFF, 0xFE]).write(to: sandbox.root.appendingPathComponent("abc-123.turn"))
+        _ = try await capture(sandbox, .prompt, source: "user")
+        #expect(try await capture(sandbox, .stop, tasks: ["server"]).awaitingBackground == false)
+    }
+
+    @Test func anEarlierTaskNowKnownAsAShellExcusesNothing() async throws {
+        let sandbox = try await firstRound()
+        _ = try await capture(sandbox, .stop, typed: [BackgroundTask(id: "s1")])
+        _ = try await capture(sandbox, .prompt, source: "user")
+        let listed = [
+            BackgroundTask(id: "s1", type: "shell"), BackgroundTask(id: "s2", type: "shell"),
+        ]
+        #expect(try await capture(sandbox, .stop, typed: listed).awaitingBackground == true)
     }
 
     @Test func anOlderClaudeOrTheSettingOffKeepsTheOldBehavior() async throws {

@@ -52,11 +52,16 @@ public actor DiskRoundJournal: RoundJournalProviding {
             && event.payload.promptID.map { !$0.isEmpty && $0 == turn?.prompt } ?? false
         // Whether the last Stop of this generation, from this process, went
         // out: then a pause of the generation, should one be left, is over.
-        let wentOut =
-            !owner.isEmpty
-            && (stoppedRound(event) ?? nil).map { $0.round == old && $0.owner == owner } ?? false
+        let lastOut = (stoppedRound(event) ?? nil).flatMap {
+            !owner.isEmpty && $0.round == old && $0.owner == owner ? $0 : nil
+        }
+        let wentOut = lastOut != nil
+        // Over only for the clock that Stop measured: the generation may have
+        // gone on (another task's report) with a clock, and a pause, of its own.
         let pause = own(record(path(event, "paused")).flatMap(PauseRecord.init)).flatMap {
-            !$0.round.isEmpty && $0.round == turn?.round && !wentOut ? $0 : nil
+            pause in
+            !pause.round.isEmpty && pause.round == turn?.round && lastOut?.clock != pause.clock
+                ? pause : nil
         }
         // A report while the round is held: the round goes on, and keeping its
         // start makes its completion count the wait. The awaited work's report
@@ -83,7 +88,8 @@ public actor DiskRoundJournal: RoundJournalProviding {
         if resumes, let pause, let task = event.reportedTask {
             // This report is in; the others the round waits on still come.
             let left = PauseRecord(
-                owner: owner, round: pause.round, tasks: pause.tasks.filter { $0 != task })
+                owner: owner, round: pause.round, clock: pause.clock,
+                tasks: pause.tasks.filter { $0 != task })
             if !write(left.text, path(event, "paused")) { discard(path(event, "paused")) }
         }
         if event.kind == .prompt {
@@ -91,15 +97,17 @@ public actor DiskRoundJournal: RoundJournalProviding {
             if !(resumes || joinsTurn) {
                 // No turn has been seen in this session yet (a notification
                 // may have been), and the last turn reached its Stop.
-                let files = FileManager.default
                 let firstSeen = ["turn", "background", "background-mark"].allSatisfy {
-                    !files.fileExists(atPath: path(event, $0))
+                    !FileManager.default.fileExists(atPath: path(event, $0))
                 }
+                // The last turn on record reached its Stop. A record that
+                // cannot be read, or is not this process's, shows no such
+                // thing.
                 let unfinished =
-                    turn.map {
-                        !$0.prompt.isEmpty && record(path(event, "turn-stopped")) != $0.prompt
-                    }
-                    ?? false
+                    FileManager.default.fileExists(atPath: path(event, "turn"))
+                    && !(turn.map {
+                        $0.prompt.isEmpty || record(path(event, "turn-stopped")) == $0.prompt
+                    } ?? false)
                 logical = try startRound(event, firstSeen: firstSeen, afterUnfinished: unfinished)
             }
             if claude, !joinsTurn {
@@ -235,8 +243,9 @@ public actor DiskRoundJournal: RoundJournalProviding {
                     for task in newWork where seen.insert(task.id).inserted {
                         awaited.append(task.id)
                     }
-                    let marker = PauseRecord(owner: owner, round: turn?.round ?? "", tasks: awaited)
-                        .text
+                    let marker = PauseRecord(
+                        owner: owner, round: turn?.round ?? "", clock: measured, tasks: awaited
+                    ).text
                     if stoppedRound(event).map({
                         $0.map { $0.round == event.roundID && $0.clock == measured }
                             ?? true
@@ -656,7 +665,12 @@ struct Snapshot: Equatable, OwnedRecord {
         // since, and may have ended by now: the round's own shells and
         // monitors cannot be told from its, and do not count. One whose kind
         // was never given may be one too.
-        let launcherBefore = tasks.contains { $0.id != "*" && Self.launches($0.type) }
+        // A kind the baseline lacks is the one the list gives now.
+        var given: [String: String] = [:]
+        for task in running { if let type = task.type { given[task.id] = type } }
+        let launcherBefore = tasks.contains {
+            $0.id != "*" && Self.launches($0.type.isEmpty ? given[$0.id] ?? "" : $0.type)
+        }
         var new: [BackgroundTask] = []
         var excused: [BackgroundTask] = []
         for task in running
@@ -699,15 +713,18 @@ struct TurnRecord: OwnedRecord {
 }
 
 /// A round held on background work: the process, the round's mark (that of
-/// its baseline), then the ids of the work whose reports resume it.
+/// its baseline) and the clock it is held on, then the ids of the work whose
+/// reports resume it.
 struct PauseRecord: OwnedRecord {
     var owner: String
     var round: String
+    var clock: String
     var tasks: [String]
 
-    init(owner: String, round: String, tasks: [String]) {
+    init(owner: String, round: String, clock: String, tasks: [String]) {
         self.owner = owner
         self.round = round
+        self.clock = clock
         self.tasks = tasks
     }
 
@@ -715,14 +732,17 @@ struct PauseRecord: OwnedRecord {
         var lines = text.split(separator: "\n", omittingEmptySubsequences: false)
         guard let first = lines.first else { return nil }
         let head = first.split(separator: "\t", omittingEmptySubsequences: false)
-        guard head.count == 3, head[0] == "owner" else { return nil }
+        guard head.count == 4, head[0] == "owner" else { return nil }
         owner = String(head[1])
         round = String(head[2])
+        clock = String(head[3])
         lines.removeFirst()
         tasks = lines.filter { !$0.isEmpty }.map(String.init)
     }
 
-    var text: String { (["owner\t" + owner + "\t" + round] + tasks).joined(separator: "\n") }
+    var text: String {
+        (["owner\t" + owner + "\t" + round + "\t" + clock] + tasks).joined(separator: "\n")
+    }
 }
 
 /// The last Stop that went out: its generation, the process it came from and

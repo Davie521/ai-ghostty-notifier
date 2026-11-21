@@ -25,9 +25,10 @@ latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-n
   announce it. Each round's clock now has an id of its own, so a completion
   delivered late cannot clear the clock of a turn begun after it, even in
   the same second, and a Claude stop goes to the app only if it advertises
-  `clock-id-v1`. Only a report from the awaited work (a
-  `<task-notification>` or a subagent's `<agent-message>` hand-back), in the
-  same Claude process, resumes a held round.
+  `clock-id-v1`. A report (a `<task-notification>` or a subagent's
+  `<agent-message>` hand-back) arriving while a round is held, in the same
+  Claude process, keeps that round going; only the awaited work's report is
+  crossed off what it waits on.
   `GHOSTTY_NOTIFY_WAIT_BACKGROUND=0` restores the old behavior.
 
 ## 0.12.1 — 2026-11-21
