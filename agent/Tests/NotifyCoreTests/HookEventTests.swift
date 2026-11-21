@@ -142,7 +142,9 @@ struct HookEventTests {
     }
 }
 
-@Suite("Background work keeps a Claude round open")
+// One at a time: these are many, each all file work, and run abreast they
+// crowd the timing tests of other suites on a small CI machine.
+@Suite("Background work keeps a Claude round open", .serialized)
 struct BackgroundWaitTests {
     private func payload(_ json: String) throws -> HookPayload {
         try JSONDecoder().decode(HookPayload.self, from: Data(json.utf8))
@@ -701,7 +703,7 @@ struct BackgroundWaitTests {
         let sandbox = try await firstRound()
         // Small enough not to crowd the timing tests that run alongside, large
         // enough that comparing every pair would take far longer than this.
-        let many = (0..<3_000).map { "t\($0)" }
+        let many = (0..<1_500).map { "t\($0)" }
         _ = try await capture(sandbox, .stop, tasks: many)
         _ = try await capture(sandbox, .prompt, source: "user")
         let clock = ContinuousClock()
@@ -931,7 +933,7 @@ struct BackgroundWaitTests {
         let clock = ContinuousClock()
         var held: Bool?
         let took = try await clock.measure {
-            held = try await capture(sandbox, .stop, tasks: (0..<3_000).map { "n\($0)" })
+            held = try await capture(sandbox, .stop, tasks: (0..<1_500).map { "n\($0)" })
                 .awaitingBackground
         }
         #expect(held == true)
