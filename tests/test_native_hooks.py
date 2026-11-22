@@ -257,7 +257,8 @@ class NativeHookTests(unittest.TestCase):
         # tab, and was left there; the banner could not lead back to the pane.
         # Ghostty's own variables are inherited from the tab tmux runs in.
         tmux = {"TMUX": "/private/tmp/tmux-501/default,4242,0", "TMUX_PANE": "%1",
-                "TERM_PROGRAM": "tmux"}
+                "TERM_PROGRAM": "tmux",
+                "GHOSTTY_RESOURCES_DIR": "/Applications/Ghostty.app/Contents/Resources/ghostty"}
         other = "feedface-5050-6060"
         def payload(event):
             return {"session_id": other, "hook_event_name": event, "cwd": "/work/tmux"}
