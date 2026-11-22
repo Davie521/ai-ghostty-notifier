@@ -17,6 +17,13 @@ import Testing
 
     static let thread = "01a1974d-5956-7ad1-9c87-b3ffeffb8fd8"
 
+    @Test func nothingIsPostedInsideTmux() {
+        #expect(NudgeNotification.insideTmux(["TMUX": "/private/tmp/tmux-501/default,1,0"]))
+        #expect(!NudgeNotification.insideTmux(["TMUX": ""]))
+        #expect(!NudgeNotification.insideTmux(["TERM_PROGRAM": "tmux"]))
+        #expect(!NudgeNotification.insideTmux([:]))
+    }
+
     @Test func theSessionIsTheOneTheCLIRunsTheCommandFor() {
         let claude = NudgeNotification.Session(id: Self.session, source: .claude)
         let codex = NudgeNotification.Session(id: Self.thread, source: .codex)

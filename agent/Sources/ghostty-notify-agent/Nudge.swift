@@ -22,6 +22,10 @@ enum Nudge {
             SelfTest.fail(NudgeNotification.usage)
             return 2
         }
+        if NudgeNotification.insideTmux(environment) {
+            print(NudgeNotification.skippedInTmux)
+            return 0
+        }
         let app = Bundle.main.bundlePath
         let nearest = HookProcessContext.nearest(among: [.claude, .codex])
         guard let session = NudgeNotification.session(environment: environment, nearest: nearest)

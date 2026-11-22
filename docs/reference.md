@@ -91,7 +91,8 @@ then register the plugin in Claude Code:
 Choose manual or plugin registration, not both. To test a checkout, use the
 manual install: the marketplace serves the last published version, not your
 working copy. Without the app the plugin cannot notify; the first prompt of
-each session then says so, with the command that installs it.
+each session then says so, with the command that installs it (not inside tmux,
+where no notifications are posted anyway).
 
 ### 3. Register Codex CLI hooks, if used
 
@@ -264,7 +265,8 @@ nearby, and a sound is kept for the long runs you walked away from. It carries t
 session's title and project, and its Go to tab returns to the session's tab.
 The menu bar lists it, and it clears like the others: when you return to the
 tab, when you send a prompt, or after `GHOSTTY_NOTIFY_TIMEOUT`. A later nudge,
-or the run's completion notification, replaces it.
+or the run's completion notification, replaces it. Inside tmux nothing is
+posted: `--nudge` says so and exits 0.
 
 Some steps you do somewhere else, a captcha to slide on your phone say, and
 there is nothing to come back to the tab for. For those the agent adds
@@ -433,9 +435,9 @@ What the notification is able to say, and how it finds the tab:
   a server or a script — is skipped too, even when it inherited `TERM_PROGRAM`
   from something launched in Ghostty: it has no tab to notify about or jump to.
   `GHOSTTY_NOTIFY_TTY` names a terminal for a session that has none of its own.
-- The hooks skip a session running inside tmux (a non-empty `TMUX`): no
-  automatic banner, no tab binding, no title change. An explicit `--nudge`
-  still posts. The binding marker is a terminal title, and
+- A session running inside tmux (a non-empty `TMUX`) gets no notifications:
+  the hooks skip it (no banner, no tab binding, no title change) and `--nudge`
+  posts nothing, saying so to the agent that ran it. The binding marker is a terminal title, and
   tmux keeps it as the pane's own title instead of passing it to the Ghostty tab,
   so no tab could be found and the marker was left on the pane. Without a tab a
   click could only bring Ghostty forward, and a tmux session used from another

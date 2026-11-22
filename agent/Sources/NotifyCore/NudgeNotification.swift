@@ -181,6 +181,17 @@ public enum NudgeNotification {
         }
     }
 
+    /// Inside tmux nothing is posted, nudges included: the hooks skip those
+    /// sessions (see `HookIntake.parse`), so no tab is bound and nothing would
+    /// clear a nudge on the next prompt or replace it at the end of the run.
+    public static func insideTmux(_ environment: [String: String]) -> Bool {
+        !(environment["TMUX"] ?? "").isEmpty
+    }
+
+    public static let skippedInTmux =
+        "Not sent: this session runs inside tmux, where no notifications are posted. "
+        + "The user was not notified; ask in your reply instead."
+
     public static let usage = """
         usage: ghostty-notify-agent --nudge [--no-return] <what you need from the user>
                ghostty-notify-agent --nudge-done

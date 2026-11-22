@@ -280,6 +280,18 @@ class NativeHookTests(unittest.TestCase):
         self.assertNotIn("ghostty-notify-" + other, self.notices()[0])
         self.assertEqual([p.name for p in self.state().iterdir() if other in p.name], [other + ".start"])
 
+    def test_a_nudge_inside_tmux_is_not_sent(self):
+        env = {**self.env, "TMUX": "/private/tmp/tmux-501/default,4242,0", "TERM_PROGRAM": "tmux",
+               "GHOSTTY_RESOURCES_DIR": "/Applications/Ghostty.app/Contents/Resources/ghostty",
+               "CLAUDE_CODE_SESSION_ID": SID}
+        result = subprocess.run([str(self.binary), "--nudge", "Approve on the phone"], env=env,
+                                capture_output=True, text=True, timeout=25)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Not sent", result.stdout)
+        self.assertFalse((self.root / "Library").exists())
+        self.assertFalse(self.state().exists())
+        self.assertEqual(self.notices(), [])
+
     def test_malformed_and_non_ghostty_inputs_are_fail_open(self):
         for value in ("{", "[]", '{"session_id":"../escape","hook_event_name":"Stop"}'):
             self.invoke("Stop", payload=value)
