@@ -32,6 +32,13 @@ BIN="${NATIVE_TEST_BINARY:-$APP/Contents/MacOS/ghostty-notify-agent}"
 echo "Testing $BIN"
 command -v jq >/dev/null 2>&1 || { echo "jq is required by this test" >&2; exit 2; }
 
+# Sessions inside tmux are skipped, and a marker written to a tmux pane never
+# reaches a Ghostty tab. From tmux, target a plain Ghostty tab instead.
+if [[ -n "${TMUX:-}" && -z "${GHOSTTY_NOTIFY_TTY:-}" ]]; then
+    echo "Inside tmux: set GHOSTTY_NOTIFY_TTY to the terminal of a plain Ghostty tab" >&2
+    exit 2
+fi
+unset TMUX TMUX_PANE
 TTY_PATH=${GHOSTTY_NOTIFY_TTY:-$(tty 2>/dev/null || true)}
 [[ "$TTY_PATH" == /dev/* && -c "$TTY_PATH" ]] || {
     echo "Run inside a Ghostty tab, or set GHOSTTY_NOTIFY_TTY to its terminal device" >&2

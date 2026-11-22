@@ -63,6 +63,8 @@ struct NativeHookTests {
         #expect(try parse(input, environment: tmux) == nil)
         #expect(
             try parse(input, source: .claude, environment: tmux, processes: claudeTree()) == nil)
+        // TMUX alone decides it: TERM_PROGRAM stays ghostty here.
+        #expect(try parse(input, environment: ["TMUX": "/private/tmp/tmux-501/default,1,0"]) == nil)
         #expect(try parse(input, environment: ["TMUX": ""]) != nil)
         #expect(try parse(#"{"session_id":"abc-123","hook_event_name":"PreToolUse"}"#) == nil)
     }

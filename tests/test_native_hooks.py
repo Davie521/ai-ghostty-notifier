@@ -319,6 +319,9 @@ class NativeHookTests(unittest.TestCase):
         for event in ("PreToolUse", "Stop", "Notification"):
             self.invoke(event, payload={"session_id": "abcdef-0002", "hook_event_name": event}, env=env)
         self.invoke("UserPromptSubmit", source="codex", payload=self.prompt("abcdef-0003"), env=env)
+        # Inside tmux the app would skip the session anyway: nothing to install for.
+        tmux = {**env, "TMUX": "/private/tmp/tmux-501/default,4242,0"}
+        self.invoke("UserPromptSubmit", payload=self.prompt("abcdef-0004"), env=tmux)
         self.assertFalse(self.state().exists())
 
     def test_an_app_too_old_for_the_plugin_says_so(self):
