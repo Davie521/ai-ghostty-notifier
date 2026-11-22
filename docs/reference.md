@@ -91,7 +91,8 @@ then register the plugin in Claude Code:
 Choose manual or plugin registration, not both. To test a checkout, use the
 manual install: the marketplace serves the last published version, not your
 working copy. Without the app the plugin cannot notify; the first prompt of
-each session then says so, with the command that installs it.
+each session then says so, with the command that installs it (not inside tmux,
+where no notifications are posted anyway).
 
 ### 3. Register Codex CLI hooks, if used
 
@@ -264,7 +265,8 @@ nearby, and a sound is kept for the long runs you walked away from. It carries t
 session's title and project, and its Go to tab returns to the session's tab.
 The menu bar lists it, and it clears like the others: when you return to the
 tab, when you send a prompt, or after `GHOSTTY_NOTIFY_TIMEOUT`. A later nudge,
-or the run's completion notification, replaces it.
+or the run's completion notification, replaces it. Inside tmux nothing is
+posted: `--nudge` says so and exits 1.
 
 Some steps you do somewhere else, a captcha to slide on your phone say, and
 there is nothing to come back to the tab for. For those the agent adds
@@ -433,6 +435,14 @@ What the notification is able to say, and how it finds the tab:
   a server or a script — is skipped too, even when it inherited `TERM_PROGRAM`
   from something launched in Ghostty: it has no tab to notify about or jump to.
   `GHOSTTY_NOTIFY_TTY` names a terminal for a session that has none of its own.
+- A session running inside tmux (a non-empty `TMUX`) gets no notifications:
+  the hooks skip it (no banner, no tab binding, no title change) and `--nudge`
+  posts nothing and exits non-zero, so the agent that ran it asks in its reply.
+  The binding marker is a terminal title, and tmux keeps it as the pane's own
+  title; only with `set-titles` on (off by default) does it reach the Ghostty
+  tab. So no tab could be found and the marker was left on the pane. Without a tab a
+  click could only bring Ghostty forward, and a tmux session used from another
+  machine over ssh would put the banner on a screen nobody is looking at.
 - The resident app uses its own notification identity, exact per-session
   withdrawal, activation events and a menu bar list of waiting sessions.
 - A click's jump is checked, not assumed: after focusing the tab the resident
@@ -567,7 +577,8 @@ without removing any of the macOS-specific integration.
   opt-out is
   `ECC_DISABLED_HOOKS=stop:desktop-notify`.
 - **No precise tab:** Ghostty must expose its AppleScript interface and permit
-  Automation. tmux/title redraws can defeat the marker. Failed or ambiguous
+  Automation. Title redraws can defeat the marker (tmux sessions are not
+  handled by the hooks, see [How it works](#how-it-works)). Failed or ambiguous
   binding degrades to activation only, with retry/backoff; a closed tab cannot
   be reopened by clicking. Title restoration is best effort during terminal or
   Automation failures, not an unconditional guarantee.

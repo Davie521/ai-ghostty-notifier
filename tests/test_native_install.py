@@ -65,7 +65,8 @@ class NativeInstallTests(unittest.TestCase):
             (self.bin / command).symlink_to(executable)
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith("GHOSTTY_NOTIFY_")
-                    and k not in ("CODEX_HOME", "CODEX_SQLITE_HOME", "CLAUDE_CONFIG_DIR")}
+                    and k not in ("CODEX_HOME", "CODEX_SQLITE_HOME", "CLAUDE_CONFIG_DIR",
+                                  "TMUX", "TMUX_PANE")}
         self.env.update({"HOME": str(self.home), "PATH": str(self.bin), "TERM_PROGRAM": "",
                          "GHOSTTY_RESOURCES_DIR": "",
                          "INSTALL_TEST_CALLS": str(self.root / "service-calls")})

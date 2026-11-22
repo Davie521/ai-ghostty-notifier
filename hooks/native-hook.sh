@@ -40,9 +40,11 @@ fi
 # its own this failure is silent: a plugin installed without the app does
 # nothing and says nothing. Claude's first prompt in each session says it
 # instead, through the systemMessage the CLI shows to the user. Not while the
-# app is being reinstalled: that ends by itself.
+# app is being reinstalled: that ends by itself. Nor inside tmux: the app
+# skips those sessions, so installing it would change nothing for this one.
 native_warn=""
-if [[ -z "$native_problem" && "${2:-}" == claude && "${3:-}" == UserPromptSubmit ]]; then
+if [[ -z "$native_problem" && -z "${TMUX:-}" && "${2:-}" == claude \
+    && "${3:-}" == UserPromptSubmit ]]; then
     native_warn=1
 fi
 native_session=""

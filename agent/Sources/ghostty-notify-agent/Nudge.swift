@@ -22,6 +22,12 @@ enum Nudge {
             SelfTest.fail(NudgeNotification.usage)
             return 2
         }
+        // Not delivered, so not exit 0: the skill reads 0 as delivered and
+        // has the agent wait for the user's step.
+        if NudgeNotification.insideTmux(environment) {
+            SelfTest.fail(NudgeNotification.skippedInTmux)
+            return 1
+        }
         let app = Bundle.main.bundlePath
         let nearest = HookProcessContext.nearest(among: [.claude, .codex])
         guard let session = NudgeNotification.session(environment: environment, nearest: nearest)

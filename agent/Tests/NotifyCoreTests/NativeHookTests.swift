@@ -55,6 +55,17 @@ struct NativeHookTests {
                 == nil)
         #expect(try parse(#"{"session_id":"../bad","hook_event_name":"Stop"}"#) == nil)
         #expect(try parse(input, environment: ["TERM_PROGRAM": "iTerm.app"]) == nil)
+        // Inside tmux, even with Ghostty's variables inherited from the outer tab.
+        let tmux = [
+            "TMUX": "/private/tmp/tmux-501/default,123,0", "TERM_PROGRAM": "tmux",
+            "GHOSTTY_RESOURCES_DIR": "/Applications/Ghostty.app/Contents/Resources/ghostty",
+        ]
+        #expect(try parse(input, environment: tmux) == nil)
+        #expect(
+            try parse(input, source: .claude, environment: tmux, processes: claudeTree()) == nil)
+        // TMUX alone decides it: TERM_PROGRAM stays ghostty here.
+        #expect(try parse(input, environment: ["TMUX": "/private/tmp/tmux-501/default,1,0"]) == nil)
+        #expect(try parse(input, environment: ["TMUX": ""]) != nil)
         #expect(try parse(#"{"session_id":"abc-123","hook_event_name":"PreToolUse"}"#) == nil)
     }
     private func claudeTree(tty: String? = "/dev/ttys001") -> ProcessFixture {

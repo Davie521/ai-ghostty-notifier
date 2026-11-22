@@ -65,7 +65,9 @@ class NativeHookTests(unittest.TestCase):
         resources.mkdir()
         (resources / "native-hook-v1").write_text("native-hook-v1\n")
         self.log = self.root / "calls.jsonl"
-        self.env = {k: v for k, v in os.environ.items() if not k.startswith("GHOSTTY_NOTIFY_")}
+        # TMUX too: run from a tmux pane, every hook here would be skipped.
+        self.env = {k: v for k, v in os.environ.items()
+                    if not k.startswith("GHOSTTY_NOTIFY_") and k not in ("TMUX", "TMUX_PANE")}
         self.env.update({
             "HOME": str(self.root), "CODEX_HOME": str(self.root / "codex-home"),
             "PATH": str(self.bin), "TERM_PROGRAM": "ghostty", "GHOSTTY_RESOURCES_DIR": "",
@@ -250,6 +252,48 @@ class NativeHookTests(unittest.TestCase):
         self.assertNotIn("ghostty-notify-" + other, self.notices()[0])
         self.assertEqual([p.name for p in self.state().iterdir() if other in p.name], [other + ".start"])
 
+    def test_a_session_inside_tmux_posts_and_records_nothing(self):
+        # Under tmux the binding marker lands on the pane, never on a Ghostty
+        # tab, and was left there; the banner could not lead back to the pane.
+        # Ghostty's own variables are inherited from the tab tmux runs in.
+        tmux = {"TMUX": "/private/tmp/tmux-501/default,4242,0", "TMUX_PANE": "%1",
+                "TERM_PROGRAM": "tmux",
+                "GHOSTTY_RESOURCES_DIR": "/Applications/Ghostty.app/Contents/Resources/ghostty"}
+        other = "feedface-5050-6060"
+        def payload(event):
+            return {"session_id": other, "hook_event_name": event, "cwd": "/work/tmux"}
+        self.invoke("UserPromptSubmit", payload=payload("UserPromptSubmit"), env=tmux)
+        self.invoke("PreToolUse", payload=payload("PreToolUse"), env=tmux)
+        self.assertFalse(self.state().exists())
+        self.state().mkdir(parents=True)
+        (self.state() / (other + ".start")).write_text(str(int(time.time()) - 700) + "\n")
+        self.invoke("Stop", payload=payload("Stop"), env=tmux)
+        self.invoke("Notification", payload={**payload("Notification"), "message": "needs input"},
+                    env=tmux)
+        # The same fixture outside tmux does notify, and in the time that takes
+        # the tmux round would have been posted too.
+        self.start()
+        self.invoke("Stop")
+        self.wait(lambda: len(self.notices()) == 1)
+        time.sleep(0.5)
+        self.assertEqual(len(self.notices()), 1)
+        self.assertNotIn("ghostty-notify-" + other, self.notices()[0])
+        self.assertEqual([p.name for p in self.state().iterdir() if other in p.name], [other + ".start"])
+
+    def test_a_nudge_inside_tmux_is_not_sent(self):
+        env = {**self.env, "TMUX": "/private/tmp/tmux-501/default,4242,0", "TERM_PROGRAM": "tmux",
+               "GHOSTTY_RESOURCES_DIR": "/Applications/Ghostty.app/Contents/Resources/ghostty",
+               "CLAUDE_CODE_SESSION_ID": SID}
+        result = subprocess.run([str(self.binary), "--nudge", "Approve on the phone"], env=env,
+                                capture_output=True, text=True, timeout=25)
+        # Not delivered, so not 0: the nudge skill reads 0 as delivered.
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("inside tmux", result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertFalse((self.root / "Library").exists())
+        self.assertFalse(self.state().exists())
+        self.assertEqual(self.notices(), [])
+
     def test_malformed_and_non_ghostty_inputs_are_fail_open(self):
         for value in ("{", "[]", '{"session_id":"../escape","hook_event_name":"Stop"}'):
             self.invoke("Stop", payload=value)
@@ -289,6 +333,9 @@ class NativeHookTests(unittest.TestCase):
         for event in ("PreToolUse", "Stop", "Notification"):
             self.invoke(event, payload={"session_id": "abcdef-0002", "hook_event_name": event}, env=env)
         self.invoke("UserPromptSubmit", source="codex", payload=self.prompt("abcdef-0003"), env=env)
+        # Inside tmux the app would skip the session anyway: nothing to install for.
+        tmux = {**env, "TMUX": "/private/tmp/tmux-501/default,4242,0"}
+        self.invoke("UserPromptSubmit", payload=self.prompt("abcdef-0004"), env=tmux)
         self.assertFalse(self.state().exists())
 
     def test_an_app_too_old_for_the_plugin_says_so(self):

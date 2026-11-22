@@ -18,6 +18,8 @@
 # `check`, `wait_for` and the EXIT trap invoke their function arguments.
 # shellcheck disable=SC2329
 set -u
+# Run from a tmux pane, every hook below would be skipped.
+unset TMUX TMUX_PANE
 IFS=$'\n\t'
 
 HERE=$(cd "$(dirname "$0")" && pwd)
