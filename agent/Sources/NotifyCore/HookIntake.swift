@@ -15,6 +15,15 @@ public enum HookIntake {
             environment["TERM_PROGRAM"] == "ghostty"
                 || !(environment["GHOSTTY_RESOURCES_DIR"] ?? "").isEmpty, !data.isEmpty
         else { return nil }
+        // A session inside tmux is not handled at all. The binding marker is an
+        // OSC title written to the session's terminal, and under tmux that
+        // terminal is a pane: tmux keeps the title as the pane's own and Ghostty
+        // never shows it, so no tab is ever found. Restoration then reads the
+        // missing marker as "the TUI retitled the tab" and leaves the marker on
+        // the pane for good. With no tab the banner could only bring Ghostty
+        // forward, and tmux is mostly used from another machine over ssh, where
+        // a banner on this Mac goes unseen.
+        if !(environment["TMUX"] ?? "").isEmpty { return nil }
         guard let home = environment["HOME"], home.hasPrefix("/"), home != "/",
             !home.contains("\0"), now.isFinite, now > 0, now < Double(Int.max)
         else { throw AgentPathsError.missingHome }

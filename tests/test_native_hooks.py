@@ -65,7 +65,9 @@ class NativeHookTests(unittest.TestCase):
         resources.mkdir()
         (resources / "native-hook-v1").write_text("native-hook-v1\n")
         self.log = self.root / "calls.jsonl"
-        self.env = {k: v for k, v in os.environ.items() if not k.startswith("GHOSTTY_NOTIFY_")}
+        # TMUX too: run from a tmux pane, every hook here would be skipped.
+        self.env = {k: v for k, v in os.environ.items()
+                    if not k.startswith("GHOSTTY_NOTIFY_") and k not in ("TMUX", "TMUX_PANE")}
         self.env.update({
             "HOME": str(self.root), "CODEX_HOME": str(self.root / "codex-home"),
             "PATH": str(self.bin), "TERM_PROGRAM": "ghostty", "GHOSTTY_RESOURCES_DIR": "",
@@ -242,6 +244,33 @@ class NativeHookTests(unittest.TestCase):
         self.invoke("Stop", payload=payload("Stop"), env=headless, owner=False)
         # The same fixture does notify for a session with a terminal, and in
         # the time that takes the headless round would have been posted too.
+        self.start()
+        self.invoke("Stop")
+        self.wait(lambda: len(self.notices()) == 1)
+        time.sleep(0.5)
+        self.assertEqual(len(self.notices()), 1)
+        self.assertNotIn("ghostty-notify-" + other, self.notices()[0])
+        self.assertEqual([p.name for p in self.state().iterdir() if other in p.name], [other + ".start"])
+
+    def test_a_session_inside_tmux_posts_and_records_nothing(self):
+        # Under tmux the binding marker lands on the pane, never on a Ghostty
+        # tab, and was left there; the banner could not lead back to the pane.
+        # Ghostty's own variables are inherited from the tab tmux runs in.
+        tmux = {"TMUX": "/private/tmp/tmux-501/default,4242,0", "TMUX_PANE": "%1",
+                "TERM_PROGRAM": "tmux"}
+        other = "feedface-5050-6060"
+        def payload(event):
+            return {"session_id": other, "hook_event_name": event, "cwd": "/work/tmux"}
+        self.invoke("UserPromptSubmit", payload=payload("UserPromptSubmit"), env=tmux)
+        self.invoke("PreToolUse", payload=payload("PreToolUse"), env=tmux)
+        self.assertFalse(self.state().exists())
+        self.state().mkdir(parents=True)
+        (self.state() / (other + ".start")).write_text(str(int(time.time()) - 700) + "\n")
+        self.invoke("Stop", payload=payload("Stop"), env=tmux)
+        self.invoke("Notification", payload={**payload("Notification"), "message": "needs input"},
+                    env=tmux)
+        # The same fixture outside tmux does notify, and in the time that takes
+        # the tmux round would have been posted too.
         self.start()
         self.invoke("Stop")
         self.wait(lambda: len(self.notices()) == 1)

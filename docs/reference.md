@@ -433,6 +433,12 @@ What the notification is able to say, and how it finds the tab:
   a server or a script — is skipped too, even when it inherited `TERM_PROGRAM`
   from something launched in Ghostty: it has no tab to notify about or jump to.
   `GHOSTTY_NOTIFY_TTY` names a terminal for a session that has none of its own.
+- A session running inside tmux (`TMUX` is set) is skipped entirely: no banner,
+  no tab binding, no title change. The binding marker is a terminal title, and
+  tmux keeps it as the pane's own title instead of passing it to the Ghostty tab,
+  so no tab could be found and the marker was left on the pane. Without a tab a
+  click could only bring Ghostty forward, and a tmux session used from another
+  machine over ssh would put the banner on a screen nobody is looking at.
 - The resident app uses its own notification identity, exact per-session
   withdrawal, activation events and a menu bar list of waiting sessions.
 - A click's jump is checked, not assumed: after focusing the tab the resident
@@ -567,7 +573,8 @@ without removing any of the macOS-specific integration.
   opt-out is
   `ECC_DISABLED_HOOKS=stop:desktop-notify`.
 - **No precise tab:** Ghostty must expose its AppleScript interface and permit
-  Automation. tmux/title redraws can defeat the marker. Failed or ambiguous
+  Automation. Title redraws can defeat the marker (tmux sessions are not
+  handled at all, see Behavior). Failed or ambiguous
   binding degrades to activation only, with retry/backoff; a closed tab cannot
   be reopened by clicking. Title restoration is best effort during terminal or
   Automation failures, not an unconditional guarantee.

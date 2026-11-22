@@ -200,7 +200,8 @@ class ReleaseSetupTests(unittest.TestCase):
             target.chmod(0o755)
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith("GHOSTTY_NOTIFY_")
-                    and k not in ("CODEX_HOME", "CODEX_SQLITE_HOME", "CLAUDE_CONFIG_DIR")}
+                    and k not in ("CODEX_HOME", "CODEX_SQLITE_HOME", "CLAUDE_CONFIG_DIR",
+                                  "TMUX", "TMUX_PANE")}
         self.env.update({"HOME": str(self.home),
                          "PATH": f"{stubs}:/usr/bin:/bin:/usr/sbin:/sbin",
                          "GHOSTTY_NOTIFY_RELEASE_URL": self.release.as_uri(),
