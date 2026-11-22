@@ -56,7 +56,7 @@ in [docs/releasing.md](docs/releasing.md).
 The project is under the MIT License with the Commons Clause (see
 [LICENSE](LICENSE)), and its author also grants commercial licenses. By opening
 a pull request you agree that your contribution is released under the same
-terms, and you also grant Yifan Jiang a perpetual, worldwide, royalty-free,
+terms, and you also grant the author (Davie, @Davie521) a perpetual, worldwide, royalty-free,
 irrevocable license to use, modify, sublicense and relicense it under any
 terms, commercial ones included. You confirm that the contribution is your own
 work, or that you have the right to submit it on these terms.
