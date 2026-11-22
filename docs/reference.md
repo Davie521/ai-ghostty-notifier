@@ -266,7 +266,7 @@ session's title and project, and its Go to tab returns to the session's tab.
 The menu bar lists it, and it clears like the others: when you return to the
 tab, when you send a prompt, or after `GHOSTTY_NOTIFY_TIMEOUT`. A later nudge,
 or the run's completion notification, replaces it. Inside tmux nothing is
-posted: `--nudge` says so and exits 0.
+posted: `--nudge` says so and exits 1.
 
 Some steps you do somewhere else, a captcha to slide on your phone say, and
 there is nothing to come back to the tab for. For those the agent adds
@@ -437,9 +437,10 @@ What the notification is able to say, and how it finds the tab:
   `GHOSTTY_NOTIFY_TTY` names a terminal for a session that has none of its own.
 - A session running inside tmux (a non-empty `TMUX`) gets no notifications:
   the hooks skip it (no banner, no tab binding, no title change) and `--nudge`
-  posts nothing, saying so to the agent that ran it. The binding marker is a terminal title, and
-  tmux keeps it as the pane's own title instead of passing it to the Ghostty tab,
-  so no tab could be found and the marker was left on the pane. Without a tab a
+  posts nothing and exits non-zero, so the agent that ran it asks in its reply.
+  The binding marker is a terminal title, and tmux keeps it as the pane's own
+  title; only with `set-titles` on (off by default) does it reach the Ghostty
+  tab. So no tab could be found and the marker was left on the pane. Without a tab a
   click could only bring Ghostty forward, and a tmux session used from another
   machine over ssh would put the banner on a screen nobody is looking at.
 - The resident app uses its own notification identity, exact per-session

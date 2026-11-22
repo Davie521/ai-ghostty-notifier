@@ -189,8 +189,8 @@ public enum NudgeNotification {
     }
 
     public static let skippedInTmux =
-        "Not sent: this session runs inside tmux, where no notifications are posted. "
-        + "The user was not notified; ask in your reply instead."
+        "This session runs inside tmux, where no notifications are posted, "
+        + "so nothing was sent."
 
     public static let usage = """
         usage: ghostty-notify-agent --nudge [--no-return] <what you need from the user>

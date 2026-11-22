@@ -286,8 +286,10 @@ class NativeHookTests(unittest.TestCase):
                "CLAUDE_CODE_SESSION_ID": SID}
         result = subprocess.run([str(self.binary), "--nudge", "Approve on the phone"], env=env,
                                 capture_output=True, text=True, timeout=25)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("Not sent", result.stdout)
+        # Not delivered, so not 0: the nudge skill reads 0 as delivered.
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("inside tmux", result.stderr)
+        self.assertEqual(result.stdout, "")
         self.assertFalse((self.root / "Library").exists())
         self.assertFalse(self.state().exists())
         self.assertEqual(self.notices(), [])

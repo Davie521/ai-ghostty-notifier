@@ -22,7 +22,8 @@ Run this once, with one line saying what you need from them:
   own completion notification, replaces it.
 - **Exit 0** prints where Go to tab leads. **Any other exit** means it was not
   delivered, and stderr says why (the app is not running or older than this
-  command, notifications are off, the app did not take it in time). Nothing will appear later unless
+  command, notifications are off, the app did not take it in time, the session
+  runs inside tmux). Nothing will appear later unless
   stderr says it may. Either way, say what you need in your reply instead, and
   do not retry in a loop.
 - Works in Claude Code and Codex CLI sessions in Ghostty: the command finds
