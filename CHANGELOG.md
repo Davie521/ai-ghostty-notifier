@@ -3,6 +3,25 @@
 What changed in each release. The one-command installer always fetches the
 latest; the downloads are on [Releases](https://github.com/Davie521/ai-ghostty-notifier/releases).
 
+## 0.12.3 — 2026-11-22
+
+### Fixed
+
+- A session running inside tmux no longer gets a stuck
+  `__claude_TAB_MARKER_…__` title. The tab binding writes that marker as a
+  terminal title, and under tmux it lands on the pane and never reaches the
+  Ghostty tab (unless `set-titles` is on), so no tab was found and the marker
+  stayed, hiding Claude's own title in tmux window names and pane borders.
+
+### Changed
+
+- Sessions inside tmux (a non-empty `TMUX`) get no notifications at all: no
+  banner, no tab binding, no title change. Without a tab a click could only
+  bring Ghostty forward, and from another machine over ssh the banner showed
+  up on a screen nobody was looking at. `--nudge` posts nothing there either
+  and exits 1, so the agent asks in its reply instead; the missing-app prompt
+  is not shown inside tmux.
+
 ## 0.12.2 — 2026-11-21
 
 ### Fixed
